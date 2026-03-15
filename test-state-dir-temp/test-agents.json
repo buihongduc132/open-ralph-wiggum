@@ -1,0 +1,13 @@
+{
+  "version": "1.0",
+  "agents": [
+    {
+      "type": "codex",
+      "command": "/home/bhd/Documents/Projects/bhd/open-ralph-wiggum-wt-bd-stalling-detection/tests/helpers/fake-agent.sh",
+      "configName": "Fake Codex",
+      "argsTemplate": "default",
+      "envTemplate": "default",
+      "parsePattern": "default"
+    }
+  ]
+}

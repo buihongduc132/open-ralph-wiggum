@@ -8,7 +8,7 @@
 
 import { $ } from "bun";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "fs";
-import { join } from "path";
+import { join, relative, resolve } from "path";
 import { checkTerminalPromise, stripAnsi, tasksMarkdownAllComplete } from "./completion";
 import {
   decideLoopOwnership,
@@ -25,12 +25,36 @@ const VERSION = "1.2.2";
 const IS_WINDOWS = process.platform === "win32";
 
 // Context file path for mid-loop injection
-const stateDir = join(process.cwd(), ".ralph");
-const statePath = join(stateDir, "ralph-loop.state.json");
-const contextPath = join(stateDir, "ralph-context.md");
-const historyPath = join(stateDir, "ralph-history.json");
-const tasksPath = join(stateDir, "ralph-tasks.md");
-const questionsPath = join(stateDir, "ralph-questions.json");
+let stateDir = join(process.cwd(), ".ralph");
+let statePath = join(stateDir, "ralph-loop.state.json");
+let contextPath = join(stateDir, "ralph-context.md");
+let historyPath = join(stateDir, "ralph-history.json");
+let tasksPath = join(stateDir, "ralph-tasks.md");
+let questionsPath = join(stateDir, "ralph-questions.json");
+
+function setStatePaths(nextStateDir: string): void {
+  stateDir = resolve(nextStateDir);
+  statePath = join(stateDir, "ralph-loop.state.json");
+  contextPath = join(stateDir, "ralph-context.md");
+  historyPath = join(stateDir, "ralph-history.json");
+  tasksPath = join(stateDir, "ralph-tasks.md");
+  questionsPath = join(stateDir, "ralph-questions.json");
+}
+
+function formatStatePath(path: string): string {
+  const rel = relative(process.cwd(), path);
+  if (!rel || rel === "") return ".";
+  if (!rel.startsWith("..")) return rel;
+  return path;
+}
+
+function currentStateDirLabel(): string {
+  return formatStatePath(stateDir);
+}
+
+function currentTasksFileLabel(): string {
+  return formatStatePath(tasksPath);
+}
 
 // Agent configuration from file or built-in
 let customConfigPath = "";
@@ -67,6 +91,7 @@ interface RalphConfig {
 }
 
 const DEFAULT_CONFIG_PATH = join(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
+let stateDirInput = join(process.cwd(), ".ralph");
 
 const PARSE_PATTERNS: Record<string, (line: string) => string | null> = {
   "opencode": (line) => {
@@ -266,10 +291,19 @@ for (let i = 0; i < args.length; i++) {
       process.exit(1);
     }
     customConfigPath = val;
+  } else if (args[i] === "--state-dir") {
+    const val = args[++i];
+    if (!val) {
+      console.error("Error: --state-dir requires a path");
+      process.exit(1);
+    }
+    stateDirInput = val;
   } else if (args[i] === "--init-config") {
     initConfigPath = args[++i] || DEFAULT_CONFIG_PATH;
   }
 }
+
+setStatePaths(stateDirInput);
 
 // Handle --init-config: write default config and exit
 if (initConfigPath) {
@@ -328,6 +362,7 @@ Options:
                       rotate: Switch to next agent and blacklist current one
   --heartbeat-interval DURATION  How often to print heartbeat status messages (default: 10s)
                       Supports: ms, s, m, h (e.g., 5000, 30s, 5m, 2h)
+  --state-dir PATH    Use a custom state directory instead of ./.ralph
   --prompt-file, --file, -f  Read prompt content from a file
   --prompt-template PATH  Use custom prompt template (supports variables)
   --no-stream         Buffer agent output and print at the end
@@ -347,7 +382,7 @@ Options:
 Commands:
   --status            Show current Ralph loop status and history
   --status --tasks    Show status including current task list
-  --add-context TEXT  Add context for the next iteration (or edit .ralph/ralph-context.md)
+  --add-context TEXT  Add context for the next iteration (or edit the state dir context file)
   --clear-context     Clear any pending context
   --list-tasks        Display the current task list with indices
   --add-task "desc"   Add a new task to the list
@@ -1069,6 +1104,8 @@ for (let i = 0; i < args.length; i++) {
     handleQuestions = true;
   } else if (arg === "--no-questions") {
     handleQuestions = false;
+  } else if (arg === "--state-dir") {
+    i++;
   } else if (arg === "--config") {
     i++;
   } else if (arg === "--init-config") {
@@ -1219,7 +1256,7 @@ function ensureRalphConfig(options: { filterPlugins?: boolean; allowAllPermissio
   }
   const configPath = join(stateDir, "ralph-opencode.config.json");
   const userConfigPath = join(process.env.XDG_CONFIG_HOME ?? join(process.env.HOME ?? "", ".config"), "opencode", "opencode.json");
-  const projectConfigPath = join(process.cwd(), ".ralph", "opencode.json");
+  const projectConfigPath = join(stateDir, "opencode.json");
   const legacyProjectConfigPath = join(process.cwd(), ".opencode", "opencode.json");
 
   const config: Record<string, unknown> = {
@@ -1454,8 +1491,8 @@ ${state.prompt}
 
 ## Critical Rules
 
-- Work on ONE task at a time from .ralph/ralph-tasks.md
-- ONLY output <promise>${state.taskPromise}</promise> when the current task is complete and marked in ralph-tasks.md
+- Work on ONE task at a time from ${currentTasksFileLabel()}
+- ONLY output <promise>${state.taskPromise}</promise> when the current task is complete and marked in ${currentTasksFileLabel()}
 - ONLY output <promise>${state.completionPromise}</promise> when ALL tasks are truly done
 - Output promise tags DIRECTLY - do not quote them, explain them, or say you "will" output them
 - Do NOT lie or output false promises to exit the loop
@@ -1464,7 +1501,7 @@ ${state.prompt}
 
 ## Current Iteration: ${state.iteration}${state.maxIterations > 0 ? ` / ${state.maxIterations}` : " (unlimited)"} (min: ${state.minIterations ?? 1})
 
-Tasks Mode: ENABLED - Work on one task at a time from ralph-tasks.md
+Tasks Mode: ENABLED - Work on one task at a time from ${currentTasksFileLabel()}
 
 Now, work on the current task. Good luck!
 `.trim();
@@ -1510,7 +1547,7 @@ function getTasksModeSection(state: RalphState): string {
     return `
 ## TASKS MODE: Enabled (no tasks file found)
 
-Create .ralph/ralph-tasks.md with your task list, or use \`ralph --add-task "description"\` to add tasks.
+Create ${currentTasksFileLabel()} with your task list, or use \`ralph --add-task "description"\` to add tasks.
 `;
   }
 
@@ -1525,11 +1562,11 @@ Create .ralph/ralph-tasks.md with your task list, or use \`ralph --add-task "des
       taskInstructions = `
 🔄 CURRENT TASK: "${currentTask.text}"
    Focus on completing this specific task.
-   When done: Mark as [x] in .ralph/ralph-tasks.md and output <promise>${state.taskPromise}</promise>`;
+   When done: Mark as [x] in ${currentTasksFileLabel()} and output <promise>${state.taskPromise}</promise>`;
     } else if (nextTask) {
       taskInstructions = `
 📍 NEXT TASK: "${nextTask.text}"
-   Mark as [/] in .ralph/ralph-tasks.md before starting.
+   Mark as [/] in ${currentTasksFileLabel()} before starting.
    When done: Mark as [x] and output <promise>${state.taskPromise}</promise>`;
     } else if (allTasksComplete(tasks)) {
       taskInstructions = `
@@ -1537,13 +1574,13 @@ Create .ralph/ralph-tasks.md with your task list, or use \`ralph --add-task "des
    Output <promise>${state.completionPromise}</promise> to finish.`;
     } else {
       taskInstructions = `
-📋 No tasks found. Add tasks to .ralph/ralph-tasks.md or use \`ralph --add-task\``;
+📋 No tasks found. Add tasks to ${currentTasksFileLabel()} or use \`ralph --add-task\``;
     }
 
     return `
 ## TASKS MODE: Working through task list
 
-Current tasks from .ralph/ralph-tasks.md:
+Current tasks from ${currentTasksFileLabel()}:
 \`\`\`markdown
 ${tasksContent.trim()}
 \`\`\`
@@ -1551,7 +1588,7 @@ ${taskInstructions}
 
 ### Task Workflow
 1. Find any task marked [/] (in progress). If none, pick the first [ ] task.
-2. Mark the task as [/] in ralph-tasks.md before starting.
+2. Mark the task as [/] in ${currentTasksFileLabel()} before starting.
 3. Complete the task.
 4. Mark as [x] when verified complete.
 5. Output <promise>${state.taskPromise}</promise> to move to the next task.
@@ -1563,7 +1600,7 @@ ${taskInstructions}
     return `
 ## TASKS MODE: Error reading tasks file
 
-Unable to read .ralph/ralph-tasks.md
+Unable to read ${currentTasksFileLabel()}
 `;
   }
 }
