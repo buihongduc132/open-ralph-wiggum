@@ -87,14 +87,88 @@ Always include a **completion promise** in your prompt — this is how ralph kno
 
 ---
 
+## Checking Available Agents and Models
+
+Before running ralph, verify which agents are installed and what models they support.
+
+### Check installed agents
+
+```bash
+# Linux/macOS
+which opencode claude codex copilot 2>/dev/null
+
+# Windows (PowerShell)
+Get-Command opencode, claude, codex, copilot -ErrorAction SilentlyContinue | Select-Object Name, Source
+```
+
+### Check available models per agent
+
+**OpenCode** — lists all configured providers and models:
+
+```bash
+opencode models
+```
+
+Configure a default in `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "anthropic/claude-sonnet-4-5"
+}
+```
+
+**Claude Code** — uses Anthropic models; check your API key is set:
+
+```bash
+claude --version
+echo $ANTHROPIC_API_KEY   # must be non-empty
+```
+
+Common models: `claude-opus-4`, `claude-sonnet-4`, `claude-haiku-4`
+
+**Codex** — uses OpenAI models; check your API key:
+
+```bash
+codex --version
+echo $OPENAI_API_KEY   # must be non-empty
+```
+
+Common models: `gpt-5-codex`, `o4-mini`
+
+**Copilot CLI** — uses GitHub Copilot subscription; verify auth:
+
+```bash
+copilot /status   # shows login state and available models
+# If not logged in:
+copilot /login
+# Or set env var:
+export GH_TOKEN=your_token
+```
+
+### Quick environment check (Linux/macOS)
+
+```bash
+echo "=== Installed agents ===" && \
+  for bin in opencode claude codex copilot; do
+    if command -v "$bin" &>/dev/null; then echo "✅ $bin: $(which $bin)"; else echo "❌ $bin: not found"; fi
+  done && \
+echo "=== API keys ===" && \
+  [[ -n "$ANTHROPIC_API_KEY" ]] && echo "✅ ANTHROPIC_API_KEY set" || echo "❌ ANTHROPIC_API_KEY not set" && \
+  [[ -n "$OPENAI_API_KEY" ]]    && echo "✅ OPENAI_API_KEY set"    || echo "❌ OPENAI_API_KEY not set" && \
+  [[ -n "$GH_TOKEN" ]]          && echo "✅ GH_TOKEN set"          || echo "❌ GH_TOKEN not set"
+```
+
+---
+
 ## Agent Selection
 
-| Agent | `--agent` flag | Binary | Env override |
-|-------|---------------|--------|--------------|
-| OpenCode (default) | `--agent opencode` | `opencode` | `RALPH_OPENCODE_BINARY` |
-| Claude Code | `--agent claude-code` | `claude` | `RALPH_CLAUDE_BINARY` |
-| OpenAI Codex | `--agent codex` | `codex` | `RALPH_CODEX_BINARY` |
-| Copilot CLI | `--agent copilot` | `copilot` | `RALPH_COPILOT_BINARY` |
+| Agent              | `--agent` flag        | Binary     | Env override            |
+| ------------------ | --------------------- | ---------- | ----------------------- |
+| OpenCode (default) | `--agent opencode`    | `opencode` | `RALPH_OPENCODE_BINARY` |
+| Claude Code        | `--agent claude-code` | `claude`   | `RALPH_CLAUDE_BINARY`   |
+| OpenAI Codex       | `--agent codex`       | `codex`    | `RALPH_CODEX_BINARY`    |
+| Copilot CLI        | `--agent copilot`     | `copilot`  | `RALPH_COPILOT_BINARY`  |
 
 Use environment variables to point to a custom binary path if the CLI is not on `$PATH`.
 
@@ -125,6 +199,11 @@ Use environment variables to point to a custom binary path if the CLI is not on 
 --verbose-tools          Print every tool line (disable compact tool summary)
 --no-questions           Disable interactive question handling (agent will loop on questions)
 --init-config [PATH]     Write default agent config to PATH and exit
+--task-promise T        Text that signals task completion (default: READY_FOR_NEXT_TASK)
+--no-stream             Buffer agent output and print at the end
+--no-allow-all          Require interactive permission prompts
+--config PATH           Use custom agent config file
+--questions             Enable interactive question handling (default: enabled)
 ```
 
 ---
@@ -210,16 +289,25 @@ ralph --clear-context  # Remove queued hint
 
 The status dashboard shows iteration count, time elapsed, tool usage per iteration, and struggle warnings (e.g., no file changes in N iterations).
 
+The `--status` output includes:
+
+- **Active loop info**: iteration, elapsed time, prompt, rotation position (if using `--rotation`)
+- **Pending context**: hints queued for next iteration
+- **Iteration history**: last 5 iterations with agent/model, tool usage, duration
+- **Struggle indicators**: warnings if no file changes in N iterations
+
 ---
 
 ## Writing Effective Prompts
 
 Bad prompt (no verifiable criteria):
+
 ```
 Build a todo API
 ```
 
 Good prompt (verifiable, with completion promise):
+
 ```
 Build a REST API for todos with:
 - CRUD endpoints (GET, POST, PUT, DELETE)
@@ -231,6 +319,7 @@ Output <promise>COMPLETE</promise> when all tests pass.
 ```
 
 Rules of thumb:
+
 - Include explicit **success criteria** (tests passing, linter clean, files present)
 - Always include a **completion promise tag** that the agent must output
 - Set `--max-iterations` as a safety net (20–50 is a common range)
@@ -246,9 +335,11 @@ Create a Markdown template with Mustache-style variables:
 # Iteration {{iteration}} / {{max_iterations}}
 
 ## Task
+
 {{prompt}}
 
 ## Instructions
+
 Check git history to see what was tried. Fix what failed.
 Output <promise>{{completion_promise}}</promise> when done.
 
@@ -258,6 +349,7 @@ Output <promise>{{completion_promise}}</promise> when done.
 Available variables: `{{iteration}}`, `{{max_iterations}}`, `{{min_iterations}}`, `{{prompt}}`, `{{completion_promise}}`, `{{abort_promise}}`, `{{task_promise}}`, `{{context}}`, `{{tasks}}`.
 
 Use with:
+
 ```bash
 ralph "Your task" --prompt-template ./my-template.md
 ```
@@ -290,7 +382,10 @@ Format: `agent:model` entries separated by commas. When `--rotation` is set, `--
 
 - Default model can be set in `~/.config/opencode/opencode.json`:
   ```json
-  { "$schema": "https://opencode.ai/config.json", "model": "your-provider/model-name" }
+  {
+    "$schema": "https://opencode.ai/config.json",
+    "model": "your-provider/model-name"
+  }
   ```
 - Use `--no-plugins` if OpenCode tries to load a `ralph-wiggum` plugin.
 
@@ -317,6 +412,7 @@ copilot /login   # or set GH_TOKEN / GITHUB_TOKEN env var
 ```
 
 Install:
+
 ```bash
 npm install -g @github/copilot
 # or
@@ -324,6 +420,7 @@ brew install copilot-cli
 ```
 
 Usage:
+
 ```bash
 ralph "Refactor the auth module and add tests" \
   --agent copilot --max-iterations 15
@@ -334,19 +431,79 @@ ralph "Build a REST API" \
 ```
 
 Notes:
+
 - Default model is Claude Sonnet 4.5; override with `--model`
 - `--no-plugins` has no effect with Copilot CLI
+- `--allow-all` (default) maps to `--allow-all` + `--no-ask-user` in Copilot CLI
+
+---
+
+---
+
+## When to Use Ralph
+
+**Good for:**
+
+- Tasks with automatic verification (tests, linters, type checking)
+- Well-defined tasks with clear completion criteria
+- Greenfield projects where you can walk away
+- Iterative refinement (getting tests to pass)
+
+**Not good for:**
+
+- Tasks requiring human judgment
+- One-shot operations
+- Unclear success criteria
+- Production debugging
+
+---
+
+## Recommended PRD Format
+
+For complex tasks, pass a prompt file with `--prompt-file`. Use this structure:
+
+- **Goal**: one sentence summary of the desired outcome
+- **Scope**: what is in/out
+- **Requirements**: numbered, testable items
+- **Constraints**: tech stack, performance, security, compatibility
+- **Acceptance criteria**: explicit success checks
+- **Completion promise**: `<promise>COMPLETE</promise>`
+
+For larger projects, a JSON feature list reduces the chance of agents modifying test definitions:
+
+```json
+{
+  "features": [
+    {
+      "category": "functional",
+      "description": "Feature description",
+      "steps": ["Step 1", "Step 2"],
+      "passes": false
+    }
+  ]
+}
+```
+
+Reference it in your prompt: `Read features.json. Work through each feature. Update "passes" to true when verified. Output <promise>COMPLETE</promise> when all pass.`
 
 ---
 
 ## Troubleshooting
 
-| Symptom | Fix |
-|---------|-----|
-| `bun: command not found` | Install Bun: `curl -fsSL https://bun.sh/install \| bash` |
-| `command not found: ralph` | Re-run install, or check `$PATH` includes npm/bun global bin |
-| `ProviderModelNotFoundError` | Set a default model in `~/.config/opencode/opencode.json` or pass `--model` |
-| Plugin conflicts (OpenCode) | Run with `--no-plugins` |
-| Windows "command not found" | Set `$env:RALPH_<AGENT>_BINARY` to the full `.cmd` path |
-| Agent loops on a question | Either answer interactively or use `--no-questions` |
-| Loop never terminates | Check your prompt includes the completion promise tag; reduce `--max-iterations` |
+| Symptom                      | Fix                                                                              |
+| ---------------------------- | -------------------------------------------------------------------------------- |
+| `bun: command not found`     | Install Bun: `curl -fsSL https://bun.sh/install \| bash`                         |
+| `command not found: ralph`   | Re-run install, or check `$PATH` includes npm/bun global bin                     |
+| `ProviderModelNotFoundError` | Set a default model in `~/.config/opencode/opencode.json` or pass `--model`      |
+| Plugin conflicts (OpenCode)  | Run with `--no-plugins`                                                          |
+| Windows "command not found"  | Set `$env:RALPH_<AGENT>_BINARY` to the full `.cmd` path                          |
+| Agent loops on a question    | Either answer interactively or use `--no-questions`                              |
+| Loop never terminates        | Check your prompt includes the completion promise tag; reduce `--max-iterations` |
+
+---
+
+## Uninstall
+
+```bash
+npm uninstall -g @th0rgal/ralph-wiggum
+```
