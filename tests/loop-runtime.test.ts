@@ -22,6 +22,14 @@ describe("loop-runtime", () => {
       const decision = decideLoopOwnership({ active: true, pid: 999999 }, process.pid);
       expect(decision).toEqual({ status: "resume", ownerPid: 999999 });
     });
+
+    it("treats mismatched pid signatures as stale state even when the pid is alive", () => {
+      const decision = decideLoopOwnership(
+        { active: true, pid: process.pid, pidStartSignature: "stale-signature" },
+        process.pid + 1,
+      );
+      expect(decision).toEqual({ status: "resume", ownerPid: process.pid });
+    });
   });
 
   describe("StreamActivityTracker", () => {

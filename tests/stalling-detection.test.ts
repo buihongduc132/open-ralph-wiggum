@@ -6,6 +6,8 @@ const workDir = join(process.cwd(), 'test-stalling-temp');
 const stateDir = join(workDir, '.ralph');
 const statePath = join(stateDir, 'ralph-loop.state.json');
 const historyPath = join(stateDir, 'ralph-history.json');
+const agentConfigPath = join(workDir, 'test-agents.json');
+const fakeAgentPath = join(process.cwd(), 'tests/helpers/fake-agent.sh');
 const realAgentDescribe = process.env.RUN_REAL_AGENT_TESTS === '1' ? describe : describe.skip;
 
 function wait(ms: number) {
@@ -22,6 +24,41 @@ function setupWorkDir() {
   cleanup();
   mkdirSync(workDir, { recursive: true });
   mkdirSync(stateDir, { recursive: true });
+}
+
+function writeFakeAgentConfig() {
+  writeFileSync(agentConfigPath, JSON.stringify({
+    version: '1.0',
+    agents: [
+      {
+        type: 'codex',
+        command: fakeAgentPath,
+        configName: 'Fake Codex',
+        argsTemplate: 'default',
+        envTemplate: 'default',
+        parsePattern: 'default',
+      },
+      {
+        type: 'copilot',
+        command: fakeAgentPath,
+        configName: 'Fake Copilot',
+        argsTemplate: 'default',
+        envTemplate: 'default',
+        parsePattern: 'default',
+      },
+    ],
+  }, null, 2));
+}
+
+function runWithFakeAgent(args: string[]) {
+  writeFakeAgentConfig();
+  return Bun.spawn({
+    cmd: ['bun', 'run', '../ralph.ts', '--no-commit', '--config', agentConfigPath, ...args],
+    cwd: workDir,
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: { ...process.env, NODE_ENV: 'test' }
+  });
 }
 
 describe('Stalling Detection - Real Tests', () => {
@@ -52,7 +89,7 @@ describe('Stalling Detection - Real Tests', () => {
       }, null, 2));
 
       const proc = Bun.spawn({
-        cmd: ['bun', 'run', '../ralph.ts', 'new task'],
+        cmd: ['bun', 'run', '../ralph.ts', '--no-commit', 'new task'],
         cwd: workDir,
         stdout: 'pipe',
         stderr: 'pipe',
@@ -68,11 +105,155 @@ describe('Stalling Detection - Real Tests', () => {
     }, 5000);
   });
 
+  describe('Deterministic Stalling Coverage', () => {
+    it('detects stop-on-stall and persists the stalling event in CI', async () => {
+      const proc = runWithFakeAgent([
+        'fake stop stall',
+        '--agent', 'codex',
+        '--model', 'stall',
+        '--stalling-timeout', '1s',
+        '--stalling-action', 'stop',
+        '--heartbeat-interval', '500ms',
+        '--max-iterations', '1',
+      ]);
+
+      const stdoutPromise = new Response(proc.stdout).text();
+      const exitCode = await proc.exited;
+      const stdout = await stdoutPromise;
+
+      expect(exitCode).toBe(0);
+      expect(stdout.toLowerCase()).toContain('stalled');
+      expect(stdout.toLowerCase()).toContain('stopping loop');
+      expect(existsSync(historyPath)).toBe(true);
+
+      const history = JSON.parse(readFileSync(historyPath, 'utf-8'));
+      expect(history.stallingEvents).toHaveLength(1);
+      expect(history.stallingEvents[0].action).toBe('stop');
+
+      const state = JSON.parse(readFileSync(statePath, 'utf-8'));
+      expect(state.active).toBe(false);
+    }, 6000);
+
+    it('treats partial streamed chunks as activity and avoids false stalls', async () => {
+      const proc = runWithFakeAgent([
+        'fake stream keepalive',
+        '--agent', 'codex',
+        '--model', 'partial-complete',
+        '--stalling-timeout', '1s',
+        '--stalling-action', 'stop',
+        '--heartbeat-interval', '500ms',
+        '--max-iterations', '1',
+      ]);
+
+      const stdoutPromise = new Response(proc.stdout).text();
+      const exitCode = await proc.exited;
+      const stdout = await stdoutPromise;
+
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain('COMPLETE');
+      expect(stdout.toLowerCase()).not.toContain('agent stalled');
+      if (existsSync(historyPath)) {
+        const history = JSON.parse(readFileSync(historyPath, 'utf-8'));
+        expect(history.stallingEvents ?? []).toHaveLength(0);
+      }
+    }, 6000);
+
+    it('rotates to the next agent and records blacklist/history on deterministic stall', async () => {
+      const proc = runWithFakeAgent([
+        'fake rotate stall',
+        '--rotation', 'codex:stall,copilot:complete',
+        '--stalling-timeout', '1s',
+        '--stalling-action', 'rotate',
+        '--blacklist-duration', '10s',
+        '--heartbeat-interval', '500ms',
+        '--completion-promise', 'NEVER',
+        '--max-iterations', '2',
+      ]);
+
+      const stdoutPromise = new Response(proc.stdout).text();
+      const exitCode = await proc.exited;
+      const stdout = await stdoutPromise;
+
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain('Blacklisted codex');
+      expect(stdout).toContain('Rotating to next agent in rotation: copilot:complete');
+
+      const history = JSON.parse(readFileSync(historyPath, 'utf-8'));
+      expect(history.stallingEvents).toHaveLength(1);
+      expect(history.stallingEvents[0].action).toBe('rotate');
+      expect(history.stallingEvents[0].agent).toBe('codex');
+      expect(history.iterations.length).toBeGreaterThanOrEqual(1);
+      expect(history.iterations.some((iteration: { agent: string }) => iteration.agent === 'copilot')).toBe(true);
+      expect(history.totalDurationMs).toBeGreaterThan(0);
+    }, 12000);
+
+    it('tracks real activity in --no-stream mode instead of elapsed wall time', async () => {
+      const proc = runWithFakeAgent([
+        'fake buffered keepalive',
+        '--agent', 'codex',
+        '--model', 'partial-complete',
+        '--no-stream',
+        '--stalling-timeout', '1s',
+        '--stalling-action', 'stop',
+        '--heartbeat-interval', '500ms',
+        '--max-iterations', '1',
+      ]);
+
+      const stdoutPromise = new Response(proc.stdout).text();
+      const exitCode = await proc.exited;
+      const stdout = await stdoutPromise;
+
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain('COMPLETE');
+      expect(stdout.toLowerCase()).not.toContain('agent stalled');
+    }, 6000);
+
+    it('preserves persisted stalling config when resuming without re-supplying flags', async () => {
+      writeFileSync(statePath, JSON.stringify({
+        active: true,
+        iteration: 1,
+        minIterations: 1,
+        maxIterations: 1,
+        completionPromise: 'COMPLETE',
+        tasksMode: false,
+        taskPromise: 'READY_FOR_NEXT_TASK',
+        prompt: 'existing task',
+        startedAt: new Date().toISOString(),
+        pid: 999999,
+        pidStartSignature: 'stale-signature',
+        model: '',
+        agent: 'codex',
+        stallingTimeoutMs: 30000,
+        blacklistDurationMs: 90000,
+        stallingAction: 'rotate',
+        blacklistedAgents: [],
+      }, null, 2));
+      writeFakeAgentConfig();
+
+      const proc = Bun.spawn({
+        cmd: ['bun', 'run', '../ralph.ts', '--no-commit', '--config', agentConfigPath, 'resume stale state', '--agent', 'codex', '--model', 'stall', '--stalling-timeout', '30s', '--max-iterations', '1'],
+        cwd: workDir,
+        stdout: 'pipe',
+        stderr: 'pipe',
+        env: { ...process.env, NODE_ENV: 'test' }
+      });
+
+      await wait(400);
+      const state = JSON.parse(readFileSync(statePath, 'utf-8'));
+      proc.kill('SIGTERM');
+      await proc.exited;
+      expect(state.stallingTimeoutMs).toBe(30000);
+      expect(state.blacklistDurationMs).toBe(90000);
+      expect(state.stallingAction).toBe('rotate');
+    }, 5000);
+  });
+
   realAgentDescribe('Stalling Detection with Stop Action', () => {
     it('detects stalling when agent produces no output and stops', async () => {
       // Use a command that produces no output to test stalling detection
       const proc = Bun.spawn({
         cmd: ['bun', 'run', '../ralph.ts', 'sleep 10',
+              '--no-commit',
               '--stalling-timeout', '2s',
               '--stalling-action', 'stop',
               '--heartbeat-interval', '500ms',
@@ -106,6 +287,7 @@ describe('Stalling Detection - Real Tests', () => {
     it('shows heartbeat messages with elapsed and last activity time', async () => {
       const proc = Bun.spawn({
         cmd: ['bun', 'run', '../ralph.ts', 'sleep 5',
+              '--no-commit',
               '--stalling-timeout', '3s',
               '--stalling-action', 'stop',
               '--heartbeat-interval', '500ms',
@@ -128,6 +310,7 @@ describe('Stalling Detection - Real Tests', () => {
     it('saves stalling event to history file', async () => {
       const proc = Bun.spawn({
         cmd: ['bun', 'run', '../ralph.ts', 'sleep 5',
+              '--no-commit',
               '--stalling-timeout', '2s',
               '--stalling-action', 'stop',
               '--heartbeat-interval', '500ms',
@@ -154,6 +337,7 @@ describe('Stalling Detection - Real Tests', () => {
     it('marks state as inactive after stalling stop', async () => {
       const proc = Bun.spawn({
         cmd: ['bun', 'run', '../ralph.ts', 'sleep 5',
+              '--no-commit',
               '--stalling-timeout', '2s',
               '--stalling-action', 'stop',
               '--heartbeat-interval', '500ms',
@@ -179,6 +363,7 @@ describe('Stalling Detection - Real Tests', () => {
       // Use a short timeout and kill the process after first stall to avoid infinite loop
       const proc = Bun.spawn({
         cmd: ['bun', 'run', '../ralph.ts', 'sleep 10',
+              '--no-commit',
               '--rotation', 'opencode:claude-sonnet-4,opencode:claude-sonnet-4',
               '--stalling-timeout', '2s',
               '--stalling-action', 'rotate',
@@ -216,6 +401,7 @@ describe('Stalling Detection - Real Tests', () => {
     it('saves rotate action to history when stalling detected', async () => {
       const proc = Bun.spawn({
         cmd: ['bun', 'run', '../ralph.ts', 'sleep 10',
+              '--no-commit',
               '--rotation', 'opencode:claude-sonnet-4,opencode:claude-sonnet-4',
               '--stalling-timeout', '2s',
               '--stalling-action', 'rotate',
@@ -248,6 +434,7 @@ describe('Stalling Detection - Real Tests', () => {
       // This test verifies stalling detection works with --no-stream mode
       const proc = Bun.spawn({
         cmd: ['bun', 'run', '../ralph.ts', 'sleep 3',
+              '--no-commit',
               '--no-stream',
               '--stalling-timeout', '1s',
               '--stalling-action', 'stop',
@@ -286,6 +473,7 @@ describe('Stalling Detection - Real Tests', () => {
     it('rejects invalid --stalling-action values', async () => {
       const proc = Bun.spawn({
         cmd: ['bun', 'run', '../ralph.ts', 'sleep 1', 
+              '--no-commit',
               '--stalling-action', 'invalid', 
               '--max-iterations', '1'],
         cwd: workDir,
@@ -324,6 +512,7 @@ describe('Stalling Detection - Real Tests', () => {
     it('state file contains stalling configuration after stalling', async () => {
       const proc = Bun.spawn({
         cmd: ['bun', 'run', '../ralph.ts', 'sleep 5',
+              '--no-commit',
               '--stalling-timeout', '30s',
               '--stalling-action', 'rotate',
               '--blacklist-duration', '1h',

@@ -13,6 +13,7 @@ import { checkTerminalPromise, stripAnsi, tasksMarkdownAllComplete } from "./com
 import {
   decideLoopOwnership,
   pruneExpiredBlacklistedAgents,
+  readProcessStartSignature,
   selectRotationEntry,
   StreamActivityTracker,
   type BlacklistedAgent,
@@ -218,9 +219,6 @@ function resolveCommand(cmd: string, envOverride?: string): string {
   return cmd;
 }
 
-// Load agents from config file if available
-const customAgents = loadAgentConfig(customConfigPath);
-
 const BUILT_IN_AGENTS: Record<AgentType, AgentConfig> = {
   opencode: {
     type: "opencode",
@@ -259,14 +257,6 @@ const BUILT_IN_AGENTS: Record<AgentType, AgentConfig> = {
 // Parse arguments early for --config and --init-config handling
 const args = process.argv.slice(2);
 
-// Merge custom agents with built-in (custom overrides built-in)
-const AGENTS: Record<string, AgentConfig> = { ...BUILT_IN_AGENTS };
-if (customAgents) {
-  for (const [type, json] of Object.entries(customAgents)) {
-    AGENTS[type] = createAgentConfig(json);
-  }
-}
-
 // Handle --config and --init-config flags before other processing
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--config") {
@@ -291,6 +281,17 @@ if (initConfigPath) {
   console.log(`Created default agent config at: ${initConfigPath}`);
   console.log(`You can edit this file to add custom agents or override defaults.`);
   process.exit(0);
+}
+
+// Load agents from config file if available
+const customAgents = loadAgentConfig(customConfigPath);
+
+// Merge custom agents with built-in (custom overrides built-in)
+const AGENTS: Record<string, AgentConfig> = { ...BUILT_IN_AGENTS };
+if (customAgents) {
+  for (const [type, json] of Object.entries(customAgents)) {
+    AGENTS[type] = createAgentConfig(json);
+  }
 }
 
 if (args.includes("--help") || args.includes("-h")) {
@@ -872,6 +873,9 @@ let stallingTimeoutMs = 2 * 60 * 60 * 1000; // Default: 2 hours
 let blacklistDurationMs = 8 * 60 * 60 * 1000; // Default: 8 hours
 let stallingAction: "stop" | "rotate" = "stop"; // Default: stop
 let heartbeatIntervalMs = process.env.NODE_ENV === 'test' ? 1000 : 10000; // Default: 10 seconds
+let stallingTimeoutProvided = false;
+let blacklistDurationProvided = false;
+let stallingActionProvided = false;
 
 const promptParts: string[] = [];
 let extraAgentFlags: string[] = [];
@@ -1002,6 +1006,7 @@ for (let i = 0; i < args.length; i++) {
       process.exit(1);
     }
     stallingTimeoutMs = parseDuration(val);
+    stallingTimeoutProvided = true;
   } else if (arg === "--blacklist-duration") {
     const val = args[++i];
     if (!val) {
@@ -1009,6 +1014,7 @@ for (let i = 0; i < args.length; i++) {
       process.exit(1);
     }
     blacklistDurationMs = parseDuration(val);
+    blacklistDurationProvided = true;
   } else if (arg === "--stalling-action") {
     const val = args[++i];
     if (!val || (val !== "stop" && val !== "rotate")) {
@@ -1016,6 +1022,7 @@ for (let i = 0; i < args.length; i++) {
       process.exit(1);
     }
     stallingAction = val as "stop" | "rotate";
+    stallingActionProvided = true;
   } else if (arg === "--heartbeat-interval") {
     const val = args[++i];
     if (!val) {
@@ -1062,6 +1069,10 @@ for (let i = 0; i < args.length; i++) {
     handleQuestions = true;
   } else if (arg === "--no-questions") {
     handleQuestions = false;
+  } else if (arg === "--config") {
+    i++;
+  } else if (arg === "--init-config") {
+    i++;
   } else if (arg.startsWith("-")) {
     console.error(`Error: Unknown option: ${arg}`);
     console.error("Run 'ralph --help' for available options");
@@ -1147,6 +1158,7 @@ interface RalphState {
   promptTemplate?: string; // Custom prompt template path
   startedAt: string;
   pid?: number;
+  pidStartSignature?: string;
   model: string;
   agent: AgentType;
   rotation?: string[];
@@ -1720,6 +1732,7 @@ async function streamProcessOutput(
     abortSignal?: AbortSignal;
     stallingTimeoutMs?: number;
     onStallingDetected?: () => void;
+    suppressOutput?: boolean;
   },
 ): Promise<{ stdoutText: string; stderrText: string; toolCounts: Map<string, number>; stalled: boolean }> {
   const toolCounts = new Map<string, number>();
@@ -1761,14 +1774,18 @@ async function streamProcessOutput(
 
     for (const outputLine of outputLines) {
       if (outputLine.length === 0) {
-        console.log("");
+        if (!options.suppressOutput) {
+          console.log("");
+        }
         lastPrintedAt = Date.now();
         continue;
       }
-      if (isError) {
-        console.error(outputLine);
-      } else {
-        console.log(outputLine);
+      if (!options.suppressOutput) {
+        if (isError) {
+          console.error(outputLine);
+        } else {
+          console.log(outputLine);
+        }
       }
       lastPrintedAt = Date.now();
     }
@@ -1836,6 +1853,7 @@ async function streamProcessOutput(
       if (options.stallingTimeoutMs && now - activityTracker.lastActivityAt >= options.stallingTimeoutMs && !stalled) {
         stalled = true;
         console.log(`\n⚠️  Agent stalled: no activity for ${formatDuration(now - activityTracker.lastActivityAt)}`);
+        clearInterval(heartbeatTimer);
         if (options.onStallingDetected) {
           options.onStallingDetected();
         }
@@ -2054,6 +2072,7 @@ async function runRalphLoop(): Promise<void> {
     promptTemplate: promptTemplatePath || undefined,
     startedAt: new Date().toISOString(),
     pid: process.pid,
+    pidStartSignature: readProcessStartSignature(process.pid) ?? undefined,
     model: initialModel,
     agent: initialAgentType,
     rotation: rotation ?? undefined,
@@ -2072,9 +2091,16 @@ async function runRalphLoop(): Promise<void> {
   // Update stalling config if resuming (allow runtime override)
   if (resuming) {
     state.pid = process.pid;
-    state.stallingTimeoutMs = stallingTimeoutMs;
-    state.blacklistDurationMs = blacklistDurationMs;
-    state.stallingAction = stallingAction;
+    state.pidStartSignature = readProcessStartSignature(process.pid) ?? undefined;
+    if (stallingTimeoutProvided || state.stallingTimeoutMs === undefined) {
+      state.stallingTimeoutMs = stallingTimeoutMs;
+    }
+    if (blacklistDurationProvided || state.blacklistDurationMs === undefined) {
+      state.blacklistDurationMs = blacklistDurationMs;
+    }
+    if (stallingActionProvided || state.stallingAction === undefined) {
+      state.stallingAction = stallingAction;
+    }
   }
 
   saveState(state);
@@ -2349,37 +2375,24 @@ async function runRalphLoop(): Promise<void> {
           }
         }
       } else {
-        // Non-streaming mode - need to handle stalling detection differently
-        const stdoutPromise = new Response(proc.stdout).text();
-        const stderrPromise = new Response(proc.stderr).text();
-        
-        // Set up stalling detection timer for non-streaming mode
-        let stalled = false;
-        const stallingTimer = setInterval(() => {
-          const now = Date.now();
-          const elapsed = now - iterationStart;
-          
-          if (state.stallingTimeoutMs && elapsed >= state.stallingTimeoutMs) {
-            stalled = true;
-            console.log(`\n⚠️  Agent stalled: no output for ${formatDuration(elapsed)}`);
-            console.log(`\n🛑 Stalling detected for agent: ${currentAgent}`);
-            
-            // Kill the process
-            proc.kill();
-            clearInterval(stallingTimer);
-          }
-        }, heartbeatIntervalMs);
-        
-        try {
-          [result, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
-        } finally {
-          clearInterval(stallingTimer);
-        }
-        
-        toolCounts = collectToolSummaryFromText(`${result}\n${stderr}`, agentConfig);
-        
-        // Handle stalling detection for non-streaming mode
-        if (stalled) {
+        const buffered = await streamProcessOutput(proc, {
+          compactTools: !verboseTools,
+          toolSummaryIntervalMs: 3000,
+          heartbeatIntervalMs: heartbeatIntervalMs,
+          iterationStart,
+          agent: agentConfig,
+          stallingTimeoutMs: state.stallingTimeoutMs,
+          suppressOutput: true,
+          onHeartbeatTimer: (timer) => {
+            currentHeartbeatTimer = timer;
+          },
+        });
+        currentHeartbeatTimer = null;
+        result = buffered.stdoutText;
+        stderr = buffered.stderrText;
+        toolCounts = buffered.toolCounts;
+
+        if (buffered.stalled) {
           // Record stalling event
           const stallingEvent: StallingEvent = {
             iteration: state.iteration,
