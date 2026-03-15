@@ -65,41 +65,43 @@ After installation, the `ralph` command is available globally.
 
 ## Quick Start
 
+Always include a **completion promise** in your prompt — this is how ralph knows the task is done.
+
+### OpenCode (default)
+
 ```bash
-# Use default agent (OpenCode)
 ralph "Create a hello.txt file with 'Hello World'. Output <promise>DONE</promise> when complete." \
   --max-iterations 5
+```
 
-# Use Claude Code
+### Claude Code
+
+```bash
 ralph "Build a REST API with tests. Output <promise>COMPLETE</promise> when all tests pass." \
-  --agent claude-code --max-iterations 20
+  --agent claude-code --model claude-sonnet-4 --max-iterations 20
+```
 
-# Use Codex
+### Codex
+
+```bash
 ralph "Refactor auth module, ensure all tests pass. Output <promise>COMPLETE</promise> when done." \
   --agent codex --model gpt-5-codex --max-iterations 20
+```
 
-# Use Copilot CLI
+### Copilot CLI
+
+```bash
 ralph "Implement login feature. Output <promise>COMPLETE</promise> when done." \
   --agent copilot --max-iterations 15
 ```
 
-Always include a **completion promise** in your prompt — this is how ralph knows the task is done.
+Requires GitHub Copilot subscription and prior authentication (`copilot /login` or `GH_TOKEN` env var).
 
 ---
 
 ## Checking Available Agents and Models
 
 Before running ralph, verify which agents are installed and what models they support.
-
-### Check installed agents
-
-```bash
-# Linux/macOS
-which opencode claude codex copilot 2>/dev/null
-
-# Windows (PowerShell)
-Get-Command opencode, claude, codex, copilot -ErrorAction SilentlyContinue | Select-Object Name, Source
-```
 
 ### Check available models per agent
 
@@ -118,20 +120,18 @@ Configure a default in `~/.config/opencode/opencode.json`:
 }
 ```
 
-**Claude Code** — uses Anthropic models; check your API key is set:
+**Claude Code** — check version and available models:
 
 ```bash
 claude --version
-echo $ANTHROPIC_API_KEY   # must be non-empty
 ```
 
 Common models: `claude-opus-4`, `claude-sonnet-4`, `claude-haiku-4`
 
-**Codex** — uses OpenAI models; check your API key:
+**Codex** — check version and available models:
 
 ```bash
 codex --version
-echo $OPENAI_API_KEY   # must be non-empty
 ```
 
 Common models: `gpt-5-codex`, `o4-mini`
@@ -149,14 +149,10 @@ export GH_TOKEN=your_token
 ### Quick environment check (Linux/macOS)
 
 ```bash
-echo "=== Installed agents ===" && \
-  for bin in opencode claude codex copilot; do
-    if command -v "$bin" &>/dev/null; then echo "✅ $bin: $(which $bin)"; else echo "❌ $bin: not found"; fi
-  done && \
-echo "=== API keys ===" && \
-  [[ -n "$ANTHROPIC_API_KEY" ]] && echo "✅ ANTHROPIC_API_KEY set" || echo "❌ ANTHROPIC_API_KEY not set" && \
-  [[ -n "$OPENAI_API_KEY" ]]    && echo "✅ OPENAI_API_KEY set"    || echo "❌ OPENAI_API_KEY not set" && \
-  [[ -n "$GH_TOKEN" ]]          && echo "✅ GH_TOKEN set"          || echo "❌ GH_TOKEN not set"
+for bin in opencode claude codex copilot; do
+  if command -v "$bin" &>/dev/null; then echo "✅ $bin: $(which $bin)"; else echo "❌ $bin: not found"; fi
+done && \
+  [[ -n "$GH_TOKEN" ]] && echo "✅ GH_TOKEN set (Copilot CLI)" || echo "ℹ️  GH_TOKEN not set (needed only for Copilot CLI)"
 ```
 
 ---
@@ -210,16 +206,43 @@ Use environment variables to point to a custom binary path if the CLI is not on 
 
 ## IDE Integration
 
-Ralph is a terminal CLI tool, but can be used inside any IDE terminal.
+Ralph is a terminal CLI tool that runs inside any IDE's integrated terminal.
 
 ### VS Code / Cursor
 
 1. Open the integrated terminal (`Ctrl+`` ` or `View → Terminal`).
-2. Run ralph from your project root:
+2. Run ralph from your project root using the agent of your choice:
+
+   **OpenCode:**
+
    ```bash
-   ralph "Your task here. Output <promise>COMPLETE</promise> when done." --agent claude-code --max-iterations 20
+   ralph "Your task. Output <promise>COMPLETE</promise> when done." --max-iterations 20
    ```
-3. While the loop runs, open a **second terminal tab** to monitor:
+
+   **Claude Code:**
+
+   ```bash
+   ralph "Your task. Output <promise>COMPLETE</promise> when done." \
+     --agent claude-code --model claude-sonnet-4 --max-iterations 20
+   ```
+
+   **Codex:**
+
+   ```bash
+   ralph "Your task. Output <promise>COMPLETE</promise> when done." \
+     --agent codex --model gpt-5-codex --max-iterations 20
+   ```
+
+   **Copilot CLI:**
+
+   ```bash
+   ralph "Your task. Output <promise>COMPLETE</promise> when done." \
+     --agent copilot --max-iterations 20
+   ```
+
+   > Note: `--agent copilot` uses the standalone Copilot CLI, not the VS Code extension. Both can be active at the same time.
+
+3. Open a **second terminal tab** to monitor while the loop runs:
    ```bash
    ralph --status
    ```
@@ -228,33 +251,69 @@ Ralph is a terminal CLI tool, but can be used inside any IDE terminal.
    ralph --add-context "Focus on fixing the auth module first"
    ```
 
-**Tip for Copilot users:** The `--agent copilot` flag uses the Copilot CLI (`gh copilot` or standalone `copilot`), not the VS Code extension. Both can be used in parallel.
-
 ### JetBrains IDEs (IntelliJ, WebStorm, PyCharm, etc.)
 
 1. Open the integrated terminal (`Alt+F12`).
-2. Run ralph from the project root the same way as above.
-3. Use **Run Configurations** → Shell Script to save common ralph invocations as reusable run configurations.
+2. Run the same agent-specific commands as above.
+3. Use **Run Configurations** → Shell Script to save common ralph invocations per agent as reusable run configurations.
 
 ### Neovim / Vim
 
-Run ralph in a split terminal within Neovim:
+Run ralph in a split terminal. Examples per agent:
+
+**OpenCode:**
 
 ```vim
 :split | terminal ralph "Your task. Output <promise>COMPLETE</promise> when done." --max-iterations 20
+```
+
+**Claude Code:**
+
+```vim
+:split | terminal ralph "Your task. Output <promise>COMPLETE</promise> when done." --agent claude-code --model claude-sonnet-4 --max-iterations 20
+```
+
+**Codex:**
+
+```vim
+:split | terminal ralph "Your task. Output <promise>COMPLETE</promise> when done." --agent codex --model gpt-5-codex --max-iterations 20
+```
+
+**Copilot CLI:**
+
+```vim
+:split | terminal ralph "Your task. Output <promise>COMPLETE</promise> when done." --agent copilot --max-iterations 20
 ```
 
 Or use a plugin like `toggleterm.nvim` for a persistent terminal.
 
 ### Any IDE — Prompt File Workflow
 
-For complex prompts, save them as a file and pass it to ralph:
+For complex prompts, save them as a file to avoid shell escaping issues and make prompts versionable.
+
+**OpenCode:**
 
 ```bash
-ralph --prompt-file ./task.md --agent claude-code --max-iterations 30
+ralph --prompt-file ./task.md --max-iterations 30
 ```
 
-This avoids shell escaping issues and makes prompts versionable.
+**Claude Code:**
+
+```bash
+ralph --prompt-file ./task.md --agent claude-code --model claude-sonnet-4 --max-iterations 30
+```
+
+**Codex:**
+
+```bash
+ralph --prompt-file ./task.md --agent codex --model gpt-5-codex --max-iterations 30
+```
+
+**Copilot CLI:**
+
+```bash
+ralph --prompt-file ./task.md --agent copilot --max-iterations 30
+```
 
 ---
 
