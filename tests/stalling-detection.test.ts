@@ -1,14 +1,24 @@
 import { describe, expect, it, beforeEach, afterEach } from 'bun:test';
-import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { join } from 'path';
 
-const workDir = join(process.cwd(), 'test-stalling-temp');
-const stateDir = join(workDir, '.ralph');
-const statePath = join(stateDir, 'ralph-loop.state.json');
-const historyPath = join(stateDir, 'ralph-history.json');
-const agentConfigPath = join(workDir, 'test-agents.json');
 const fakeAgentPath = join(process.cwd(), 'tests/helpers/fake-agent.sh');
 const bunPath = process.execPath;
+const ralphPath = join(process.cwd(), 'ralph.ts');
+let workDir = '';
+let stateDir = '';
+let statePath = '';
+let historyPath = '';
+let agentConfigPath = '';
+
+function assignPaths(nextWorkDir: string) {
+  workDir = nextWorkDir;
+  stateDir = join(workDir, '.ralph');
+  statePath = join(stateDir, 'ralph-loop.state.json');
+  historyPath = join(stateDir, 'ralph-history.json');
+  agentConfigPath = join(workDir, 'test-agents.json');
+}
 
 function wait(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -21,8 +31,7 @@ function cleanup() {
 }
 
 function setupWorkDir() {
-  cleanup();
-  mkdirSync(workDir, { recursive: true });
+  assignPaths(mkdtempSync(join(tmpdir(), 'ralph-stalling-')));
   mkdirSync(stateDir, { recursive: true });
 }
 
@@ -53,7 +62,7 @@ function writeFakeAgentConfig() {
 function runWithFakeAgent(args: string[]) {
   writeFakeAgentConfig();
   return Bun.spawn({
-    cmd: [bunPath, 'run', '../ralph.ts', '--no-commit', '--config', agentConfigPath, ...args],
+    cmd: [bunPath, 'run', ralphPath, '--no-commit', '--config', agentConfigPath, ...args],
     cwd: workDir,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -89,7 +98,7 @@ describe('Stalling Detection - Real Tests', () => {
       }, null, 2));
 
       const proc = Bun.spawn({
-        cmd: [bunPath, 'run', '../ralph.ts', '--no-commit', 'new task'],
+        cmd: [bunPath, 'run', ralphPath, '--no-commit', 'new task'],
         cwd: workDir,
         stdout: 'pipe',
         stderr: 'pipe',
@@ -255,7 +264,7 @@ describe('Stalling Detection - Real Tests', () => {
       writeFakeAgentConfig();
 
       const proc = Bun.spawn({
-        cmd: [bunPath, 'run', '../ralph.ts', '--no-commit', '--config', agentConfigPath, 'resume stale state', '--agent', 'codex', '--model', 'stall', '--stalling-timeout', '30s', '--max-iterations', '1'],
+        cmd: [bunPath, 'run', ralphPath, '--no-commit', '--config', agentConfigPath, 'resume stale state', '--agent', 'codex', '--model', 'stall', '--stalling-timeout', '30s', '--max-iterations', '1'],
         cwd: workDir,
         stdout: 'pipe',
         stderr: 'pipe',
@@ -434,7 +443,7 @@ describe('Stalling Detection - Real Tests', () => {
   describe('Configuration Validation', () => {
     it('rejects invalid --stalling-action values', async () => {
       const proc = Bun.spawn({
-        cmd: [bunPath, 'run', '../ralph.ts', 'sleep 1', 
+        cmd: [bunPath, 'run', ralphPath, 'sleep 1', 
               '--no-commit',
               '--stalling-action', 'invalid', 
               '--max-iterations', '1'],
@@ -453,7 +462,7 @@ describe('Stalling Detection - Real Tests', () => {
 
     it('help shows stalling options', async () => {
       const proc = Bun.spawn({
-        cmd: [bunPath, 'run', '../ralph.ts', '--help'],
+        cmd: [bunPath, 'run', ralphPath, '--help'],
         cwd: workDir,
         stdout: 'pipe',
         stderr: 'pipe',

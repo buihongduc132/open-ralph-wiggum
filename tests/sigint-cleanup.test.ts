@@ -1,14 +1,24 @@
 import { describe, expect, it, beforeEach, afterEach } from 'bun:test';
-import { existsSync, unlinkSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, unlinkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { join } from 'path';
 
-const workDir = join(process.cwd(), 'test-sigint-temp');
-const stateDir = join(workDir, '.ralph');
-const statePath = join(stateDir, 'ralph-loop.state.json');
-const questionsPath = join(stateDir, 'ralph-questions.json');
-const agentConfigPath = join(workDir, 'test-agents.json');
 const fakeAgentPath = join(process.cwd(), 'tests/helpers/fake-agent.sh');
+const ralphPath = join(process.cwd(), 'ralph.ts');
 const bunPath = process.execPath;
+let workDir = '';
+let stateDir = '';
+let statePath = '';
+let questionsPath = '';
+let agentConfigPath = '';
+
+function assignPaths(nextWorkDir: string) {
+  workDir = nextWorkDir;
+  stateDir = join(workDir, '.ralph');
+  statePath = join(stateDir, 'ralph-loop.state.json');
+  questionsPath = join(stateDir, 'ralph-questions.json');
+  agentConfigPath = join(workDir, 'test-agents.json');
+}
 
 function wait(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -32,6 +42,7 @@ function writeFakeAgentConfig() {
 
 describe('SIGINT Cleanup', () => {
   beforeEach(() => {
+    assignPaths(mkdtempSync(join(tmpdir(), 'ralph-sigint-')));
     mkdirSync(workDir, { recursive: true });
     [statePath, questionsPath].forEach(path => {
       if (existsSync(path)) {
@@ -49,7 +60,7 @@ describe('SIGINT Cleanup', () => {
   it('stops heartbeat timer on SIGINT', async () => {
     writeFakeAgentConfig();
     const proc = Bun.spawn({
-      cmd: [bunPath, 'run', '../ralph.ts', '--no-commit', '--config', agentConfigPath, 'fake sigint timer stop', '--agent', 'codex', '--model', 'stall', '--heartbeat-interval', '500ms', '--max-iterations', '1'],
+      cmd: [bunPath, 'run', ralphPath, '--no-commit', '--config', agentConfigPath, 'fake sigint timer stop', '--agent', 'codex', '--model', 'stall', '--heartbeat-interval', '500ms', '--max-iterations', '1'],
       cwd: workDir,
       stdout: 'pipe',
       stderr: 'pipe',
@@ -69,7 +80,7 @@ describe('SIGINT Cleanup', () => {
   it('stops heartbeat output deterministically on SIGINT with a fake agent', async () => {
     writeFakeAgentConfig();
     const proc = Bun.spawn({
-      cmd: [bunPath, 'run', '../ralph.ts', '--no-commit', '--config', agentConfigPath, 'fake sigint', '--agent', 'codex', '--model', 'stall', '--heartbeat-interval', '500ms', '--max-iterations', '1'],
+      cmd: [bunPath, 'run', ralphPath, '--no-commit', '--config', agentConfigPath, 'fake sigint', '--agent', 'codex', '--model', 'stall', '--heartbeat-interval', '500ms', '--max-iterations', '1'],
       cwd: workDir,
       stdout: 'pipe',
       stderr: 'pipe',
@@ -91,7 +102,7 @@ describe('SIGINT Cleanup', () => {
   it('clears state on SIGINT', async () => {
     writeFakeAgentConfig();
     const proc = Bun.spawn({
-      cmd: [bunPath, 'run', '../ralph.ts', '--no-commit', '--config', agentConfigPath, 'fake clear state', '--agent', 'codex', '--model', 'stall', '--heartbeat-interval', '500ms', '--max-iterations', '1'],
+      cmd: [bunPath, 'run', ralphPath, '--no-commit', '--config', agentConfigPath, 'fake clear state', '--agent', 'codex', '--model', 'stall', '--heartbeat-interval', '500ms', '--max-iterations', '1'],
       cwd: workDir,
       stdout: 'pipe',
       env: { ...process.env, NODE_ENV: 'test' }
@@ -108,7 +119,7 @@ describe('SIGINT Cleanup', () => {
   it('handles double SIGINT (force stop)', async () => {
     writeFakeAgentConfig();
     const proc = Bun.spawn({
-      cmd: [bunPath, 'run', '../ralph.ts', '--no-commit', '--config', agentConfigPath, 'fake double sigint', '--agent', 'codex', '--model', 'stall', '--heartbeat-interval', '500ms', '--max-iterations', '1'],
+      cmd: [bunPath, 'run', ralphPath, '--no-commit', '--config', agentConfigPath, 'fake double sigint', '--agent', 'codex', '--model', 'stall', '--heartbeat-interval', '500ms', '--max-iterations', '1'],
       cwd: workDir,
       stdout: 'pipe',
       env: { ...process.env, NODE_ENV: 'test' }
