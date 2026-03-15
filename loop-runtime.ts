@@ -62,7 +62,17 @@ export function readProcessStartSignature(pid: number): string | null {
   if (process.platform === "linux") {
     try {
       const stat = readFileSync(`/proc/${pid}/stat`, "utf-8").trim();
-      return stat;
+      const statSuffixIndex = stat.lastIndexOf(") ");
+      if (statSuffixIndex === -1) {
+        return null;
+      }
+      const pidValue = stat.slice(0, stat.indexOf(" "));
+      const statFields = stat.slice(statSuffixIndex + 2).trim().split(/\s+/);
+      const startTimeTicks = statFields[19];
+      if (!pidValue || !startTimeTicks) {
+        return null;
+      }
+      return `${pidValue}:${startTimeTicks}`;
     } catch {
       return null;
     }

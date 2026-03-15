@@ -1791,7 +1791,7 @@ async function streamProcessOutput(
   const parseToolOutput = options.agent.parseToolOutput;
 
   const maybePrintToolSummary = (force = false) => {
-    if (!compactTools || toolCounts.size === 0) return;
+    if (!compactTools || toolCounts.size === 0 || options.suppressOutput) return;
     const now = Date.now();
     if (!force && now - lastToolSummaryAt < options.toolSummaryIntervalMs) {
       return;
@@ -1886,6 +1886,17 @@ async function streamProcessOutput(
   };
 
   const heartbeatTimer = setInterval(() => {
+    if (options.suppressOutput) {
+      if (options.stallingTimeoutMs && Date.now() - activityTracker.lastActivityAt >= options.stallingTimeoutMs && !stalled) {
+        stalled = true;
+        clearInterval(heartbeatTimer);
+        if (options.onStallingDetected) {
+          options.onStallingDetected();
+        }
+        proc.kill();
+      }
+      return;
+    }
     const now = Date.now();
     if (now - lastPrintedAt >= options.heartbeatIntervalMs) {
       const elapsed = formatDuration(now - options.iterationStart);
@@ -2406,8 +2417,9 @@ async function runRalphLoop(): Promise<void> {
             const nextIndex = ((state.rotationIndex ?? 0) + 1) % state.rotation.length;
             state.rotationIndex = nextIndex;
             console.log(`🔄 Rotating to next agent in rotation: ${state.rotation[nextIndex]}`);
-            
+            state.iteration++;
             saveState(state);
+            await new Promise(r => setTimeout(r, 1000));
             // Continue to next iteration
             continue;
           } else {

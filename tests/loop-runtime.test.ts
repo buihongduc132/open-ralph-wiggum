@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   StreamActivityTracker,
   decideLoopOwnership,
+  readProcessStartSignature,
   pruneExpiredBlacklistedAgents,
   selectRotationEntry,
 } from "../loop-runtime";
@@ -44,6 +45,18 @@ describe("loop-runtime", () => {
       now = 1800;
       tracker.markLine();
       expect(tracker.lastActivityAt).toBe(1800);
+    });
+  });
+
+  describe("readProcessStartSignature", () => {
+    it("returns a stable signature for a live process across multiple reads", async () => {
+      const first = readProcessStartSignature(process.pid);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      const second = readProcessStartSignature(process.pid);
+
+      expect(first).toBeTruthy();
+      expect(second).toBeTruthy();
+      expect(second).toBe(first);
     });
   });
 

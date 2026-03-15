@@ -187,6 +187,29 @@ describe('Stalling Detection - Real Tests', () => {
       expect(history.totalDurationMs).toBeGreaterThan(0);
     }, 12000);
 
+    it('increments the iteration when rotate-on-stall continues to the next loop', async () => {
+      const proc = runWithFakeAgent([
+        'fake rotate iteration advance',
+        '--rotation', 'codex:stall,copilot:stall',
+        '--stalling-timeout', '1s',
+        '--stalling-action', 'rotate',
+        '--blacklist-duration', '10s',
+        '--heartbeat-interval', '500ms',
+        '--completion-promise', 'NEVER',
+        '--max-iterations', '2',
+      ]);
+
+      const stdoutPromise = new Response(proc.stdout).text();
+      const exitCode = await proc.exited;
+      const stdout = await stdoutPromise;
+
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain('Max iterations (2) reached');
+      expect(stdout).toContain('Iteration 2');
+      const history = JSON.parse(readFileSync(historyPath, 'utf-8'));
+      expect(history.stallingEvents).toHaveLength(2);
+    }, 12000);
+
     it('tracks real activity in --no-stream mode instead of elapsed wall time', async () => {
       const proc = runWithFakeAgent([
         'fake buffered keepalive',
@@ -400,6 +423,7 @@ describe('Stalling Detection - Real Tests', () => {
       
       expect(elapsed).toBeLessThan(2500);
       expect(stdout.toLowerCase()).toContain('stall');
+      expect(stdout).not.toContain('⏳ working...');
       
       expect(exitCode).toBeDefined();
     }, 5000);
