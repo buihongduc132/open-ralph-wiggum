@@ -1,3 +1,5 @@
+import { readFileSync } from "fs";
+
 export interface BlacklistedAgent {
   agent: string;
   blacklistedAt: string;
@@ -7,6 +9,7 @@ export interface BlacklistedAgent {
 export interface LoopOwnershipState {
   active: boolean;
   pid?: number;
+  pidStartSignature?: string;
 }
 
 export type LoopOwnershipDecision =
@@ -51,6 +54,45 @@ export function isProcessAlive(pid: number): boolean {
   }
 }
 
+export function readProcessStartSignature(pid: number): string | null {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return null;
+  }
+
+  if (process.platform === "linux") {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf-8").trim();
+      const statSuffixIndex = stat.lastIndexOf(") ");
+      if (statSuffixIndex === -1) {
+        return null;
+      }
+      const pidValue = stat.slice(0, stat.indexOf(" "));
+      const statFields = stat.slice(statSuffixIndex + 2).trim().split(/\s+/);
+      const startTimeTicks = statFields[19];
+      if (!pidValue || !startTimeTicks) {
+        return null;
+      }
+      return `${pidValue}:${startTimeTicks}`;
+    } catch {
+      return null;
+    }
+  }
+
+  try {
+    const proc = Bun.spawnSync(["ps", "-p", String(pid), "-o", "lstart="], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0) {
+      return null;
+    }
+    const signature = proc.stdout.toString().trim();
+    return signature || null;
+  } catch {
+    return null;
+  }
+}
+
 export function decideLoopOwnership(
   existingState: LoopOwnershipState | null,
   currentPid: number = process.pid,
@@ -60,7 +102,10 @@ export function decideLoopOwnership(
   }
 
   if (existingState.pid && existingState.pid !== currentPid && isProcessAlive(existingState.pid)) {
-    return { status: "already-running", ownerPid: existingState.pid };
+    const currentSignature = readProcessStartSignature(existingState.pid);
+    if (!existingState.pidStartSignature || !currentSignature || currentSignature === existingState.pidStartSignature) {
+      return { status: "already-running", ownerPid: existingState.pid };
+    }
   }
 
   return { status: "resume", ownerPid: existingState.pid };

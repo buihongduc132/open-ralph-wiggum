@@ -76,6 +76,10 @@ context/
 node_modules/
 .ralph/ralph-loop.state.json
 .ralph/ralph-opencode.config.json
+.beads/backup/
+test-state-dir-temp/
+test-stalling-temp/
+test-sigint-temp/
 
 # Build artifacts
 bin/*
