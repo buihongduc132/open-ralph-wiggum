@@ -250,7 +250,7 @@ ralph --status
 
 #### How Tasks Mode Works
 
-1. **Task File**: Tasks are stored in `.ralph/ralph-tasks.md`
+1. **Task File**: Tasks are stored in the Ralph state directory as `ralph-tasks.md` (default: `.ralph/ralph-tasks.md`, override with `--state-dir`)
 2. **One Task Per Iteration**: Ralph focuses on a single task to reduce confusion
 3. **Automatic Progression**: When a task completes (`<promise>READY_FOR_NEXT_TASK</promise>`), Ralph moves to the next
 4. **Persistent State**: Tasks survive loop restarts
@@ -614,8 +614,10 @@ During operation, Ralph stores state in `.ralph/`:
 - `ralph-loop.state.json` - Active loop state
 - `ralph-history.json` - Iteration history and metrics
 - `ralph-context.md` - Pending context for next iteration
-- `ralph-tasks.md` - Task list for Tasks Mode (created when `--tasks` is used)
+- `ralph-tasks.md` - Task list for Tasks Mode inside the selected state directory (created when `--tasks` is used)
 - `ralph-questions.json` - Pending user answers to agent questions
+
+`--state-dir` currently supports state-management commands only. Loop execution with a custom state directory is rejected until shared worktree isolation exists.
 
 ## Uninstall
 
