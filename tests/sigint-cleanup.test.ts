@@ -8,7 +8,7 @@ const statePath = join(stateDir, 'ralph-loop.state.json');
 const questionsPath = join(stateDir, 'ralph-questions.json');
 const agentConfigPath = join(workDir, 'test-agents.json');
 const fakeAgentPath = join(process.cwd(), 'tests/helpers/fake-agent.sh');
-const realAgentIt = process.env.RUN_REAL_AGENT_TESTS === '1' ? it : it.skip;
+const bunPath = process.execPath;
 
 function wait(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -46,9 +46,10 @@ describe('SIGINT Cleanup', () => {
     }
   });
 
-  realAgentIt('stops heartbeat timer on SIGINT', async () => {
+  it('stops heartbeat timer on SIGINT', async () => {
+    writeFakeAgentConfig();
     const proc = Bun.spawn({
-      cmd: ['bun', 'run', '../ralph.ts', '--no-commit', 'sleep 5', '--max-iterations', '1'],
+      cmd: [bunPath, 'run', '../ralph.ts', '--no-commit', '--config', agentConfigPath, 'fake sigint timer stop', '--agent', 'codex', '--model', 'stall', '--heartbeat-interval', '500ms', '--max-iterations', '1'],
       cwd: workDir,
       stdout: 'pipe',
       stderr: 'pipe',
@@ -68,7 +69,7 @@ describe('SIGINT Cleanup', () => {
   it('stops heartbeat output deterministically on SIGINT with a fake agent', async () => {
     writeFakeAgentConfig();
     const proc = Bun.spawn({
-      cmd: ['bun', 'run', '../ralph.ts', '--no-commit', '--config', agentConfigPath, 'fake sigint', '--agent', 'codex', '--model', 'stall', '--heartbeat-interval', '500ms', '--max-iterations', '1'],
+      cmd: [bunPath, 'run', '../ralph.ts', '--no-commit', '--config', agentConfigPath, 'fake sigint', '--agent', 'codex', '--model', 'stall', '--heartbeat-interval', '500ms', '--max-iterations', '1'],
       cwd: workDir,
       stdout: 'pipe',
       stderr: 'pipe',
@@ -88,8 +89,9 @@ describe('SIGINT Cleanup', () => {
   });
 
   it('clears state on SIGINT', async () => {
+    writeFakeAgentConfig();
     const proc = Bun.spawn({
-      cmd: ['bun', 'run', '../ralph.ts', '--no-commit', 'echo test', '--max-iterations', '1'],
+      cmd: [bunPath, 'run', '../ralph.ts', '--no-commit', '--config', agentConfigPath, 'fake clear state', '--agent', 'codex', '--model', 'stall', '--heartbeat-interval', '500ms', '--max-iterations', '1'],
       cwd: workDir,
       stdout: 'pipe',
       env: { ...process.env, NODE_ENV: 'test' }
@@ -104,8 +106,9 @@ describe('SIGINT Cleanup', () => {
   });
 
   it('handles double SIGINT (force stop)', async () => {
+    writeFakeAgentConfig();
     const proc = Bun.spawn({
-      cmd: ['bun', 'run', '../ralph.ts', '--no-commit', 'sleep 10', '--max-iterations', '1'],
+      cmd: [bunPath, 'run', '../ralph.ts', '--no-commit', '--config', agentConfigPath, 'fake double sigint', '--agent', 'codex', '--model', 'stall', '--heartbeat-interval', '500ms', '--max-iterations', '1'],
       cwd: workDir,
       stdout: 'pipe',
       env: { ...process.env, NODE_ENV: 'test' }

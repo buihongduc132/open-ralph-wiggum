@@ -362,7 +362,7 @@ Options:
                       rotate: Switch to next agent and blacklist current one
   --heartbeat-interval DURATION  How often to print heartbeat status messages (default: 10s)
                       Supports: ms, s, m, h (e.g., 5000, 30s, 5m, 2h)
-  --state-dir PATH    Use a custom state directory instead of ./.ralph
+  --state-dir PATH    Use a custom state directory instead of ./.ralph (currently requires --no-commit)
   --prompt-file, --file, -f  Read prompt content from a file
   --prompt-template PATH  Use custom prompt template (supports variables)
   --no-stream         Buffer agent output and print at the end
@@ -1117,6 +1117,13 @@ for (let i = 0; i < args.length; i++) {
   } else {
     promptParts.push(arg);
   }
+}
+
+const usingCustomStateDir = stateDir !== resolve(process.cwd(), ".ralph");
+if (usingCustomStateDir && autoCommit) {
+  console.error("Error: --state-dir currently requires --no-commit.");
+  console.error("Shared git/worktree side effects are not isolated for custom state directories yet.");
+  process.exit(1);
 }
 
 if (rotationInput) {

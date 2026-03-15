@@ -1,14 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 
-const workDir = join(process.cwd(), "test-state-dir-temp");
-const defaultStateDir = join(workDir, ".ralph");
-const customStateDirA = join(workDir, ".ralph-a");
-const customStateDirB = join(workDir, ".ralph-b");
-const agentConfigPath = join(workDir, "test-agents.json");
 const fakeAgentPath = join(process.cwd(), "tests/helpers/fake-agent.sh");
+const ralphPath = join(process.cwd(), "ralph.ts");
 const bunPath = process.execPath;
+let workDir = "";
+let defaultStateDir = "";
+let customStateDirA = "";
+let customStateDirB = "";
+let agentConfigPath = "";
+
+function assignPaths(nextWorkDir: string) {
+  workDir = nextWorkDir;
+  defaultStateDir = join(workDir, ".ralph");
+  customStateDirA = join(workDir, ".ralph-a");
+  customStateDirB = join(workDir, ".ralph-b");
+  agentConfigPath = join(workDir, "test-agents.json");
+}
 
 function cleanup() {
   if (existsSync(workDir)) {
@@ -42,7 +52,7 @@ function writeFakeAgentConfig() {
 function runRalph(args: string[]) {
   writeFakeAgentConfig();
   return Bun.spawn({
-    cmd: [bunPath, "run", "../ralph.ts", "--no-commit", "--config", agentConfigPath, ...args],
+    cmd: [bunPath, "run", ralphPath, "--no-commit", "--config", agentConfigPath, ...args],
     cwd: workDir,
     stdout: "pipe",
     stderr: "pipe",
@@ -82,8 +92,7 @@ function writeActiveStateFile(targetStateDir: string, pid: number) {
 
 describe("state-dir", () => {
   beforeEach(() => {
-    cleanup();
-    mkdirSync(workDir, { recursive: true });
+    assignPaths(mkdtempSync(join(tmpdir(), "ralph-state-dir-")));
   });
 
   afterEach(() => {
@@ -92,7 +101,7 @@ describe("state-dir", () => {
 
   it("shows --state-dir in help", async () => {
     const proc = Bun.spawn({
-      cmd: [bunPath, "run", "../ralph.ts", "--help"],
+      cmd: [bunPath, "run", ralphPath, "--help"],
       cwd: workDir,
       stdout: "pipe",
       stderr: "pipe",
@@ -108,7 +117,7 @@ describe("state-dir", () => {
 
   it("rejects missing --state-dir value", async () => {
     const proc = Bun.spawn({
-      cmd: [bunPath, "run", "../ralph.ts", "--state-dir"],
+      cmd: [bunPath, "run", ralphPath, "--state-dir"],
       cwd: workDir,
       stdout: "pipe",
       stderr: "pipe",
@@ -125,7 +134,7 @@ describe("state-dir", () => {
   it("rejects --state-dir without --no-commit because git side effects are not isolated", async () => {
     writeFakeAgentConfig();
     const proc = Bun.spawn({
-      cmd: [bunPath, "run", "../ralph.ts", "--state-dir", customStateDirA, "--config", agentConfigPath, "custom state dir run", "--agent", "codex", "--model", "complete", "--max-iterations", "1"],
+      cmd: [bunPath, "run", ralphPath, "--state-dir", customStateDirA, "--config", agentConfigPath, "custom state dir run", "--agent", "codex", "--model", "complete", "--max-iterations", "1"],
       cwd: workDir,
       stdout: "pipe",
       stderr: "pipe",
@@ -142,7 +151,7 @@ describe("state-dir", () => {
 
   it("writes context into the requested custom state directory", async () => {
     const proc = Bun.spawn({
-      cmd: [bunPath, "run", "../ralph.ts", "--state-dir", customStateDirA, "--add-context", "state dir context"],
+      cmd: [bunPath, "run", ralphPath, "--state-dir", customStateDirA, "--add-context", "state dir context"],
       cwd: workDir,
       stdout: "pipe",
       stderr: "pipe",
@@ -162,7 +171,7 @@ describe("state-dir", () => {
     writeFileSync(join(customStateDirA, "ralph-context.md"), "# Ralph Loop Context\n\nclear custom");
 
     const proc = Bun.spawn({
-      cmd: [bunPath, "run", "../ralph.ts", "--state-dir", customStateDirA, "--clear-context"],
+      cmd: [bunPath, "run", ralphPath, "--state-dir", customStateDirA, "--clear-context"],
       cwd: workDir,
       stdout: "pipe",
       stderr: "pipe",
@@ -274,7 +283,7 @@ describe("state-dir", () => {
     const relativeStateDir = "nested/state-run";
 
     const proc = Bun.spawn({
-      cmd: [bunPath, "run", "../ralph.ts", "--state-dir", relativeStateDir, "--add-context", "relative state dir"],
+      cmd: [bunPath, "run", ralphPath, "--state-dir", relativeStateDir, "--add-context", "relative state dir"],
       cwd: workDir,
       stdout: "pipe",
       stderr: "pipe",

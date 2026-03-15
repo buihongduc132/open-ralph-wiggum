@@ -8,7 +8,7 @@ const statePath = join(stateDir, 'ralph-loop.state.json');
 const historyPath = join(stateDir, 'ralph-history.json');
 const agentConfigPath = join(workDir, 'test-agents.json');
 const fakeAgentPath = join(process.cwd(), 'tests/helpers/fake-agent.sh');
-const realAgentDescribe = process.env.RUN_REAL_AGENT_TESTS === '1' ? describe : describe.skip;
+const bunPath = process.execPath;
 
 function wait(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -53,7 +53,7 @@ function writeFakeAgentConfig() {
 function runWithFakeAgent(args: string[]) {
   writeFakeAgentConfig();
   return Bun.spawn({
-    cmd: ['bun', 'run', '../ralph.ts', '--no-commit', '--config', agentConfigPath, ...args],
+    cmd: [bunPath, 'run', '../ralph.ts', '--no-commit', '--config', agentConfigPath, ...args],
     cwd: workDir,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -89,7 +89,7 @@ describe('Stalling Detection - Real Tests', () => {
       }, null, 2));
 
       const proc = Bun.spawn({
-        cmd: ['bun', 'run', '../ralph.ts', '--no-commit', 'new task'],
+        cmd: [bunPath, 'run', '../ralph.ts', '--no-commit', 'new task'],
         cwd: workDir,
         stdout: 'pipe',
         stderr: 'pipe',
@@ -231,7 +231,7 @@ describe('Stalling Detection - Real Tests', () => {
       writeFakeAgentConfig();
 
       const proc = Bun.spawn({
-        cmd: ['bun', 'run', '../ralph.ts', '--no-commit', '--config', agentConfigPath, 'resume stale state', '--agent', 'codex', '--model', 'stall', '--stalling-timeout', '30s', '--max-iterations', '1'],
+        cmd: [bunPath, 'run', '../ralph.ts', '--no-commit', '--config', agentConfigPath, 'resume stale state', '--agent', 'codex', '--model', 'stall', '--stalling-timeout', '30s', '--max-iterations', '1'],
         cwd: workDir,
         stdout: 'pipe',
         stderr: 'pipe',
@@ -248,55 +248,40 @@ describe('Stalling Detection - Real Tests', () => {
     }, 5000);
   });
 
-  realAgentDescribe('Stalling Detection with Stop Action', () => {
+  describe('Stalling Detection with Stop Action', () => {
     it('detects stalling when agent produces no output and stops', async () => {
-      // Use a command that produces no output to test stalling detection
-      const proc = Bun.spawn({
-        cmd: ['bun', 'run', '../ralph.ts', 'sleep 10',
-              '--no-commit',
-              '--stalling-timeout', '2s',
-              '--stalling-action', 'stop',
-              '--heartbeat-interval', '500ms',
-              '--max-iterations', '1'],
-        cwd: workDir,
-        stdout: 'pipe',
-        stderr: 'pipe',
-        env: { ...process.env, NODE_ENV: 'test' }
-      });
+      const proc = runWithFakeAgent([
+        'fake stop stall full suite',
+        '--agent', 'codex',
+        '--model', 'stall',
+        '--stalling-timeout', '2s',
+        '--stalling-action', 'stop',
+        '--heartbeat-interval', '500ms',
+        '--max-iterations', '1',
+      ]);
 
       const startTime = Date.now();
       const stdoutPromise = new Response(proc.stdout).text();
-      const stderrPromise = new Response(proc.stderr).text();
-      
       const exitCode = await proc.exited;
       const elapsed = Date.now() - startTime;
       const stdout = await stdoutPromise;
-      const stderr = await stderrPromise;
       
-      // Should have detected stalling and exited quickly (not waited 10 seconds)
       expect(elapsed).toBeLessThan(5000);
-      
-      // Should have detected stalling
       expect(stdout.toLowerCase()).toContain('stall');
       expect(stdout).toContain('no activity');
-      
-      // Should have exited gracefully
       expect(exitCode).toBe(0);
     }, 10000);
 
     it('shows heartbeat messages with elapsed and last activity time', async () => {
-      const proc = Bun.spawn({
-        cmd: ['bun', 'run', '../ralph.ts', 'sleep 5',
-              '--no-commit',
-              '--stalling-timeout', '3s',
-              '--stalling-action', 'stop',
-              '--heartbeat-interval', '500ms',
-              '--max-iterations', '1'],
-        cwd: workDir,
-        stdout: 'pipe',
-        stderr: 'pipe',
-        env: { ...process.env, NODE_ENV: 'test' }
-      });
+      const proc = runWithFakeAgent([
+        'fake heartbeat output',
+        '--agent', 'codex',
+        '--model', 'stall',
+        '--stalling-timeout', '3s',
+        '--stalling-action', 'stop',
+        '--heartbeat-interval', '500ms',
+        '--max-iterations', '1',
+      ]);
 
       const stdoutPromise = new Response(proc.stdout).text();
       await proc.exited;
@@ -308,18 +293,15 @@ describe('Stalling Detection - Real Tests', () => {
     }, 10000);
 
     it('saves stalling event to history file', async () => {
-      const proc = Bun.spawn({
-        cmd: ['bun', 'run', '../ralph.ts', 'sleep 5',
-              '--no-commit',
-              '--stalling-timeout', '2s',
-              '--stalling-action', 'stop',
-              '--heartbeat-interval', '500ms',
-              '--max-iterations', '1'],
-        cwd: workDir,
-        stdout: 'pipe',
-        stderr: 'pipe',
-        env: { ...process.env, NODE_ENV: 'test' }
-      });
+      const proc = runWithFakeAgent([
+        'fake history stop stall',
+        '--agent', 'codex',
+        '--model', 'stall',
+        '--stalling-timeout', '2s',
+        '--stalling-action', 'stop',
+        '--heartbeat-interval', '500ms',
+        '--max-iterations', '1',
+      ]);
 
       await proc.exited;
       
@@ -335,18 +317,15 @@ describe('Stalling Detection - Real Tests', () => {
     }, 10000);
 
     it('marks state as inactive after stalling stop', async () => {
-      const proc = Bun.spawn({
-        cmd: ['bun', 'run', '../ralph.ts', 'sleep 5',
-              '--no-commit',
-              '--stalling-timeout', '2s',
-              '--stalling-action', 'stop',
-              '--heartbeat-interval', '500ms',
-              '--max-iterations', '1'],
-        cwd: workDir,
-        stdout: 'pipe',
-        stderr: 'pipe',
-        env: { ...process.env, NODE_ENV: 'test' }
-      });
+      const proc = runWithFakeAgent([
+        'fake inactive after stall',
+        '--agent', 'codex',
+        '--model', 'stall',
+        '--stalling-timeout', '2s',
+        '--stalling-action', 'stop',
+        '--heartbeat-interval', '500ms',
+        '--max-iterations', '1',
+      ]);
 
       await proc.exited;
       
@@ -357,112 +336,69 @@ describe('Stalling Detection - Real Tests', () => {
     }, 10000);
   });
 
-  realAgentDescribe('Stalling Detection with Rotate Action', () => {
+  describe('Stalling Detection with Rotate Action', () => {
     it('detects stalling with rotate action and creates blacklist entry', async () => {
-      // Test that rotate action detects stalling and creates blacklist
-      // Use a short timeout and kill the process after first stall to avoid infinite loop
-      const proc = Bun.spawn({
-        cmd: ['bun', 'run', '../ralph.ts', 'sleep 10',
-              '--no-commit',
-              '--rotation', 'opencode:claude-sonnet-4,opencode:claude-sonnet-4',
-              '--stalling-timeout', '2s',
-              '--stalling-action', 'rotate',
-              '--blacklist-duration', '10s',
-              '--heartbeat-interval', '500ms',
-              '--max-iterations', '1'],
-        cwd: workDir,
-        stdout: 'pipe',
-        stderr: 'pipe',
-        env: { ...process.env, NODE_ENV: 'test' }
-      });
-
-      // Wait a bit for first stalling detection, then kill
-      await wait(3500);
-      proc.kill('SIGTERM');
+      const proc = runWithFakeAgent([
+        'fake rotate stall suite',
+        '--rotation', 'codex:stall,copilot:complete',
+        '--stalling-timeout', '1s',
+        '--stalling-action', 'rotate',
+        '--blacklist-duration', '10s',
+        '--heartbeat-interval', '500ms',
+        '--completion-promise', 'NEVER',
+        '--max-iterations', '2',
+      ]);
       
+      await proc.exited;
       const stdout = await new Response(proc.stdout).text();
       
-      // Should have detected stalling
       expect(stdout.toLowerCase()).toContain('stall');
-      
-      // Should mention blacklist or rotation
       expect(stdout.toLowerCase()).toMatch(/blacklist|rotat/);
-      
-      // Check state file for blacklisted agent (may or may not exist depending on timing)
-      if (existsSync(statePath)) {
-        const state = JSON.parse(readFileSync(statePath, 'utf-8'));
-        if (state.blacklistedAgents && state.blacklistedAgents.length > 0) {
-          expect(state.blacklistedAgents[0].agent).toBeDefined();
-          expect(state.blacklistedAgents[0].durationMs).toBe(10000);
-        }
-      }
+      const history = JSON.parse(readFileSync(historyPath, 'utf-8'));
+      expect(history.stallingEvents[0].action).toBe('rotate');
+      expect(history.stallingEvents[0].agent).toBe('codex');
     }, 8000);
 
     it('saves rotate action to history when stalling detected', async () => {
-      const proc = Bun.spawn({
-        cmd: ['bun', 'run', '../ralph.ts', 'sleep 10',
-              '--no-commit',
-              '--rotation', 'opencode:claude-sonnet-4,opencode:claude-sonnet-4',
-              '--stalling-timeout', '2s',
-              '--stalling-action', 'rotate',
-              '--blacklist-duration', '10s',
-              '--heartbeat-interval', '500ms',
-              '--max-iterations', '1'],
-        cwd: workDir,
-        stdout: 'pipe',
-        stderr: 'pipe',
-        env: { ...process.env, NODE_ENV: 'test' }
-      });
-
-      // Wait for first stalling detection, then kill
-      await wait(3500);
-      proc.kill('SIGTERM');
+      const proc = runWithFakeAgent([
+        'fake rotate history',
+        '--rotation', 'codex:stall,copilot:complete',
+        '--stalling-timeout', '1s',
+        '--stalling-action', 'rotate',
+        '--blacklist-duration', '10s',
+        '--heartbeat-interval', '500ms',
+        '--completion-promise', 'NEVER',
+        '--max-iterations', '2',
+      ]);
       await proc.exited;
       
-      // History file should exist with rotate action
-      if (existsSync(historyPath)) {
-        const history = JSON.parse(readFileSync(historyPath, 'utf-8'));
-        if (history.stallingEvents && history.stallingEvents.length > 0) {
-          expect(history.stallingEvents[0].action).toBe('rotate');
-        }
-      }
+      const history = JSON.parse(readFileSync(historyPath, 'utf-8'));
+      expect(history.stallingEvents.length).toBeGreaterThan(0);
+      expect(history.stallingEvents[0].action).toBe('rotate');
     }, 8000);
   });
 
-  realAgentDescribe('No-Stream Mode (Fixed)', () => {
+  describe('No-Stream Mode (Fixed)', () => {
     it('stalling detection works with --no-stream mode', async () => {
-      // This test verifies stalling detection works with --no-stream mode
-      const proc = Bun.spawn({
-        cmd: ['bun', 'run', '../ralph.ts', 'sleep 3',
-              '--no-commit',
-              '--no-stream',
-              '--stalling-timeout', '1s',
-              '--stalling-action', 'stop',
-              '--heartbeat-interval', '500ms',
-              '--max-iterations', '1'],
-        cwd: workDir,
-        stdout: 'pipe',
-        stderr: 'pipe',
-        env: { ...process.env, NODE_ENV: 'test' }
-      });
+      const proc = runWithFakeAgent([
+        'fake no stream stall',
+        '--agent', 'codex',
+        '--model', 'stall',
+        '--no-stream',
+        '--stalling-timeout', '1s',
+        '--stalling-action', 'stop',
+        '--heartbeat-interval', '500ms',
+        '--max-iterations', '1',
+      ]);
 
       const startTime = Date.now();
       
-      // If stalling detection works, it should exit in ~1-1.5s
-      const timeout = setTimeout(() => {
-        proc.kill('SIGTERM');
-      }, 2500);
-      
       const stdoutPromise = new Response(proc.stdout).text();
       const exitCode = await proc.exited;
-      clearTimeout(timeout);
-      
       const elapsed = Date.now() - startTime;
       const stdout = await stdoutPromise;
       
-      // Verify stalling detection works: should exit before full sleep completes
-      // Sleep is 3s, stalling timeout is 1s, so should exit in ~1-1.5s
-      expect(elapsed).toBeLessThan(2500); // Should be much faster than 3s
+      expect(elapsed).toBeLessThan(2500);
       expect(stdout.toLowerCase()).toContain('stall');
       
       expect(exitCode).toBeDefined();
@@ -472,7 +408,7 @@ describe('Stalling Detection - Real Tests', () => {
   describe('Configuration Validation', () => {
     it('rejects invalid --stalling-action values', async () => {
       const proc = Bun.spawn({
-        cmd: ['bun', 'run', '../ralph.ts', 'sleep 1', 
+        cmd: [bunPath, 'run', '../ralph.ts', 'sleep 1', 
               '--no-commit',
               '--stalling-action', 'invalid', 
               '--max-iterations', '1'],
@@ -491,7 +427,7 @@ describe('Stalling Detection - Real Tests', () => {
 
     it('help shows stalling options', async () => {
       const proc = Bun.spawn({
-        cmd: ['bun', 'run', '../ralph.ts', '--help'],
+        cmd: [bunPath, 'run', '../ralph.ts', '--help'],
         cwd: workDir,
         stdout: 'pipe',
         stderr: 'pipe',
@@ -508,33 +444,25 @@ describe('Stalling Detection - Real Tests', () => {
     }, 5000);
   });
 
-  realAgentDescribe('State File Structure', () => {
+  describe('State File Structure', () => {
     it('state file contains stalling configuration after stalling', async () => {
-      const proc = Bun.spawn({
-        cmd: ['bun', 'run', '../ralph.ts', 'sleep 5',
-              '--no-commit',
-              '--stalling-timeout', '30s',
-              '--stalling-action', 'rotate',
-              '--blacklist-duration', '1h',
-              '--heartbeat-interval', '500ms',
-              '--max-iterations', '1'],
-        cwd: workDir,
-        stdout: 'pipe',
-        stderr: 'pipe',
-        env: { ...process.env, NODE_ENV: 'test' }
-      });
+      const proc = runWithFakeAgent([
+        'fake config persistence',
+        '--agent', 'codex',
+        '--model', 'stall',
+        '--stalling-timeout', '2s',
+        '--stalling-action', 'rotate',
+        '--blacklist-duration', '1h',
+        '--heartbeat-interval', '500ms',
+        '--max-iterations', '1',
+      ]);
 
-      // Set a timeout to kill the process if it takes too long
-      const timeout = setTimeout(() => proc.kill(), 8000);
-      
       await proc.exited;
-      clearTimeout(timeout);
       
       expect(existsSync(statePath)).toBe(true);
       const state = JSON.parse(readFileSync(statePath, 'utf-8'));
       
-      // Should have stalling config saved
-      expect(state.stallingTimeoutMs).toBe(30000);
+      expect(state.stallingTimeoutMs).toBe(2000);
       expect(state.stallingAction).toBe('rotate');
       expect(state.blacklistDurationMs).toBe(3600000);
     }, 10000);
