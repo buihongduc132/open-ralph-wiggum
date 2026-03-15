@@ -362,7 +362,7 @@ Options:
                       rotate: Switch to next agent and blacklist current one
   --heartbeat-interval DURATION  How often to print heartbeat status messages (default: 10s)
                       Supports: ms, s, m, h (e.g., 5000, 30s, 5m, 2h)
-  --state-dir PATH    Use a custom state directory instead of ./.ralph (currently requires --no-commit)
+  --state-dir PATH    Use a custom state directory for state-management commands instead of ./.ralph
   --prompt-file, --file, -f  Read prompt content from a file
   --prompt-template PATH  Use custom prompt template (supports variables)
   --no-stream         Buffer agent output and print at the end
@@ -1126,6 +1126,12 @@ if (usingCustomStateDir && autoCommit) {
   process.exit(1);
 }
 
+if (usingCustomStateDir) {
+  console.error("Error: loop execution with --state-dir is not supported yet.");
+  console.error("Custom state directories are currently limited to state-management commands such as --status, --add-context, --clear-context, and task file management.");
+  process.exit(1);
+}
+
 if (rotationInput) {
   rotation = parseRotationInput(rotationInput);
 } else if (!AGENTS[agentType]) {
@@ -1778,7 +1784,7 @@ async function streamProcessOutput(
     onStallingDetected?: () => void;
     suppressOutput?: boolean;
   },
-): Promise<{ stdoutText: string; stderrText: string; toolCounts: Map<string, number>; stalled: boolean }> {
+): Promise<{ stdoutText: string; stderrText: string; toolCounts: Map<string, number>; stalled: boolean; stalledForMs: number | null }> {
   const toolCounts = new Map<string, number>();
   let stdoutText = "";
   let stderrText = "";
@@ -1786,6 +1792,7 @@ async function streamProcessOutput(
   const activityTracker = new StreamActivityTracker();
   let lastToolSummaryAt = 0;
   let stalled = false;
+  let stalledForMs: number | null = null;
 
   const compactTools = options.compactTools;
   const parseToolOutput = options.agent.parseToolOutput;
@@ -1887,8 +1894,10 @@ async function streamProcessOutput(
 
   const heartbeatTimer = setInterval(() => {
     if (options.suppressOutput) {
-      if (options.stallingTimeoutMs && Date.now() - activityTracker.lastActivityAt >= options.stallingTimeoutMs && !stalled) {
+      const inactivityMs = Date.now() - activityTracker.lastActivityAt;
+      if (options.stallingTimeoutMs && inactivityMs >= options.stallingTimeoutMs && !stalled) {
         stalled = true;
+        stalledForMs = inactivityMs;
         clearInterval(heartbeatTimer);
         if (options.onStallingDetected) {
           options.onStallingDetected();
@@ -1905,9 +1914,11 @@ async function streamProcessOutput(
       lastPrintedAt = now;
       
       // Check for stalling
-      if (options.stallingTimeoutMs && now - activityTracker.lastActivityAt >= options.stallingTimeoutMs && !stalled) {
+      const inactivityMs = now - activityTracker.lastActivityAt;
+      if (options.stallingTimeoutMs && inactivityMs >= options.stallingTimeoutMs && !stalled) {
         stalled = true;
-        console.log(`\n⚠️  Agent stalled: no activity for ${formatDuration(now - activityTracker.lastActivityAt)}`);
+        stalledForMs = inactivityMs;
+        console.log(`\n⚠️  Agent stalled: no activity for ${formatDuration(inactivityMs)}`);
         clearInterval(heartbeatTimer);
         if (options.onStallingDetected) {
           options.onStallingDetected();
@@ -1948,7 +1959,7 @@ async function streamProcessOutput(
     maybePrintToolSummary(true);
   }
 
-  return { stdoutText, stderrText, toolCounts, stalled };
+  return { stdoutText, stderrText, toolCounts, stalled, stalledForMs };
 }
 // Main loop
 // Helper to detect per-iteration file changes using content hashes
@@ -2386,7 +2397,7 @@ async function runRalphLoop(): Promise<void> {
             agent: currentAgent,
             model: currentModel,
             timestamp: new Date().toISOString(),
-            lastActivityMs: state.stallingTimeoutMs || stallingTimeoutMs,
+            lastActivityMs: streamed.stalledForMs ?? (state.stallingTimeoutMs || stallingTimeoutMs),
             action: state.stallingAction || stallingAction,
           };
           
@@ -2455,7 +2466,7 @@ async function runRalphLoop(): Promise<void> {
             agent: currentAgent,
             model: currentModel,
             timestamp: new Date().toISOString(),
-            lastActivityMs: state.stallingTimeoutMs || stallingTimeoutMs,
+            lastActivityMs: buffered.stalledForMs ?? (state.stallingTimeoutMs || stallingTimeoutMs),
             action: state.stallingAction || stallingAction,
           };
           

@@ -129,6 +129,7 @@ describe('Stalling Detection - Real Tests', () => {
       const history = JSON.parse(readFileSync(historyPath, 'utf-8'));
       expect(history.stallingEvents).toHaveLength(1);
       expect(history.stallingEvents[0].action).toBe('stop');
+      expect(history.stallingEvents[0].lastActivityMs).toBeGreaterThanOrEqual(1000);
 
       const state = JSON.parse(readFileSync(statePath, 'utf-8'));
       expect(state.active).toBe(false);
@@ -424,7 +425,8 @@ describe('Stalling Detection - Real Tests', () => {
       expect(elapsed).toBeLessThan(2500);
       expect(stdout.toLowerCase()).toContain('stall');
       expect(stdout).not.toContain('⏳ working...');
-      
+      const history = JSON.parse(readFileSync(historyPath, 'utf-8'));
+      expect(history.stallingEvents[0].lastActivityMs).toBeGreaterThanOrEqual(1000);
       expect(exitCode).toBeDefined();
     }, 5000);
   });

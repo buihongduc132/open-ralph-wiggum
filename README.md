@@ -617,7 +617,7 @@ During operation, Ralph stores state in `.ralph/`:
 - `ralph-tasks.md` - Task list for Tasks Mode inside the selected state directory (created when `--tasks` is used)
 - `ralph-questions.json` - Pending user answers to agent questions
 
-`--state-dir` currently requires `--no-commit`. Custom state directories isolate Ralph's state files, but auto-commit still operates on the shared repository worktree.
+`--state-dir` currently supports state-management commands only. Loop execution with a custom state directory is rejected until shared worktree isolation exists.
 
 ## Uninstall
 
