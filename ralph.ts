@@ -8,7 +8,7 @@
 
 import { $ } from "bun";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "fs";
-import { dirname, join, relative, resolve } from "path";
+import { dirname, isAbsolute, join, relative, resolve } from "path";
 import { checkTerminalPromise, stripAnsi, tasksMarkdownAllComplete } from "./completion";
 import {
   decideLoopOwnership,
@@ -292,7 +292,7 @@ function normalizeRuntimeConfigValue(path: string, value: unknown, expected: "st
 
 function resolveConfigRelativePath(baseFilePath: string, targetPath: string): string {
   if (!targetPath) return targetPath;
-  return targetPath.startsWith("/") ? targetPath : resolve(dirname(baseFilePath), targetPath);
+  return isAbsolute(targetPath) ? targetPath : resolve(dirname(baseFilePath), targetPath);
 }
 
 function loadRuntimeTomlConfig(configPath: string, explicit: boolean): RalphRuntimeConfig | null {
@@ -411,33 +411,37 @@ const BUILT_IN_AGENTS: Record<AgentType, AgentConfig> = {
 const args = process.argv.slice(2);
 let explicitTomlConfigPath = false;
 let tomlConfigPath = "";
+const earlyArgs = (() => {
+  const earlyDoubleDashIndex = args.indexOf("--");
+  return earlyDoubleDashIndex === -1 ? args : args.slice(0, earlyDoubleDashIndex);
+})();
 
 // Handle --config, --toml-config, --state-dir, and --init-config flags before other processing
-for (let i = 0; i < args.length; i++) {
-  if (args[i] === "--config") {
-    const val = args[++i];
+for (let i = 0; i < earlyArgs.length; i++) {
+  if (earlyArgs[i] === "--config") {
+    const val = earlyArgs[++i];
     if (!val) {
       console.error("Error: --config requires a path");
       process.exit(1);
     }
     customConfigPath = val;
-  } else if (args[i] === "--state-dir") {
-    const val = args[++i];
+  } else if (earlyArgs[i] === "--state-dir") {
+    const val = earlyArgs[++i];
     if (!val) {
       console.error("Error: --state-dir requires a path");
       process.exit(1);
     }
     stateDirInput = val;
-  } else if (args[i] === "--toml-config") {
-    const val = args[++i];
+  } else if (earlyArgs[i] === "--toml-config") {
+    const val = earlyArgs[++i];
     if (!val) {
       console.error("Error: --toml-config requires a path");
       process.exit(1);
     }
     tomlConfigPath = val;
     explicitTomlConfigPath = true;
-  } else if (args[i] === "--init-config") {
-    initConfigPath = args[++i] || DEFAULT_CONFIG_PATH;
+  } else if (earlyArgs[i] === "--init-config") {
+    initConfigPath = earlyArgs[++i] || DEFAULT_CONFIG_PATH;
   }
 }
 
@@ -1122,6 +1126,8 @@ let blacklistDurationProvided = false;
 let stallingActionProvided = false;
 let stallRetries = false;
 let stallRetryMinutes = 15;
+let stallRetriesProvided = false;
+let stallRetryMinutesProvided = false;
 
 const promptParts: string[] = [];
 let extraAgentFlags: string[] = [];
@@ -1228,8 +1234,14 @@ if (runtimeTomlConfig) {
   if (runtimeTomlConfig.verbose_tools !== undefined) verboseTools = runtimeTomlConfig.verbose_tools;
   if (runtimeTomlConfig.questions !== undefined) handleQuestions = runtimeTomlConfig.questions;
   if (runtimeTomlConfig.extra_agent_flags?.length) extraAgentFlags = [...runtimeTomlConfig.extra_agent_flags];
-  if (runtimeTomlConfig.stall_retries !== undefined) stallRetries = runtimeTomlConfig.stall_retries;
-  if (runtimeTomlConfig.stall_retry_minutes !== undefined) stallRetryMinutes = runtimeTomlConfig.stall_retry_minutes;
+  if (runtimeTomlConfig.stall_retries !== undefined) {
+    stallRetries = runtimeTomlConfig.stall_retries;
+    stallRetriesProvided = true;
+  }
+  if (runtimeTomlConfig.stall_retry_minutes !== undefined) {
+    stallRetryMinutes = runtimeTomlConfig.stall_retry_minutes;
+    stallRetryMinutesProvided = true;
+  }
 }
 
 for (let i = 0; i < args.length; i++) {
@@ -1358,8 +1370,10 @@ for (let i = 0; i < args.length; i++) {
     handleQuestions = false;
   } else if (arg === "--stall-retries") {
     stallRetries = true;
+    stallRetriesProvided = true;
   } else if (arg === "--no-stall-retries") {
     stallRetries = false;
+    stallRetriesProvided = true;
   } else if (arg === "--stall-retry-minutes") {
     const val = args[++i];
     if (!val || Number.isNaN(Number(val))) {
@@ -1367,6 +1381,7 @@ for (let i = 0; i < args.length; i++) {
       process.exit(1);
     }
     stallRetryMinutes = Number(val);
+    stallRetryMinutesProvided = true;
   } else if (arg === "--state-dir") {
     i++;
   } else if (arg === "--toml-config") {
@@ -2374,8 +2389,12 @@ async function runRalphLoop(): Promise<void> {
     model = existingState.model;
     agentType = existingState.agent;
     rotation = existingState.rotation ?? null;
-    stallRetries = existingState.stallRetries ?? false;
-    stallRetryMinutes = existingState.stallRetryMinutes ?? 15;
+    if (!stallRetriesProvided) {
+      stallRetries = existingState.stallRetries ?? false;
+    }
+    if (!stallRetryMinutesProvided) {
+      stallRetryMinutes = existingState.stallRetryMinutes ?? 15;
+    }
     if (ownership.ownerPid && ownership.ownerPid !== process.pid) {
       console.log(`⚠️  Recovered stale active state from PID ${ownership.ownerPid}`);
     }
@@ -2474,8 +2493,12 @@ async function runRalphLoop(): Promise<void> {
       state.stallingAction = stallingAction;
     }
   }
-  state.stallRetries = stallRetries;
-  state.stallRetryMinutes = stallRetryMinutes;
+  if (stallRetriesProvided || state.stallRetries === undefined) {
+    state.stallRetries = stallRetries;
+  }
+  if (stallRetryMinutesProvided || state.stallRetryMinutes === undefined) {
+    state.stallRetryMinutes = stallRetryMinutes;
+  }
 
   saveState(state);
 
@@ -2631,7 +2654,7 @@ async function runRalphLoop(): Promise<void> {
         if (state.stallRetries) {
           console.log(`\n⏸️  All fallbacks exhausted. Stalling for ${state.stallRetryMinutes} minute(s) before retrying.`);
           await sleepForStallRetry(state.stallRetryMinutes ?? 15);
-          console.log(`🔁 Cleared fallback blacklist. Restarting fallback cycle.`);
+          console.log(`🔁 Cleared agent blacklist. Restarting fallback cycle.`);
         } else {
           console.log(`\n⚠️  All agents in rotation are blacklisted. Clearing blacklists.`);
         }

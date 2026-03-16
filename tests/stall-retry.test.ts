@@ -112,4 +112,38 @@ describe("stall retries", () => {
     expect(result.output).toContain("All fallbacks exhausted. Stalling for 15 minute(s) before retrying.");
     expect(result.output).toContain("Cleared fallback blacklist. Restarting fallback cycle.");
   });
+
+  it("allows current stall retry flags to override persisted state when resuming", async () => {
+    writeFileSync(
+      join(stateDir, "ralph-loop.state.json"),
+      JSON.stringify({
+        active: true,
+        iteration: 1,
+        minIterations: 1,
+        maxIterations: 2,
+        completionPromise: "COMPLETE",
+        tasksMode: false,
+        taskPromise: "READY_FOR_NEXT_TASK",
+        prompt: "resume with override",
+        startedAt: new Date().toISOString(),
+        model: "alpha",
+        agent: "opencode",
+        stallRetries: false,
+        stallRetryMinutes: 99,
+      }, null, 2),
+    );
+
+    const result = await runRalph(tempDir, [
+      "--stall-retries",
+      "--stall-retry-minutes",
+      "0",
+      "--no-stream",
+      "--no-questions",
+      "--no-commit",
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toContain("Stall retries: enabled (0 minute(s))");
+    expect(result.output).toContain("All fallbacks exhausted. Stalling for 0 minute(s) before retrying.");
+  });
 });
