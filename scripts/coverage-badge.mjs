@@ -4,7 +4,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
-const rawThreshold = process.env.COVERAGE_THRESHOLD ?? "80";
+const envThreshold = process.env.COVERAGE_THRESHOLD;
+const rawThreshold = envThreshold && envThreshold.trim() !== "" ? envThreshold : "80";
 const threshold = Number(rawThreshold);
 const badgeDir = join(process.cwd(), ".github", "badges");
 const badgePath = join(badgeDir, "unit-coverage.svg");
