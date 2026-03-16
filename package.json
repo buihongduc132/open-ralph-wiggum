@@ -9,13 +9,15 @@
   "scripts": {
     "start": "bun ralph.ts",
     "build": "bun build ralph.ts --outfile bin/ralph --compile",
-    "test": "bun test ./tests/ralph.test.ts",
+    "test": "bun test",
+    "test:coverage": "bun run scripts/coverage-badge.mjs",
     "install-local": "bun link"
   },
   "files": [
     "bin/ralph.js",
     "ralph.ts",
     "completion.ts",
+    "loop-runtime.ts",
     "README.md",
     "LICENSE",
     "install.sh",

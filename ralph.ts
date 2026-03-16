@@ -487,6 +487,65 @@ function clearHistory(): void {
   }
 }
 
+async function appendIterationHistory(params: {
+  history: RalphHistory;
+  iteration: number;
+  iterationStart: number;
+  currentAgent: AgentType;
+  currentModel: string;
+  toolCounts: Map<string, number>;
+  result: string;
+  stderr: string;
+  exitCode: number;
+  completionDetected: boolean;
+  snapshotBefore: Awaited<ReturnType<typeof captureFileSnapshot>>;
+}): Promise<void> {
+  const iterationDuration = Date.now() - params.iterationStart;
+  const snapshotAfter = await captureFileSnapshot();
+  const filesModified = getModifiedFilesSinceSnapshot(params.snapshotBefore, snapshotAfter);
+  const errors = extractErrors(`${params.result}\n${params.stderr}`);
+
+  const iterationRecord: IterationHistory = {
+    iteration: params.iteration,
+    startedAt: new Date(params.iterationStart).toISOString(),
+    endedAt: new Date().toISOString(),
+    durationMs: iterationDuration,
+    agent: params.currentAgent,
+    model: params.currentModel,
+    toolsUsed: Object.fromEntries(params.toolCounts),
+    filesModified,
+    exitCode: params.exitCode,
+    completionDetected: params.completionDetected,
+    errors,
+  };
+
+  params.history.iterations.push(iterationRecord);
+  params.history.totalDurationMs += iterationDuration;
+
+  if (filesModified.length === 0) {
+    params.history.struggleIndicators.noProgressIterations++;
+  } else {
+    params.history.struggleIndicators.noProgressIterations = 0;
+  }
+
+  if (iterationDuration < 30000) {
+    params.history.struggleIndicators.shortIterations++;
+  } else {
+    params.history.struggleIndicators.shortIterations = 0;
+  }
+
+  if (errors.length === 0) {
+    params.history.struggleIndicators.repeatedErrors = {};
+  } else {
+    for (const error of errors) {
+      const key = error.substring(0, 100);
+      params.history.struggleIndicators.repeatedErrors[key] = (params.history.struggleIndicators.repeatedErrors[key] || 0) + 1;
+    }
+  }
+
+  saveHistory(params.history);
+}
+
 // Status command
 if (args.includes("--status")) {
   const state = loadState();
@@ -2405,7 +2464,21 @@ async function runRalphLoop(): Promise<void> {
             history.stallingEvents = [];
           }
           history.stallingEvents.push(stallingEvent);
-          saveHistory(history);
+          const stalledExitCode = await exitCodePromise;
+          currentProc = null;
+          await appendIterationHistory({
+            history,
+            iteration: state.iteration,
+            iterationStart,
+            currentAgent,
+            currentModel,
+            toolCounts,
+            result,
+            stderr,
+            exitCode: stalledExitCode,
+            completionDetected: false,
+            snapshotBefore,
+          });
           
           // Handle based on action
           if (state.stallingAction === "rotate" && state.rotation && state.rotation.length > 0) {
@@ -2474,7 +2547,21 @@ async function runRalphLoop(): Promise<void> {
             history.stallingEvents = [];
           }
           history.stallingEvents.push(stallingEvent);
-          saveHistory(history);
+          const stalledExitCode = await exitCodePromise;
+          currentProc = null;
+          await appendIterationHistory({
+            history,
+            iteration: state.iteration,
+            iterationStart,
+            currentAgent,
+            currentModel,
+            toolCounts,
+            result,
+            stderr,
+            exitCode: stalledExitCode,
+            completionDetected: false,
+            snapshotBefore,
+          });
           
           // Handle based on action
           if (state.stallingAction === "rotate" && state.rotation && state.rotation.length > 0) {
@@ -2497,7 +2584,7 @@ async function runRalphLoop(): Promise<void> {
             const nextIndex = ((state.rotationIndex ?? 0) + 1) % state.rotation.length;
             state.rotationIndex = nextIndex;
             console.log(`🔄 Rotating to next agent in rotation: ${state.rotation[nextIndex]}`);
-            
+            state.iteration++;
             saveState(state);
             // Continue to next iteration
             continue;
@@ -2544,64 +2631,28 @@ async function runRalphLoop(): Promise<void> {
         }
       }
 
-      const iterationDuration = Date.now() - iterationStart;
-
       printIterationSummary({
         iteration: state.iteration,
-        elapsedMs: iterationDuration,
+        elapsedMs: Date.now() - iterationStart,
         toolCounts,
         exitCode,
         completionDetected,
         agent: currentAgent,
         model: currentModel,
       });
-
-      // Track iteration history - compare against pre-iteration snapshot
-      const snapshotAfter = await captureFileSnapshot();
-      const filesModified = getModifiedFilesSinceSnapshot(snapshotBefore, snapshotAfter);
-      const errors = extractErrors(combinedOutput);
-
-      const iterationRecord: IterationHistory = {
+      await appendIterationHistory({
+        history,
         iteration: state.iteration,
-        startedAt: new Date(iterationStart).toISOString(),
-        endedAt: new Date().toISOString(),
-        durationMs: iterationDuration,
-        agent: currentAgent,
-        model: currentModel,
-        toolsUsed: Object.fromEntries(toolCounts),
-        filesModified,
+        iterationStart,
+        currentAgent,
+        currentModel,
+        toolCounts,
+        result,
+        stderr,
         exitCode,
         completionDetected,
-        errors,
-      };
-
-      history.iterations.push(iterationRecord);
-      history.totalDurationMs += iterationDuration;
-
-      // Update struggle indicators
-      if (filesModified.length === 0) {
-        history.struggleIndicators.noProgressIterations++;
-      } else {
-        history.struggleIndicators.noProgressIterations = 0; // Reset on progress
-      }
-
-      if (iterationDuration < 30000) { // Less than 30 seconds
-        history.struggleIndicators.shortIterations++;
-      } else {
-        history.struggleIndicators.shortIterations = 0; // Reset on normal-length iteration
-      }
-
-      if (errors.length === 0) {
-        // Reset error tracking when iteration has no errors (issue resolved)
-        history.struggleIndicators.repeatedErrors = {};
-      } else {
-        for (const error of errors) {
-          const key = error.substring(0, 100);
-          history.struggleIndicators.repeatedErrors[key] = (history.struggleIndicators.repeatedErrors[key] || 0) + 1;
-        }
-      }
-
-      saveHistory(history);
+        snapshotBefore,
+      });
 
       // Show struggle warning if detected
       const struggle = history.struggleIndicators;

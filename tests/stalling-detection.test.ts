@@ -192,7 +192,12 @@ describe('Stalling Detection - Real Tests', () => {
       expect(history.stallingEvents).toHaveLength(1);
       expect(history.stallingEvents[0].action).toBe('rotate');
       expect(history.stallingEvents[0].agent).toBe('codex');
-      expect(history.iterations.length).toBeGreaterThanOrEqual(1);
+      expect(history.iterations.length).toBe(2);
+      expect(history.iterations[0].iteration).toBe(1);
+      expect(history.iterations[0].agent).toBe('codex');
+      expect(history.iterations[0].completionDetected).toBe(false);
+      expect(history.iterations[1].iteration).toBe(2);
+      expect(history.iterations[1].agent).toBe('copilot');
       expect(history.iterations.some((iteration: { agent: string }) => iteration.agent === 'copilot')).toBe(true);
       expect(history.totalDurationMs).toBeGreaterThan(0);
     }, 12000);
@@ -240,6 +245,34 @@ describe('Stalling Detection - Real Tests', () => {
       expect(stdout).toContain('COMPLETE');
       expect(stdout.toLowerCase()).not.toContain('agent stalled');
     }, 6000);
+
+    it('increments iteration and records stalled turns when --no-stream rotate continues', async () => {
+      const proc = runWithFakeAgent([
+        'fake no-stream rotate iteration advance',
+        '--rotation', 'codex:stall,copilot:stall',
+        '--no-stream',
+        '--stalling-timeout', '1s',
+        '--stalling-action', 'rotate',
+        '--blacklist-duration', '10s',
+        '--heartbeat-interval', '500ms',
+        '--completion-promise', 'NEVER',
+        '--max-iterations', '2',
+      ]);
+
+      const stdoutPromise = new Response(proc.stdout).text();
+      const exitCode = await proc.exited;
+      const stdout = await stdoutPromise;
+
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain('Max iterations (2) reached');
+
+      const history = JSON.parse(readFileSync(historyPath, 'utf-8'));
+      expect(history.stallingEvents).toHaveLength(2);
+      expect(history.iterations).toHaveLength(2);
+      expect(history.iterations.map((iteration: { iteration: number }) => iteration.iteration)).toEqual([1, 2]);
+      expect(history.iterations.map((iteration: { agent: string }) => iteration.agent)).toEqual(['codex', 'copilot']);
+      expect(history.iterations.every((iteration: { completionDetected: boolean }) => iteration.completionDetected === false)).toBe(true);
+    }, 12000);
 
     it('preserves persisted stalling config when resuming without re-supplying flags', async () => {
       writeFileSync(statePath, JSON.stringify({
