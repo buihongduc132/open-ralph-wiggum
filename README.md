@@ -219,12 +219,36 @@ Options:
   --questions              Enable interactive question handling (default: enabled)
   --no-questions           Disable interactive question handling (agent will loop on questions)
   --no-plugins             Disable non-auth OpenCode plugins for this run (opencode only)
+  --stall-retries          Sleep and restart after all fallbacks are exhausted
+  --stall-retry-minutes N  Minutes to sleep before restarting exhausted fallbacks (default: 15)
   --no-commit              Don't auto-commit after iterations
   --allow-all              Auto-approve all tool permissions (default: on)
   --no-allow-all           Require interactive permission prompts
   --config PATH            Use custom agent config file
+  --toml-config PATH       Use runtime config from a TOML file
   --init-config [PATH]     Write default agent config to PATH and exit
   --help                   Show help
+```
+
+### Runtime TOML Config
+
+Ralph can load runtime settings from TOML. By default it looks for `.ralph/config.toml` in the current project. Use `--toml-config PATH` to point at a different file.
+
+CLI flags still win over TOML values.
+
+Example:
+
+```toml
+prompt = "Implement the queued bugfix and stop when tests pass"
+agent = "opencode"
+model = "anthropic/claude-sonnet-4"
+max_iterations = 8
+completion_promise = "COMPLETE"
+questions = false
+no_commit = true
+rotation = ["opencode:anthropic/claude-sonnet-4", "codex:gpt-5-codex"]
+stall_retries = true
+stall_retry_minutes = 15
 ```
 
 ### Tasks Mode
@@ -618,6 +642,7 @@ ralph-wiggum/
 ### State Files (in .ralph/)
 
 During operation, Ralph stores state in `.ralph/`:
+- `config.toml` - Optional runtime configuration file
 - `ralph-loop.state.json` - Active loop state
 - `ralph-history.json` - Iteration history and metrics
 - `ralph-context.md` - Pending context for next iteration
