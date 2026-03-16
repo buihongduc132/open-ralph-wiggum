@@ -171,4 +171,22 @@ describe("TOML runtime config loading", () => {
     expect(result.exitCode).toBe(1);
     expect(result.output).toContain(`Error: Ralph TOML config not found: ${missingPath}`);
   });
+
+  it("does not treat agent flags after -- as Ralph TOML config flags", async () => {
+    const result = await runRalph(tempDir, [
+      "inline cli prompt",
+      "--max-iterations",
+      "1",
+      "--no-stream",
+      "--no-questions",
+      "--no-commit",
+      "--",
+      "--toml-config",
+      "forwarded-to-agent.toml",
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toContain("Task: inline cli prompt");
+    expect(result.output).not.toContain("Ralph TOML config not found");
+  });
 });
