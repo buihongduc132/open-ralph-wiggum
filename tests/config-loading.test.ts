@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -10,7 +10,21 @@ function cleanupPath(path: string) {
   } catch {}
 }
 
+function createFakeAgent(tempDir: string, exitCode: 0 | 1) {
+  if (process.platform === "win32") {
+    const cmdPath = join(tempDir, `fake-agent-${exitCode}.cmd`);
+    writeFileSync(cmdPath, `@echo off\r\nexit /b ${exitCode}\r\n`);
+    return cmdPath;
+  }
+
+  const scriptPath = join(tempDir, `fake-agent-${exitCode}.sh`);
+  writeFileSync(scriptPath, `#!/bin/sh\nexit ${exitCode}\n`);
+  chmodSync(scriptPath, 0o755);
+  return scriptPath;
+}
+
 async function runRalph(tempDir: string, args: string[]) {
+  const successAgent = createFakeAgent(tempDir, 0);
   const proc = Bun.spawn({
     cmd: ["bun", "run", join(process.cwd(), "ralph.ts"), ...args],
     cwd: tempDir,
@@ -19,15 +33,17 @@ async function runRalph(tempDir: string, args: string[]) {
     env: {
       ...process.env,
       NODE_ENV: "test",
-      RALPH_OPENCODE_BINARY: "true",
-      RALPH_CODEX_BINARY: "true",
-      RALPH_CLAUDE_BINARY: "true",
-      RALPH_COPILOT_BINARY: "true",
+      RALPH_OPENCODE_BINARY: successAgent,
+      RALPH_CODEX_BINARY: successAgent,
+      RALPH_CLAUDE_BINARY: successAgent,
+      RALPH_COPILOT_BINARY: successAgent,
     },
   });
 
-  const stdout = await new Response(proc.stdout).text();
-  const stderr = await new Response(proc.stderr).text();
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
   const exitCode = await proc.exited;
 
   return { stdout, stderr, exitCode, output: `${stdout}\n${stderr}` };
@@ -188,5 +204,15 @@ describe("TOML runtime config loading", () => {
     expect(result.exitCode).toBe(0);
     expect(result.output).toContain("Task: inline cli prompt");
     expect(result.output).not.toContain("Ralph TOML config not found");
+  });
+
+  it("does not parse TOML config before --help", async () => {
+    writeFileSync(join(stateDir, "config.toml"), 'prompt = "missing quote');
+
+    const result = await runRalph(tempDir, ["--help"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toContain("Ralph Wiggum Loop - Iterative AI development with AI agents");
+    expect(result.output).not.toContain("Failed to parse Ralph TOML config");
   });
 });
