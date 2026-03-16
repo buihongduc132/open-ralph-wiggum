@@ -4,9 +4,15 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
-const threshold = Number(process.env.COVERAGE_THRESHOLD ?? "80");
+const rawThreshold = process.env.COVERAGE_THRESHOLD ?? "80";
+const threshold = Number(rawThreshold);
 const badgeDir = join(process.cwd(), ".github", "badges");
 const badgePath = join(badgeDir, "unit-coverage.svg");
+
+if (!Number.isFinite(threshold) || threshold < 0 || threshold > 100) {
+  console.error(`Invalid COVERAGE_THRESHOLD: ${rawThreshold}. Expected a number between 0 and 100.`);
+  process.exit(1);
+}
 
 const result = spawnSync("bun", ["test", "--coverage"], {
   cwd: process.cwd(),
