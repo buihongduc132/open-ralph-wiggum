@@ -450,12 +450,6 @@ if (!tomlConfigPath) {
   tomlConfigPath = join(stateDir, "config.toml");
 }
 
-const runtimeTomlConfig = loadRuntimeTomlConfig(tomlConfigPath, explicitTomlConfigPath);
-
-if (!customConfigPath && runtimeTomlConfig?.agent_config) {
-  customConfigPath = runtimeTomlConfig.agent_config;
-}
-
 // Handle --init-config: write default config and exit
 if (initConfigPath) {
   const configDir = join(initConfigPath, "..");
@@ -466,17 +460,6 @@ if (initConfigPath) {
   console.log(`Created default agent config at: ${initConfigPath}`);
   console.log(`You can edit this file to add custom agents or override defaults.`);
   process.exit(0);
-}
-
-// Load agents from config file if available
-const customAgents = loadAgentConfig(customConfigPath);
-
-// Merge custom agents with built-in (custom overrides built-in)
-const AGENTS: Record<string, AgentConfig> = { ...BUILT_IN_AGENTS };
-if (customAgents) {
-  for (const [type, json] of Object.entries(customAgents)) {
-    AGENTS[type] = createAgentConfig(json);
-  }
 }
 
 if (args.includes("--help") || args.includes("-h")) {
@@ -571,6 +554,24 @@ if (args.includes("--version") || args.includes("-v")) {
   console.log(`ralph ${VERSION}`);
   process.exit(0);
 }
+
+const runtimeTomlConfig = loadRuntimeTomlConfig(tomlConfigPath, explicitTomlConfigPath);
+
+if (!customConfigPath && runtimeTomlConfig?.agent_config) {
+  customConfigPath = runtimeTomlConfig.agent_config;
+}
+
+// Load agents from config file if available
+const customAgents = loadAgentConfig(customConfigPath);
+
+// Merge custom agents with built-in (custom overrides built-in)
+const AGENTS: Record<string, AgentConfig> = { ...BUILT_IN_AGENTS };
+if (customAgents) {
+  for (const [type, json] of Object.entries(customAgents)) {
+    AGENTS[type] = createAgentConfig(json);
+  }
+}
+
 
 // History tracking interface
 interface IterationHistory {
@@ -2652,7 +2653,7 @@ async function runRalphLoop(): Promise<void> {
 
       if (selection.clearedBlacklist) {
         if (state.stallRetries) {
-          console.log(`\n⏸️  All fallbacks exhausted. Stalling for ${state.stallRetryMinutes} minute(s) before retrying.`);
+          console.log(`\n⏸️  All agents in rotation are blacklisted. Stalling for ${state.stallRetryMinutes} minute(s) before retrying.`);
           await sleepForStallRetry(state.stallRetryMinutes ?? 15);
           console.log(`🔁 Cleared agent blacklist. Restarting fallback cycle.`);
         } else {
@@ -3085,20 +3086,22 @@ async function runRalphLoop(): Promise<void> {
       if (state.rotation && state.rotation.length > 0) {
         state.rotationIndex = ((state.rotationIndex ?? 0) + 1) % state.rotation.length;
       }
-      const fallbackPool = getFallbackPool(state);
-      const currentFallbackKey = usingRotation
-        ? state.rotation![rotationIndex]
-        : getFallbackKey(currentAgent, currentModel);
-      state.fallbackBlacklist = markFallbackExhausted(state.fallbackBlacklist, currentFallbackKey);
-      const exhaustedAllFallbacks = fallbackPool.every(entry => state.fallbackBlacklist?.includes(entry));
-      const willContinue = !(maxIterations > 0 && state.iteration + 1 > maxIterations);
-      if (exhaustedAllFallbacks && willContinue) {
-        if (state.stallRetries) {
-          console.log(`\n⏸️  All fallbacks exhausted. Stalling for ${state.stallRetryMinutes} minute(s) before retrying.`);
-          await sleepForStallRetry(state.stallRetryMinutes ?? 15);
-          console.log(`🔁 Cleared fallback blacklist. Restarting fallback cycle.`);
+      if (exitCode !== 0) {
+        const fallbackPool = getFallbackPool(state);
+        const currentFallbackKey = usingRotation
+          ? state.rotation![rotationIndex]
+          : getFallbackKey(currentAgent, currentModel);
+        state.fallbackBlacklist = markFallbackExhausted(state.fallbackBlacklist, currentFallbackKey);
+        const exhaustedAllFallbacks = fallbackPool.every(entry => state.fallbackBlacklist?.includes(entry));
+        const willContinue = !(maxIterations > 0 && state.iteration + 1 > maxIterations);
+        if (exhaustedAllFallbacks && willContinue) {
+          if (state.stallRetries) {
+            console.log(`\n⏸️  All fallbacks exhausted. Stalling for ${state.stallRetryMinutes} minute(s) before retrying.`);
+            await sleepForStallRetry(state.stallRetryMinutes ?? 15);
+            console.log(`🔁 Cleared fallback blacklist. Restarting fallback cycle.`);
+          }
+          state.fallbackBlacklist = [];
         }
-        state.fallbackBlacklist = [];
       }
       state.iteration++;
       saveState(state);
