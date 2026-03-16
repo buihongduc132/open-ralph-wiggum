@@ -8,7 +8,7 @@
 
 import { $ } from "bun";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "fs";
-import { join, relative, resolve } from "path";
+import { dirname, isAbsolute, join, relative, resolve } from "path";
 import { checkTerminalPromise, stripAnsi, tasksMarkdownAllComplete } from "./completion";
 import {
   decideLoopOwnership,
@@ -92,6 +92,35 @@ interface RalphConfig {
 
 const DEFAULT_CONFIG_PATH = join(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
 let stateDirInput = join(process.cwd(), ".ralph");
+
+interface RalphRuntimeConfig {
+  prompt?: string;
+  agent?: AgentType;
+  min_iterations?: number;
+  max_iterations?: number;
+  completion_promise?: string;
+  abort_promise?: string;
+  tasks?: boolean;
+  task_promise?: string;
+  model?: string;
+  rotation?: string[];
+  stalling_timeout?: string;
+  blacklist_duration?: string;
+  stalling_action?: "stop" | "rotate";
+  heartbeat_interval?: string;
+  no_commit?: boolean;
+  no_plugins?: boolean;
+  allow_all?: boolean;
+  prompt_file?: string;
+  prompt_template?: string;
+  stream?: boolean;
+  verbose_tools?: boolean;
+  questions?: boolean;
+  agent_config?: string;
+  extra_agent_flags?: string[];
+  stall_retries?: boolean;
+  stall_retry_minutes?: number;
+}
 
 const PARSE_PATTERNS: Record<string, (line: string) => string | null> = {
   "opencode": (line) => {
@@ -226,6 +255,105 @@ function getDefaultConfig(): RalphConfig {
   };
 }
 
+function normalizeRuntimeConfigValue(path: string, value: unknown, expected: "string" | "number" | "boolean" | "string[]"): string | number | boolean | string[] | undefined {
+  if (value === undefined) return undefined;
+
+  if (expected === "string") {
+    if (typeof value !== "string") {
+      console.error(`Error: Ralph TOML config key '${path}' must be a string.`);
+      process.exit(1);
+    }
+    return value;
+  }
+
+  if (expected === "number") {
+    if (typeof value !== "number" || Number.isNaN(value)) {
+      console.error(`Error: Ralph TOML config key '${path}' must be a number.`);
+      process.exit(1);
+    }
+    return value;
+  }
+
+  if (expected === "boolean") {
+    if (typeof value !== "boolean") {
+      console.error(`Error: Ralph TOML config key '${path}' must be a boolean.`);
+      process.exit(1);
+    }
+    return value;
+  }
+
+  if (!Array.isArray(value) || value.some(item => typeof item !== "string")) {
+    console.error(`Error: Ralph TOML config key '${path}' must be an array of strings.`);
+    process.exit(1);
+  }
+
+  return value as string[];
+}
+
+function resolveConfigRelativePath(baseFilePath: string, targetPath: string): string {
+  if (!targetPath) return targetPath;
+  return isAbsolute(targetPath) ? targetPath : resolve(dirname(baseFilePath), targetPath);
+}
+
+function loadRuntimeTomlConfig(configPath: string, explicit: boolean): RalphRuntimeConfig | null {
+  if (!existsSync(configPath)) {
+    if (explicit) {
+      console.error(`Error: Ralph TOML config not found: ${configPath}`);
+      process.exit(1);
+    }
+    return null;
+  }
+
+  try {
+    const raw = readFileSync(configPath, "utf-8");
+    const parsed = Bun.TOML.parse(raw) as Record<string, unknown>;
+    const config: RalphRuntimeConfig = {};
+
+    config.prompt = normalizeRuntimeConfigValue("prompt", parsed.prompt, "string") as string | undefined;
+    config.agent = normalizeRuntimeConfigValue("agent", parsed.agent, "string") as AgentType | undefined;
+    config.min_iterations = normalizeRuntimeConfigValue("min_iterations", parsed.min_iterations, "number") as number | undefined;
+    config.max_iterations = normalizeRuntimeConfigValue("max_iterations", parsed.max_iterations, "number") as number | undefined;
+    config.completion_promise = normalizeRuntimeConfigValue("completion_promise", parsed.completion_promise, "string") as string | undefined;
+    config.abort_promise = normalizeRuntimeConfigValue("abort_promise", parsed.abort_promise, "string") as string | undefined;
+    config.tasks = normalizeRuntimeConfigValue("tasks", parsed.tasks, "boolean") as boolean | undefined;
+    config.task_promise = normalizeRuntimeConfigValue("task_promise", parsed.task_promise, "string") as string | undefined;
+    config.model = normalizeRuntimeConfigValue("model", parsed.model, "string") as string | undefined;
+    config.rotation = normalizeRuntimeConfigValue("rotation", parsed.rotation, "string[]") as string[] | undefined;
+    config.stalling_timeout = normalizeRuntimeConfigValue("stalling_timeout", parsed.stalling_timeout, "string") as string | undefined;
+    config.blacklist_duration = normalizeRuntimeConfigValue("blacklist_duration", parsed.blacklist_duration, "string") as string | undefined;
+    config.stalling_action = normalizeRuntimeConfigValue("stalling_action", parsed.stalling_action, "string") as "stop" | "rotate" | undefined;
+    config.heartbeat_interval = normalizeRuntimeConfigValue("heartbeat_interval", parsed.heartbeat_interval, "string") as string | undefined;
+    config.no_commit = normalizeRuntimeConfigValue("no_commit", parsed.no_commit, "boolean") as boolean | undefined;
+    config.no_plugins = normalizeRuntimeConfigValue("no_plugins", parsed.no_plugins, "boolean") as boolean | undefined;
+    config.allow_all = normalizeRuntimeConfigValue("allow_all", parsed.allow_all, "boolean") as boolean | undefined;
+    config.prompt_file = normalizeRuntimeConfigValue("prompt_file", parsed.prompt_file, "string") as string | undefined;
+    config.prompt_template = normalizeRuntimeConfigValue("prompt_template", parsed.prompt_template, "string") as string | undefined;
+    config.stream = normalizeRuntimeConfigValue("stream", parsed.stream, "boolean") as boolean | undefined;
+    config.verbose_tools = normalizeRuntimeConfigValue("verbose_tools", parsed.verbose_tools, "boolean") as boolean | undefined;
+    config.questions = normalizeRuntimeConfigValue("questions", parsed.questions, "boolean") as boolean | undefined;
+    config.agent_config = normalizeRuntimeConfigValue("agent_config", parsed.agent_config, "string") as string | undefined;
+    config.extra_agent_flags = normalizeRuntimeConfigValue("extra_agent_flags", parsed.extra_agent_flags, "string[]") as string[] | undefined;
+    config.stall_retries = normalizeRuntimeConfigValue("stall_retries", parsed.stall_retries, "boolean") as boolean | undefined;
+    config.stall_retry_minutes = normalizeRuntimeConfigValue("stall_retry_minutes", parsed.stall_retry_minutes, "number") as number | undefined;
+
+    if (config.prompt_file) {
+      config.prompt_file = resolveConfigRelativePath(configPath, config.prompt_file);
+    }
+    if (config.prompt_template) {
+      config.prompt_template = resolveConfigRelativePath(configPath, config.prompt_template);
+    }
+    if (config.agent_config) {
+      config.agent_config = resolveConfigRelativePath(configPath, config.agent_config);
+    }
+
+    return config;
+  } catch (error) {
+    console.error(`Error: Failed to parse Ralph TOML config at ${configPath}`);
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
+
 /**
  * Resolve a command for cross-platform compatibility.
  * On Windows, many npm-installed CLIs require the .cmd extension.
@@ -279,31 +407,48 @@ const BUILT_IN_AGENTS: Record<AgentType, AgentConfig> = {
   },
 };
 
-// Parse arguments early for --config and --init-config handling
+// Parse arguments early for config handling
 const args = process.argv.slice(2);
+let explicitTomlConfigPath = false;
+let tomlConfigPath = "";
+const earlyArgs = (() => {
+  const earlyDoubleDashIndex = args.indexOf("--");
+  return earlyDoubleDashIndex === -1 ? args : args.slice(0, earlyDoubleDashIndex);
+})();
 
-// Handle --config and --init-config flags before other processing
-for (let i = 0; i < args.length; i++) {
-  if (args[i] === "--config") {
-    const val = args[++i];
+// Handle --config, --toml-config, --state-dir, and --init-config flags before other processing
+for (let i = 0; i < earlyArgs.length; i++) {
+  if (earlyArgs[i] === "--config") {
+    const val = earlyArgs[++i];
     if (!val) {
       console.error("Error: --config requires a path");
       process.exit(1);
     }
     customConfigPath = val;
-  } else if (args[i] === "--state-dir") {
-    const val = args[++i];
+  } else if (earlyArgs[i] === "--state-dir") {
+    const val = earlyArgs[++i];
     if (!val) {
       console.error("Error: --state-dir requires a path");
       process.exit(1);
     }
     stateDirInput = val;
-  } else if (args[i] === "--init-config") {
-    initConfigPath = args[++i] || DEFAULT_CONFIG_PATH;
+  } else if (earlyArgs[i] === "--toml-config") {
+    const val = earlyArgs[++i];
+    if (!val) {
+      console.error("Error: --toml-config requires a path");
+      process.exit(1);
+    }
+    tomlConfigPath = val;
+    explicitTomlConfigPath = true;
+  } else if (earlyArgs[i] === "--init-config") {
+    initConfigPath = earlyArgs[++i] || DEFAULT_CONFIG_PATH;
   }
 }
 
 setStatePaths(stateDirInput);
+if (!tomlConfigPath) {
+  tomlConfigPath = join(stateDir, "config.toml");
+}
 
 // Handle --init-config: write default config and exit
 if (initConfigPath) {
@@ -315,17 +460,6 @@ if (initConfigPath) {
   console.log(`Created default agent config at: ${initConfigPath}`);
   console.log(`You can edit this file to add custom agents or override defaults.`);
   process.exit(0);
-}
-
-// Load agents from config file if available
-const customAgents = loadAgentConfig(customConfigPath);
-
-// Merge custom agents with built-in (custom overrides built-in)
-const AGENTS: Record<string, AgentConfig> = { ...BUILT_IN_AGENTS };
-if (customAgents) {
-  for (const [type, json] of Object.entries(customAgents)) {
-    AGENTS[type] = createAgentConfig(json);
-  }
 }
 
 if (args.includes("--help") || args.includes("-h")) {
@@ -363,6 +497,7 @@ Options:
   --heartbeat-interval DURATION  How often to print heartbeat status messages (default: 10s)
                       Supports: ms, s, m, h (e.g., 5000, 30s, 5m, 2h)
   --state-dir PATH    Use a custom state directory for state-management commands instead of ./.ralph
+  --toml-config PATH  Use runtime config from a TOML file
   --prompt-file, --file, -f  Read prompt content from a file
   --prompt-template PATH  Use custom prompt template (supports variables)
   --no-stream         Buffer agent output and print at the end
@@ -370,6 +505,8 @@ Options:
   --questions         Enable interactive question handling (default: enabled)
   --no-questions      Disable interactive question handling (agent will loop on questions)
   --no-plugins        Disable non-auth OpenCode plugins for this run (opencode only)
+  --stall-retries     Sleep and restart after all fallbacks are exhausted
+  --stall-retry-minutes N  Minutes to sleep before restarting exhausted fallbacks (default: 15)
   --no-commit         Don't auto-commit after each iteration
   --allow-all         Auto-approve all tool permissions (default: on)
   --no-allow-all      Require interactive permission prompts
@@ -417,6 +554,24 @@ if (args.includes("--version") || args.includes("-v")) {
   console.log(`ralph ${VERSION}`);
   process.exit(0);
 }
+
+const runtimeTomlConfig = loadRuntimeTomlConfig(tomlConfigPath, explicitTomlConfigPath);
+
+if (!customConfigPath && runtimeTomlConfig?.agent_config) {
+  customConfigPath = runtimeTomlConfig.agent_config;
+}
+
+// Load agents from config file if available
+const customAgents = loadAgentConfig(customConfigPath);
+
+// Merge custom agents with built-in (custom overrides built-in)
+const AGENTS: Record<string, AgentConfig> = { ...BUILT_IN_AGENTS };
+if (customAgents) {
+  for (const [type, json] of Object.entries(customAgents)) {
+    AGENTS[type] = createAgentConfig(json);
+  }
+}
+
 
 // History tracking interface
 interface IterationHistory {
@@ -970,6 +1125,10 @@ let heartbeatIntervalMs = process.env.NODE_ENV === 'test' ? 1000 : 10000; // Def
 let stallingTimeoutProvided = false;
 let blacklistDurationProvided = false;
 let stallingActionProvided = false;
+let stallRetries = false;
+let stallRetryMinutes = 15;
+let stallRetriesProvided = false;
+let stallRetryMinutesProvided = false;
 
 const promptParts: string[] = [];
 let extraAgentFlags: string[] = [];
@@ -1036,6 +1195,53 @@ function parseDuration(input: string): number {
     default:
       console.error(`Error: Unknown duration unit '${unit}'`);
       process.exit(1);
+  }
+}
+
+if (runtimeTomlConfig) {
+  if (runtimeTomlConfig.prompt) prompt = runtimeTomlConfig.prompt;
+  if (runtimeTomlConfig.agent) agentType = runtimeTomlConfig.agent;
+  if (runtimeTomlConfig.min_iterations !== undefined) minIterations = runtimeTomlConfig.min_iterations;
+  if (runtimeTomlConfig.max_iterations !== undefined) maxIterations = runtimeTomlConfig.max_iterations;
+  if (runtimeTomlConfig.completion_promise) completionPromise = runtimeTomlConfig.completion_promise;
+  if (runtimeTomlConfig.abort_promise) abortPromise = runtimeTomlConfig.abort_promise;
+  if (runtimeTomlConfig.tasks !== undefined) tasksMode = runtimeTomlConfig.tasks;
+  if (runtimeTomlConfig.task_promise) taskPromise = runtimeTomlConfig.task_promise;
+  if (runtimeTomlConfig.model) model = runtimeTomlConfig.model;
+  if (runtimeTomlConfig.rotation?.length) rotationInput = runtimeTomlConfig.rotation.join(",");
+  if (runtimeTomlConfig.stalling_timeout) {
+    stallingTimeoutMs = parseDuration(runtimeTomlConfig.stalling_timeout);
+    stallingTimeoutProvided = true;
+  }
+  if (runtimeTomlConfig.blacklist_duration) {
+    blacklistDurationMs = parseDuration(runtimeTomlConfig.blacklist_duration);
+    blacklistDurationProvided = true;
+  }
+  if (runtimeTomlConfig.stalling_action) {
+    if (runtimeTomlConfig.stalling_action !== "stop" && runtimeTomlConfig.stalling_action !== "rotate") {
+      console.error(`Error: Invalid stalling_action '${runtimeTomlConfig.stalling_action}'. Must be 'stop' or 'rotate'.`);
+      process.exit(1);
+    }
+    stallingAction = runtimeTomlConfig.stalling_action;
+    stallingActionProvided = true;
+  }
+  if (runtimeTomlConfig.heartbeat_interval) heartbeatIntervalMs = parseDuration(runtimeTomlConfig.heartbeat_interval);
+  if (runtimeTomlConfig.no_commit !== undefined) autoCommit = !runtimeTomlConfig.no_commit;
+  if (runtimeTomlConfig.no_plugins !== undefined) disablePlugins = runtimeTomlConfig.no_plugins;
+  if (runtimeTomlConfig.allow_all !== undefined) allowAllPermissions = runtimeTomlConfig.allow_all;
+  if (runtimeTomlConfig.prompt_file) promptFile = runtimeTomlConfig.prompt_file;
+  if (runtimeTomlConfig.prompt_template) promptTemplatePath = runtimeTomlConfig.prompt_template;
+  if (runtimeTomlConfig.stream !== undefined) streamOutput = runtimeTomlConfig.stream;
+  if (runtimeTomlConfig.verbose_tools !== undefined) verboseTools = runtimeTomlConfig.verbose_tools;
+  if (runtimeTomlConfig.questions !== undefined) handleQuestions = runtimeTomlConfig.questions;
+  if (runtimeTomlConfig.extra_agent_flags?.length) extraAgentFlags = [...runtimeTomlConfig.extra_agent_flags];
+  if (runtimeTomlConfig.stall_retries !== undefined) {
+    stallRetries = runtimeTomlConfig.stall_retries;
+    stallRetriesProvided = true;
+  }
+  if (runtimeTomlConfig.stall_retry_minutes !== undefined) {
+    stallRetryMinutes = runtimeTomlConfig.stall_retry_minutes;
+    stallRetryMinutesProvided = true;
   }
 }
 
@@ -1163,7 +1369,23 @@ for (let i = 0; i < args.length; i++) {
     handleQuestions = true;
   } else if (arg === "--no-questions") {
     handleQuestions = false;
+  } else if (arg === "--stall-retries") {
+    stallRetries = true;
+    stallRetriesProvided = true;
+  } else if (arg === "--no-stall-retries") {
+    stallRetries = false;
+    stallRetriesProvided = true;
+  } else if (arg === "--stall-retry-minutes") {
+    const val = args[++i];
+    if (!val || Number.isNaN(Number(val))) {
+      console.error("Error: --stall-retry-minutes requires a number");
+      process.exit(1);
+    }
+    stallRetryMinutes = Number(val);
+    stallRetryMinutesProvided = true;
   } else if (arg === "--state-dir") {
+    i++;
+  } else if (arg === "--toml-config") {
     i++;
   } else if (arg === "--config") {
     i++;
@@ -1232,7 +1454,7 @@ if (promptFile) {
 } else if (promptParts.length === 1 && existsSync(promptParts[0])) {
   promptSource = promptParts[0];
   prompt = readPromptFile(promptParts[0]);
-} else {
+} else if (promptParts.length > 0) {
   prompt = promptParts.join(" ");
 }
 
@@ -1251,6 +1473,11 @@ if (!prompt) {
 // Validate min/max iterations
 if (maxIterations > 0 && minIterations > maxIterations) {
   console.error(`Error: --min-iterations (${minIterations}) cannot be greater than --max-iterations (${maxIterations})`);
+  process.exit(1);
+}
+
+if (stallRetryMinutes < 0) {
+  console.error(`Error: --stall-retry-minutes (${stallRetryMinutes}) cannot be negative`);
   process.exit(1);
 }
 
@@ -1276,6 +1503,34 @@ interface RalphState {
   blacklistDurationMs?: number;
   stallingAction?: "stop" | "rotate";
   blacklistedAgents?: BlacklistedAgent[];
+  stallRetries?: boolean;
+  stallRetryMinutes?: number;
+  fallbackBlacklist?: string[];
+}
+
+function getFallbackKey(agent: AgentType, modelName: string): string {
+  return `${agent}:${modelName}`;
+}
+
+function getFallbackPool(state: RalphState): string[] {
+  if (state.rotation && state.rotation.length > 0) {
+    return Array.from(new Set(state.rotation));
+  }
+  return [getFallbackKey(state.agent, state.model)];
+}
+
+function markFallbackExhausted(current: string[] | undefined, fallbackKey: string): string[] {
+  return Array.from(new Set([...(current ?? []), fallbackKey]));
+}
+
+function getStallRetryDelayMs(minutes: number): number {
+  return Math.max(0, Math.round(minutes * 60_000));
+}
+
+async function sleepForStallRetry(minutes: number): Promise<void> {
+  const delayMs = process.env.NODE_ENV === "test" ? 0 : getStallRetryDelayMs(minutes);
+  if (delayMs === 0) return;
+  await new Promise(resolve => setTimeout(resolve, delayMs));
 }
 
 // Create or update state
@@ -2135,6 +2390,12 @@ async function runRalphLoop(): Promise<void> {
     model = existingState.model;
     agentType = existingState.agent;
     rotation = existingState.rotation ?? null;
+    if (!stallRetriesProvided) {
+      stallRetries = existingState.stallRetries ?? false;
+    }
+    if (!stallRetryMinutesProvided) {
+      stallRetryMinutes = existingState.stallRetryMinutes ?? 15;
+    }
     if (ownership.ownerPid && ownership.ownerPid !== process.pid) {
       console.log(`⚠️  Recovered stale active state from PID ${ownership.ownerPid}`);
     }
@@ -2206,11 +2467,17 @@ async function runRalphLoop(): Promise<void> {
     blacklistDurationMs,
     stallingAction,
     blacklistedAgents: [],
+    stallRetries,
+    stallRetryMinutes,
+    fallbackBlacklist: [],
   };
   
   // Ensure blacklistedAgents array exists (for backward compatibility)
   if (!state.blacklistedAgents) {
     state.blacklistedAgents = [];
+  }
+  if (!state.fallbackBlacklist) {
+    state.fallbackBlacklist = [];
   }
   
   // Update stalling config if resuming (allow runtime override)
@@ -2226,6 +2493,12 @@ async function runRalphLoop(): Promise<void> {
     if (stallingActionProvided || state.stallingAction === undefined) {
       state.stallingAction = stallingAction;
     }
+  }
+  if (stallRetriesProvided || state.stallRetries === undefined) {
+    state.stallRetries = stallRetries;
+  }
+  if (stallRetryMinutesProvided || state.stallRetryMinutes === undefined) {
+    state.stallRetryMinutes = stallRetryMinutes;
   }
 
   saveState(state);
@@ -2265,6 +2538,7 @@ async function runRalphLoop(): Promise<void> {
   console.log(`Max iterations: ${maxIterations > 0 ? maxIterations : "unlimited"}`);
   console.log(`Agent: ${agentConfig.configName}`);
   if (initialModel) console.log(`Model: ${initialModel}`);
+  if (stallRetries) console.log(`Stall retries: enabled (${stallRetryMinutes} minute(s))`);
   if (disablePlugins && agentConfig.type === "opencode") {
     console.log("OpenCode plugins: non-auth plugins disabled");
   }
@@ -2378,7 +2652,13 @@ async function runRalphLoop(): Promise<void> {
       }
 
       if (selection.clearedBlacklist) {
-        console.log(`\n⚠️  All agents in rotation are blacklisted. Clearing blacklists.`);
+        if (state.stallRetries) {
+          console.log(`\n⏸️  All agents in rotation are blacklisted. Stalling for ${state.stallRetryMinutes} minute(s) before retrying.`);
+          await sleepForStallRetry(state.stallRetryMinutes ?? 15);
+          console.log(`🔁 Cleared agent blacklist. Restarting fallback cycle.`);
+        } else {
+          console.log(`\n⚠️  All agents in rotation are blacklisted. Clearing blacklists.`);
+        }
         state.blacklistedAgents = [];
         saveState(state);
       }
@@ -2805,6 +3085,23 @@ async function runRalphLoop(): Promise<void> {
       // Update state for next iteration
       if (state.rotation && state.rotation.length > 0) {
         state.rotationIndex = ((state.rotationIndex ?? 0) + 1) % state.rotation.length;
+      }
+      if (exitCode !== 0) {
+        const fallbackPool = getFallbackPool(state);
+        const currentFallbackKey = usingRotation
+          ? state.rotation![rotationIndex]
+          : getFallbackKey(currentAgent, currentModel);
+        state.fallbackBlacklist = markFallbackExhausted(state.fallbackBlacklist, currentFallbackKey);
+        const exhaustedAllFallbacks = fallbackPool.every(entry => state.fallbackBlacklist?.includes(entry));
+        const willContinue = !(maxIterations > 0 && state.iteration + 1 > maxIterations);
+        if (exhaustedAllFallbacks && willContinue) {
+          if (state.stallRetries) {
+            console.log(`\n⏸️  All fallbacks exhausted. Stalling for ${state.stallRetryMinutes} minute(s) before retrying.`);
+            await sleepForStallRetry(state.stallRetryMinutes ?? 15);
+            console.log(`🔁 Cleared fallback blacklist. Restarting fallback cycle.`);
+          }
+          state.fallbackBlacklist = [];
+        }
       }
       state.iteration++;
       saveState(state);
