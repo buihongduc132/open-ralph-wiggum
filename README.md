@@ -669,11 +669,13 @@ project/
 │   ├── ralph-loop.state.json
 │   ├── ralph-context.md
 │   ├── ralph-history.json
+│   ├── ralph-questions.json
 │   └── ralph-tasks.md
 ├── .ralph-feature-b/            # State directory B
 │   ├── ralph-loop.state.json
 │   ├── ralph-context.md
 │   ├── ralph-history.json
+│   ├── ralph-questions.json
 │   └── ralph-tasks.md
 └── .ralph-refactor/             # State directory C
     └── ...
@@ -707,7 +709,6 @@ ralph --state-dir .ralph-refactor \
 | Command | Isolated per `--state-dir`? |
 |---|---|
 | `--add-context` / `--clear-context` | ✅ Yes |
-| `--add-question` | ✅ Yes |
 | `--add-task` / `--list-tasks` / `--remove-task` | ✅ Yes |
 | `--status` | ✅ Yes (shows state from that directory only) |
 | Loop execution (prompt + iterations) | ❌ Blocked by design |
