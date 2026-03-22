@@ -154,10 +154,12 @@ const defaultParseToolOutput = (line: string): string | null => {
 PARSE_PATTERNS["codex"] = defaultParseToolOutput;
 PARSE_PATTERNS["copilot"] = defaultParseToolOutput;
 
-const ARGS_TEMPLATES: Record<string, (prompt: string, model: string, options?: AgentBuildArgsOptions) => string[]> = {
+export const ARGS_TEMPLATES: Record<string, (prompt: string, model: string, options?: AgentBuildArgsOptions) => string[]> = {
   "opencode": (prompt, model, options) => {
     const cmdArgs = ["run"];
     if (model) cmdArgs.push("-m", model);
+    // extraFlags (e.g. --agent, --model) MUST come before the positional message
+    // argument, otherwise opencode consumes them as the message instead of flags.
     if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
     cmdArgs.push(prompt);
     return cmdArgs;
