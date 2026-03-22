@@ -10,7 +10,7 @@ export type AgentBuildArgsOptions = {
   streamOutput?: boolean;
 };
 
-export const ARGS_TEMPLATES: Record<string, (
+export const ARGS_TEMPLATES: Record<"opencode" | "claude-code" | "codex" | "copilot" | "default", (
   prompt: string,
   model: string,
   options?: AgentBuildArgsOptions,
