@@ -21,8 +21,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { rmSync } from "fs";
 import { join } from "path";
 
-// Import ARGS_TEMPLATES directly from ralph.ts to unit-test the builder functions.
-import { ARGS_TEMPLATES } from "../ralph";
+// Import ARGS_TEMPLATES from the dedicated side-effect-free module.
+import { ARGS_TEMPLATES } from "../agent-builders";
 
 type BuildArgsFn = (prompt: string, model: string, options?: {
   extraFlags?: string[];
