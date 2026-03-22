@@ -18,6 +18,8 @@ import {
   StreamActivityTracker,
   type BlacklistedAgent,
 } from "./loop-runtime";
+import { ARGS_TEMPLATES, type AgentBuildArgsOptions } from "./agent-builders";
+import { stripFrontmatter } from "./template-utils";
 
 const VERSION = "1.2.2";
 
@@ -2029,27 +2031,7 @@ async function promptUser(question: string): Promise<string> {
  * - {{task_promise}} - The task promise text (for tasks mode)
  * - {{context}} - Any additional context added mid-loop
  * - {{tasks}} - Task list content (for tasks mode)
- */
-/**
- * Strips YAML frontmatter (---...---) from a template string.
- * opencode treats "---" as its own end-of-options marker, so any "---" in the
- * template body would silently truncate the message. We strip the frontmatter
- * block so the remaining content never starts with "---".
- */
-function stripFrontmatter(content: string): string {
-  if (content.startsWith("---")) {
-    const endIdx = content.indexOf("\n---\n", 3);
-    if (endIdx !== -1) {
-      return content.substring(endIdx + 5); // skip "\n---\n"
-    }
-    // Single-line --- at top: strip just the first line
-    const nlIdx = content.indexOf("\n");
-    if (nlIdx !== -1) {
-      return content.substring(nlIdx + 1);
-    }
-  }
-  return content;
-}
+   */
 
 function loadCustomPromptTemplate(templatePath: string, state: RalphState): string | null {
   if (!existsSync(templatePath)) {
