@@ -651,6 +651,71 @@ During operation, Ralph stores state in `.ralph/`:
 
 `--state-dir` currently supports state-management commands only. Loop execution with a custom state directory is rejected until shared worktree isolation exists.
 
+### Multiple Ralph Instances in the Same Directory
+
+Ralph supports running multiple independent state-management sessions in the same working directory by assigning each a distinct `--state-dir`. This is useful for organizing parallel work streams (e.g., feature development, refactoring, and bug fixes) within a single repository.
+
+> **Note:** Concurrent loop execution (i.e., running `--state-dir` with an active Ralph loop) is intentionally blocked. The `--state-dir` flag is designed for state-management commands only (`--add-context`, `--clear-context`, `--status`, `--add-task`, `--list-tasks`, `--remove-task`, etc.). Attempting to use it for loop execution produces a clear error.
+
+#### How It Works
+
+Each `--state-dir` gets its own isolated set of state files:
+
+```
+project/
+├── .git/
+├── src/
+├── .ralph-feature-a/            # State directory A
+│   ├── ralph-loop.state.json
+│   ├── ralph-context.md
+│   ├── ralph-history.json
+│   └── ralph-tasks.md
+├── .ralph-feature-b/            # State directory B
+│   ├── ralph-loop.state.json
+│   ├── ralph-context.md
+│   ├── ralph-history.json
+│   └── ralph-tasks.md
+└── .ralph-refactor/             # State directory C
+    └── ...
+```
+
+State files in one directory are completely independent from another — writing to `.ralph-feature-a/ralph-context.md` never touches `.ralph-feature-b/`.
+
+#### Usage
+
+Use `--state-dir` with any state-management command. Always pair it with `--no-commit` when operating in a git repository (the default guard requires this to prevent unintended git side effects):
+
+```bash
+# Ralph for feature A
+ralph --state-dir .ralph-feature-a \
+  --no-commit \
+  --add-context "Focus: authentication module"
+
+# Ralph for feature B (in another terminal)
+ralph --state-dir .ralph-feature-b \
+  --no-commit \
+  --add-context "Focus: payment gateway"
+
+# Ralph for refactoring
+ralph --state-dir .ralph-refactor \
+  --no-commit \
+  --add-task "Rename all FooBar to BarBaz"
+```
+
+#### Isolation Guarantees
+
+| Command | Isolated per `--state-dir`? |
+|---|---|
+| `--add-context` / `--clear-context` | ✅ Yes |
+| `--add-question` | ✅ Yes |
+| `--add-task` / `--list-tasks` / `--remove-task` | ✅ Yes |
+| `--status` | ✅ Yes (shows state from that directory only) |
+| Loop execution (prompt + iterations) | ❌ Blocked by design |
+
+#### Concurrency
+
+Multiple `--state-dir` commands targeting **different directories** can safely run concurrently. Ralph's test suite (`tests/state-dir-multi-instance.test.ts`) includes concurrent tests that verify no data corruption or cross-pollution occurs between isolated state directories.
+
 ## Uninstall
 
 ```bash
