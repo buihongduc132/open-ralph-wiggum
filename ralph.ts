@@ -18,6 +18,7 @@ import {
   StreamActivityTracker,
   type BlacklistedAgent,
 } from "./loop-runtime";
+import { ARGS_TEMPLATES, type AgentBuildArgsOptions } from "./agent-builders";
 
 const VERSION = "1.2.2";
 
@@ -65,8 +66,6 @@ const AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot"] as const;
 type AgentType = (typeof AGENT_TYPES)[number];
 
 type AgentEnvOptions = { filterPlugins?: boolean; allowAllPermissions?: boolean };
-
-type AgentBuildArgsOptions = { allowAllPermissions?: boolean; extraFlags?: string[]; streamOutput?: boolean };
 
 interface AgentConfig {
   type: AgentType;
@@ -153,47 +152,6 @@ const defaultParseToolOutput = (line: string): string | null => {
 
 PARSE_PATTERNS["codex"] = defaultParseToolOutput;
 PARSE_PATTERNS["copilot"] = defaultParseToolOutput;
-
-const ARGS_TEMPLATES: Record<string, (prompt: string, model: string, options?: AgentBuildArgsOptions) => string[]> = {
-  "opencode": (prompt, model, options) => {
-    const cmdArgs = ["run"];
-    if (model) cmdArgs.push("-m", model);
-    if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
-    cmdArgs.push(prompt);
-    return cmdArgs;
-  },
-  "claude-code": (prompt, model, options) => {
-    const cmdArgs = ["-p", prompt];
-    if (options?.streamOutput) cmdArgs.push("--output-format", "stream-json", "--include-partial-messages", "--verbose");
-    if (model) cmdArgs.push("--model", model);
-    if (options?.allowAllPermissions) cmdArgs.push("--dangerously-skip-permissions");
-    if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
-    return cmdArgs;
-  },
-  "codex": (prompt, model, options) => {
-    const cmdArgs = ["exec"];
-    if (model) cmdArgs.push("--model", model);
-    if (options?.allowAllPermissions) cmdArgs.push("--full-auto");
-    if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
-    cmdArgs.push(prompt);
-    return cmdArgs;
-  },
-  "copilot": (prompt, model, options) => {
-    const cmdArgs = ["-p", prompt];
-    if (model) cmdArgs.push("--model", model);
-    if (options?.allowAllPermissions) cmdArgs.push("--allow-all", "--no-ask-user");
-    if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
-    return cmdArgs;
-  },
-  "default": (prompt, model, options) => {
-    const cmdArgs: string[] = [];
-    if (model) cmdArgs.push("--model", model);
-    if (options?.allowAllPermissions) cmdArgs.push("--full-auto");
-    if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
-    cmdArgs.push(prompt);
-    return cmdArgs;
-  },
-};
 
 const ENV_TEMPLATES: Record<string, (options: AgentEnvOptions) => Record<string, string>> = {
   "opencode": (options) => {
