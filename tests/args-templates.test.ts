@@ -14,6 +14,11 @@
  *   3. opencode: the prompt must always be the LAST positional argument so
  *      that opencode treats it as the session message.
  *
+ *   4. Ralph: -- passthrough flags (after --) have TOP priority over TOML
+ *      extra_agent_flags. Ralph also parses --agent and --model from the
+ *      passthrough and updates its own agentType/model variables so the
+ *      header/status reflects the actual override.
+ *
  *   4. All agents: prompt must always be a single trailing argument (not split).
  */
 
@@ -119,6 +124,47 @@ describe("ARGS_TEMPLATES", () => {
       expect(promptIdx).toBeGreaterThan(0);
       const beforePrompt = result.slice(1, promptIdx); // slice(1) skips "run"
       expect(beforePrompt).toEqual(["--model", "bhd-litellm/claude-opus", "--agent", "orches"]);
+    });
+
+    // -------------------------------------------------------------------------
+    // RED test: -- passthrough flags (after --) must have TOP priority over TOML
+    // -------------------------------------------------------------------------
+    it("Ralph: extraFlags prepends TOML extra_agent_flags so -- passthrough wins", () => {
+      // Simulate: TOML has extra_flags = ["--verbose"] and -- passthrough has
+      // ["--agent", "orches", "--model", "bhd-litellm/claude-opus"].
+      // Ralph should produce: [...toml_flags, ...passthrough_flags] so passthrough
+      // values (agent, model) end up AFTER TOML values and take effect.
+      const tomlFlags = ["--verbose", "--no-git"];
+      const passthroughFlags = ["--agent", "orches", "--model", "bhd-litellm/claude-opus"];
+      const result = opencode(
+        "do it",
+        "toml-model-should-be-overridden", // Ralph-level model (from TOML)
+        { extraFlags: [...tomlFlags, ...passthroughFlags] },
+      );
+
+      // --model from passthrough must be in extraFlags (comes after TOML flags)
+      const modelIdx = result.indexOf("--model");
+      expect(modelIdx).toBeGreaterThan(0);
+      // --verbose from TOML must still be present
+      expect(result).toContain("--verbose");
+      // The final --agent value must be "orches" (from passthrough, not TOML)
+      const agentIdx = result.indexOf("--agent");
+      expect(result[agentIdx + 1]).toBe("orches");
+    });
+
+    it("Ralph: -- passthrough --model overrides Ralph-level model (TOML or inline)", () => {
+      // When -- --model x is used, opencode must receive --model x, not TOML's model.
+      // This requires extraFlags to contain --model x at the end (after any TOML flags).
+      const result = opencode(
+        "do it",
+        "toml-model", // Ralph's own model variable (from TOML)
+        { extraFlags: ["--model", "override-model"] },
+      );
+
+      // --model override must be present and come after "run"
+      const modelIdx = result.indexOf("--model");
+      expect(modelIdx).toBe(1); // immediately after "run"
+      expect(result[modelIdx + 1]).toBe("override-model");
     });
 
     it("extraFlags alone (no model) still builds a valid opencode run command", () => {

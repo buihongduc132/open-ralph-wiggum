@@ -323,6 +323,10 @@ function getDefaultTomlConfig(): string {
 # rotate: Switch to next agent in rotation and blacklist current one
 # stalling_action = "stop"
 
+# Timeout for pre-start stalling detection (default: auto=1/3 stalling-timeout)
+# Set to a value in ms (e.g., 1000 for 1 second), or -1 to disable
+# pre_start_timeout = "auto"
+
 # Sleep and restart after all fallbacks are exhausted (default: false)
 # stall_retries = false
 
@@ -862,13 +866,13 @@ if (args.includes("--doctor")) {
   if (!existsSync(stateDir)) {
     console.log("  ⚠️  State directory does not exist. Creating...");
     mkdirSync(stateDir, { recursive: true });
-    console.log("  ✅ Created: .ralph/");
+    console.log(`  ✅ Created: ${stateDir}/`);
     fixesApplied++;
   } else {
     try {
       const stats = lstatSync(stateDir);
       if (!stats.isDirectory()) {
-        console.log(`  ❌ ERROR: .ralph exists but is not a directory!`);
+        console.log(`  ❌ ERROR: ${stateDir} exists but is not a directory!`);
         console.log(`     Path: ${stateDir}`);
         console.log(`     Type: ${stats.isSymbolicLink() ? "symlink" : "file"}`);
         issuesFound++;
@@ -1408,11 +1412,13 @@ let stallRetryMinutesProvided = false;
 
 const promptParts: string[] = [];
 let extraAgentFlags: string[] = [];
+let passthroughAgentFlags: string[] = []; // flags from -- passthrough only (TOP priority)
 const doubleDashIndex = args.indexOf("--");
 
-// Extract extra flags after --
+// Extract extra flags after --. They are stored separately and applied LAST
+// so they always win over inline args and TOML.
 if (doubleDashIndex !== -1) {
-  extraAgentFlags = args.slice(doubleDashIndex + 1);
+  passthroughAgentFlags = args.slice(doubleDashIndex + 1);
   // Remove -- and everything after it from args processing
   args.splice(doubleDashIndex);
 }
@@ -1510,7 +1516,22 @@ if (runtimeTomlConfig) {
   if (runtimeTomlConfig.stream !== undefined) streamOutput = runtimeTomlConfig.stream;
   if (runtimeTomlConfig.verbose_tools !== undefined) verboseTools = runtimeTomlConfig.verbose_tools;
   if (runtimeTomlConfig.questions !== undefined) handleQuestions = runtimeTomlConfig.questions;
-  if (runtimeTomlConfig.extra_agent_flags?.length) extraAgentFlags = [...runtimeTomlConfig.extra_agent_flags];
+  // Prepend TOML extra_agent_flags; -- passthrough flags are added last so they win
+  if (runtimeTomlConfig.extra_agent_flags?.length) {
+    extraAgentFlags = [...runtimeTomlConfig.extra_agent_flags, ...extraAgentFlags];
+  }
+  extraAgentFlags = [...extraAgentFlags, ...passthroughAgentFlags];
+
+  // Apply -- passthrough --model override AFTER TOML (TOP priority).
+  // NOTE: --agent from passthrough is NOT applied to Ralph's agentType because
+  // "orches" and other opencode-native agents are not in Ralph's AGENTS registry.
+  // Passthrough --agent still ends up in extraAgentFlags and reaches opencode correctly.
+  for (let i = 0; i < passthroughAgentFlags.length; i++) {
+    if (passthroughAgentFlags[i] === "--model" && passthroughAgentFlags[i + 1]) {
+      model = passthroughAgentFlags[i + 1];
+      i++;
+    }
+  }
   if (runtimeTomlConfig.stall_retries !== undefined) {
     stallRetries = runtimeTomlConfig.stall_retries;
     stallRetriesProvided = true;
@@ -1692,12 +1713,6 @@ const usingCustomStateDir = stateDir !== resolve(process.cwd(), ".ralph");
 if (usingCustomStateDir && autoCommit) {
   console.error("Error: --state-dir currently requires --no-commit.");
   console.error("Shared git/worktree side effects are not isolated for custom state directories yet.");
-  process.exit(1);
-}
-
-if (usingCustomStateDir) {
-  console.error("Error: loop execution with --state-dir is not supported yet.");
-  console.error("Custom state directories are currently limited to state-management commands such as --status, --add-context, --clear-context, and task file management.");
   process.exit(1);
 }
 

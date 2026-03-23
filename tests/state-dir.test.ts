@@ -154,7 +154,7 @@ describe("state-dir", () => {
     expect(existsSync(join(defaultStateDir, "ralph-context.md"))).toBe(true);
   });
 
-  it("rejects loop execution with --state-dir even when --no-commit is set", async () => {
+  it("allows loop execution with --state-dir and --no-commit", async () => {
     const proc = runRalph([
       "--state-dir",
       customStateDirA,
@@ -162,21 +162,17 @@ describe("state-dir", () => {
       "--agent",
       "codex",
       "--model",
-      "stall",
-      "--stalling-timeout",
-      "1s",
-      "--stalling-action",
-      "stop",
-      "--heartbeat-interval",
-      "500ms",
+      "complete",
       "--max-iterations",
       "1",
     ]);
 
     const stderr = await new Response(proc.stderr).text();
     const exitCode = await proc.exited;
-    expect(exitCode).toBe(1);
-    expect(stderr).toContain("loop execution with --state-dir is not supported yet");
+    // complete model finishes iteration (no COMPLETE promise) → runs max-iterations then exits 0
+    expect(exitCode).toBe(0);
+    expect(stderr).not.toContain("loop execution with --state-dir is not supported yet");
+    expect(stderr).not.toContain("--no-commit");
   });
 
   it("resolves relative custom state directories from the current working directory", async () => {

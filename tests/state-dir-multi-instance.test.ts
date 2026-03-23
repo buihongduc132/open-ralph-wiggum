@@ -10,9 +10,8 @@
  *   1. Each --state-dir gets its own set of state files (ralph-loop.state.json,
  *      ralph-context.md, ralph-history.json, ralph-tasks.md, ralph-questions.json).
  *   2. A state-management command targeting one --state-dir does NOT affect another.
- *   3. The guard that blocks loop execution with --state-dir is intentional and
- *      MUST remain in place (loop execution with custom state dirs is rejected
- *      until shared worktree isolation exists — see README).
+   *   3. Loop execution with --state-dir is now supported when --no-commit is
+   *      provided. The --no-commit requirement guard remains in place.
  *   4. The companion guard that requires --no-commit when --state-dir is used is
  *      also intentional (git side effects are not isolated for custom state dirs).
  *
@@ -114,8 +113,8 @@ describe("state-dir multi-instance isolation", () => {
   // documented design decision.
   // -------------------------------------------------------------------------
 
-  describe("Guard: loop execution with --state-dir is blocked", () => {
-    it("blocks loop execution with --state-dir and --no-commit", async () => {
+  describe("Loop execution with --state-dir", () => {
+    it("allows loop execution with --state-dir and --no-commit", async () => {
       const proc = runRalph(workDir, [
         "--config", agentConfigPath,
         "--state-dir", stateA,
@@ -125,11 +124,11 @@ describe("state-dir multi-instance isolation", () => {
         "--max-iterations", "1",
       ]);
       const { exitCode, stderr } = await waitForExit(proc);
-      expect(exitCode).toBe(1);
-      expect(stderr).toContain("loop execution with --state-dir is not supported yet");
+      expect(exitCode).toBe(0); // complete model exits 0
+      expect(stderr).not.toContain("loop execution with --state-dir is not supported yet");
     });
 
-    it("blocks loop execution with --state-dir even with --prompt-file", async () => {
+    it("allows loop execution with --state-dir and --prompt-file", async () => {
       const promptFile = join(workDir, "prompt-a.md");
       writeFileSync(promptFile, "implement feature A");
 
@@ -142,8 +141,8 @@ describe("state-dir multi-instance isolation", () => {
         "--max-iterations", "1",
       ]);
       const { exitCode, stderr } = await waitForExit(proc);
-      expect(exitCode).toBe(1);
-      expect(stderr).toContain("loop execution with --state-dir is not supported yet");
+      expect(exitCode).toBe(0);
+      expect(stderr).not.toContain("loop execution with --state-dir is not supported yet");
     });
 
     it("blocks loop execution with --state-dir without --no-commit", async () => {
@@ -158,7 +157,7 @@ describe("state-dir multi-instance isolation", () => {
       });
       const { exitCode, stderr } = await waitForExit(proc);
       expect(exitCode).toBe(1);
-      // Must fail with the --no-commit guard first (checked before the loop guard)
+      // Must fail with the --no-commit guard first
       expect(
         stderr.includes("--no-commit") && stderr.includes("--state-dir"),
       ).toBe(true);
