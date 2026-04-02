@@ -80,12 +80,16 @@ interface AgentConfig {
 }
 
 interface JsonAgentConfig {
-  type: AgentType;
+  type: string;
   command: string;
   configName: string;
   argsTemplate?: string;
   envTemplate?: string;
   parsePattern?: string;
+  args?: string[];
+  toolPattern?: string;
+  allowAllFlags?: string[];
+  envBlock?: Record<string, string>;
 }
 
 interface RalphConfig {
@@ -213,7 +217,7 @@ const ENV_TEMPLATES: Record<string, (options: AgentEnvOptions) => Record<string,
   "default": () => ({ ...process.env }),
 };
 
-function loadAgentConfig(configPath?: string): Record<string, JsonAgentConfig> | null {
+export function loadAgentConfig(configPath?: string): Record<string, JsonAgentConfig> | null {
   const path = configPath || DEFAULT_CONFIG_PATH;
   if (!existsSync(path)) return null;
   try {
@@ -221,10 +225,6 @@ function loadAgentConfig(configPath?: string): Record<string, JsonAgentConfig> |
     const config: RalphConfig = JSON.parse(content);
     const agents: Record<string, JsonAgentConfig> = {};
     for (const agent of config.agents) {
-      if (!AGENT_TYPES.includes(agent.type)) {
-        console.warn(`Warning: Ignoring unknown agent type: ${agent.type}`);
-        continue;
-      }
       agents[agent.type] = agent;
     }
     return agents;
@@ -233,16 +233,63 @@ function loadAgentConfig(configPath?: string): Record<string, JsonAgentConfig> |
   }
 }
 
-function createAgentConfig(json: JsonAgentConfig): AgentConfig {
-  const parsePattern = json.parsePattern || "default";
+export function createAgentConfig(json: JsonAgentConfig): AgentConfig {
+  const type = json.type;
+
+  // ── Inline declarative config (takes priority over named templates) ──
+  if (json.args) {
+    const toolRegex = json.toolPattern ? new RegExp(json.toolPattern) : null;
+
+    return {
+      type: type as AgentType,
+      command: resolveCommand(json.command, process.env[`RALPH_${type.toUpperCase()}_BINARY`]),
+      buildArgs: (prompt, model, options) => {
+        const cmdArgs: string[] = [];
+        for (const seg of json.args!) {
+          if (seg === "{{prompt}}") {
+            cmdArgs.push(prompt);
+          } else if (seg === "{{model}}") {
+            if (model) cmdArgs.push("--model", model);
+          } else if (seg === "{{allowAllFlags}}") {
+            if (options?.allowAllPermissions) {
+              cmdArgs.push(...(json.allowAllFlags ?? ["--full-auto"]));
+            }
+          } else if (seg === "{{extraFlags}}") {
+            if (options?.extraFlags?.length) {
+              cmdArgs.push(...options.extraFlags);
+            }
+          } else {
+            cmdArgs.push(seg);
+          }
+        }
+        return cmdArgs;
+      },
+      buildEnv: (opts) => {
+        const env: Record<string, string | undefined> = { ...process.env };
+        if (json.envBlock) {
+          Object.assign(env, json.envBlock);
+        }
+        return env;
+      },
+      parseToolOutput: (line: string): string | null => {
+        if (!toolRegex) return null;
+        const match = line.match(toolRegex);
+        return match ? (match[1] ?? null) : null;
+      },
+      configName: json.configName,
+    };
+  }
+
+  // ── Named template fallback (existing behavior for backwards compat) ──
   const argsTemplate = json.argsTemplate || "default";
-  const envTemplate = json.envTemplate || "default";
+  const envTemplate  = json.envTemplate  || "default";
+  const parsePattern = json.parsePattern || "default";
 
   return {
-    type: json.type,
-    command: resolveCommand(json.command, process.env[`RALPH_${json.type.toUpperCase()}_BINARY`]),
-    buildArgs: ARGS_TEMPLATES[argsTemplate] || ARGS_TEMPLATES["default"],
-    buildEnv: ENV_TEMPLATES[envTemplate] || ENV_TEMPLATES["default"],
+    type: type as AgentType,
+    command: resolveCommand(json.command, process.env[`RALPH_${type.toUpperCase()}_BINARY`]),
+    buildArgs:  ARGS_TEMPLATES[argsTemplate as keyof typeof ARGS_TEMPLATES] || ARGS_TEMPLATES["default"],
+    buildEnv:   ENV_TEMPLATES[envTemplate  as keyof typeof ENV_TEMPLATES]  || ENV_TEMPLATES["default"],
     parseToolOutput: PARSE_PATTERNS[parsePattern] || PARSE_PATTERNS["default"],
     configName: json.configName,
   };
@@ -273,7 +320,7 @@ function getDefaultTomlConfig(): string {
 # The prompt/task for the AI agent to work on
 # prompt = "Your task description here"
 
-# Agent to use: opencode (default), claude-code, codex, copilot
+# Agent to use: opencode (default), claude-code, codex, copilot, or any custom agent in agents.json
 # agent = "opencode"
 
 # Minimum iterations before completion is allowed (default: 1)
@@ -332,6 +379,24 @@ function getDefaultTomlConfig(): string {
 
 # Minutes to sleep before restarting exhausted fallbacks (default: 15)
 # stall_retry_minutes = 15
+
+# =============================================================================
+# CUSTOM AGENTS
+# =============================================================================
+# Add custom agents via a separate agents.json file.
+# Use --init-config to create the default agents.json, then edit it to add
+# custom agents. Example agents.json:
+#
+# { "version": "1.0", "agents": [
+#   { "type": "ocxo", "command": "ocxo", "configName": "OCXO",
+#     "argsTemplate": "opencode" },
+#   { "type": "omp",  "command": "omp",  "configName": "OMP",
+#     "args": ["agent", "run", "--task", "{{prompt}}", "{{model}}"],
+#     "toolPattern": "^\\[TOOL\\]\\s+(\\w+)", "allowAllFlags": ["--full-auto"] }
+# ] }
+#
+# Then reference it here:
+# agent_config = "~/.config/open-ralph-wiggum/agents.json"
 
 # =============================================================================
 # OUTPUT & FEEDBACK
@@ -488,7 +553,7 @@ function loadRuntimeTomlConfig(configPath: string, explicit: boolean): RalphRunt
  * Resolve a command for cross-platform compatibility.
  * On Windows, many npm-installed CLIs require the .cmd extension.
  */
-function resolveCommand(cmd: string, envOverride?: string): string {
+export function resolveCommand(cmd: string, envOverride?: string): string {
   if (envOverride) return envOverride;
   // On Windows, try the .cmd version first if the base command isn't found
   if (IS_WINDOWS) {

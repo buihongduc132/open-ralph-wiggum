@@ -4,8 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const fakeAgentPath = join(process.cwd(), 'tests/helpers/fake-agent.sh');
-const bunPath = process.execPath;
-const ralphPath = join(process.cwd(), 'ralph.ts');
+const ralphPath = join(process.cwd(), 'bin/ralph');
 let workDir = '';
 let stateDir = '';
 let statePath = '';
@@ -61,8 +60,12 @@ function writeFakeAgentConfig() {
 
 function runWithFakeAgent(args: string[]) {
   writeFakeAgentConfig();
+  // pre_start_timeout must be set so it does NOT fire before the agent's stall time.
+  // Default is stallingTimeout/3 ≈ 1667ms for 5s stall, which fires first → wrong behavior.
+  // We set it to 60000ms so pre-start detection never fires before real stalling.
+  const stallSafeArgs = ['--pre-start-timeout', '60000', ...args];
   return Bun.spawn({
-    cmd: [bunPath, 'run', ralphPath, '--no-commit', '--config', agentConfigPath, ...args],
+    cmd: [ralphPath, '--no-commit', '--config', agentConfigPath, ...stallSafeArgs],
     cwd: workDir,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -98,7 +101,7 @@ describe('Stalling Detection - Real Tests', () => {
       }, null, 2));
 
       const proc = Bun.spawn({
-        cmd: [bunPath, 'run', ralphPath, '--no-commit', 'new task'],
+        cmd: [ralphPath, '--no-commit', '--pre-start-timeout', '5000', 'new task'],
         cwd: workDir,
         stdout: 'pipe',
         stderr: 'pipe',
@@ -297,7 +300,7 @@ describe('Stalling Detection - Real Tests', () => {
       writeFakeAgentConfig();
 
       const proc = Bun.spawn({
-        cmd: [bunPath, 'run', ralphPath, '--no-commit', '--config', agentConfigPath, 'resume stale state', '--agent', 'codex', '--model', 'stall', '--stalling-timeout', '30s', '--max-iterations', '1'],
+        cmd: [ralphPath, '--no-commit', '--pre-start-timeout', '60000', '--config', agentConfigPath, 'resume stale state', '--agent', 'codex', '--model', 'stall', '--stalling-timeout', '30s', '--max-iterations', '1'],
         cwd: workDir,
         stdout: 'pipe',
         stderr: 'pipe',
@@ -476,9 +479,9 @@ describe('Stalling Detection - Real Tests', () => {
   describe('Configuration Validation', () => {
     it('rejects invalid --stalling-action values', async () => {
       const proc = Bun.spawn({
-        cmd: [bunPath, 'run', ralphPath, 'sleep 1', 
+        cmd: [ralphPath, 'sleep 1',
               '--no-commit',
-              '--stalling-action', 'invalid', 
+              '--stalling-action', 'invalid',
               '--max-iterations', '1'],
         cwd: workDir,
         stdout: 'pipe',
@@ -495,7 +498,7 @@ describe('Stalling Detection - Real Tests', () => {
 
     it('help shows stalling options', async () => {
       const proc = Bun.spawn({
-        cmd: [bunPath, 'run', ralphPath, '--help'],
+        cmd: [ralphPath, '--help'],
         cwd: workDir,
         stdout: 'pipe',
         stderr: 'pipe',

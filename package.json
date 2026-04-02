@@ -11,7 +11,9 @@
     "build": "bun build ralph.ts --outfile bin/ralph --compile",
     "test": "bun test",
     "test:coverage": "bun run scripts/coverage-badge.mjs",
-    "install-local": "bun link"
+    "install-local": "bun link",
+    "install-hooks": "cp scripts/pre-commit-hook.sh .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit",
+    "typecheck": "tsc --noEmit"
   },
   "files": [
     "bin/ralph.js",
@@ -57,5 +59,9 @@
   "homepage": "https://github.com/Th0rgal/ralph-wiggum#readme",
   "devDependencies": {
     "@types/bun": "^1.3.5"
+  },
+  "lint-staged": {
+    "*.ts": ["bun build --dry-run", "tsc --noEmit --pretty false"],
+    "*.{json,md}": []
   }
 }

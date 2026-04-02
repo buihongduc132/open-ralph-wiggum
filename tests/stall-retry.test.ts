@@ -25,14 +25,19 @@ function createFakeAgent(tempDir: string, exitCode: 0 | 1) {
 
 async function runRalph(tempDir: string, args: string[]) {
   const failingAgent = createFakeAgent(tempDir, 1);
+  // Use the compiled binary so state files are persisted after loop exit.
+  // cwd=process.cwd() so the binary (./bin/ralph) resolves correctly.
+  // The agent config path is absolute, so it also resolves from project root.
+  const ralphBinary = join(process.cwd(), "bin/ralph");
   const proc = Bun.spawn({
-    cmd: ["bun", "run", join(process.cwd(), "ralph.ts"), ...args],
-    cwd: tempDir,
+    cmd: [ralphBinary, ...args],
+    cwd: process.cwd(),
     stdout: "pipe",
     stderr: "pipe",
     env: {
       ...process.env,
       NODE_ENV: "test",
+      // Env override must be absolute path — resolves relative to cwd
       RALPH_OPENCODE_BINARY: failingAgent,
       RALPH_CODEX_BINARY: failingAgent,
       RALPH_CLAUDE_BINARY: failingAgent,
@@ -79,6 +84,8 @@ describe("stall retries", () => {
         "no_commit = true",
         "stall_retries = true",
         "stall_retry_minutes = 0",
+        // Must be short enough for fake-agent (exit 1 in 0s) to NOT trigger pre-start stalling
+        'pre_start_timeout = 1000',
       ].join("\n"),
     );
 
@@ -101,6 +108,7 @@ describe("stall retries", () => {
       "--no-stream",
       "--no-questions",
       "--no-commit",
+      "--pre-start-timeout", "1000",
     ]);
 
     expect(result.exitCode).toBe(0);
@@ -122,6 +130,7 @@ describe("stall retries", () => {
       "--no-stream",
       "--no-questions",
       "--no-commit",
+      "--pre-start-timeout", "1000",
     ]);
 
     expect(result.exitCode).toBe(0);
@@ -156,6 +165,7 @@ describe("stall retries", () => {
       "--no-stream",
       "--no-questions",
       "--no-commit",
+      "--pre-start-timeout", "1000",
     ]);
 
     expect(result.exitCode).toBe(0);

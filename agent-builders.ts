@@ -8,6 +8,8 @@ export type AgentBuildArgsOptions = {
   allowAllPermissions?: boolean;
   extraFlags?: string[];
   streamOutput?: boolean;
+  /** When true, skip emitting -m (model flag) since passthrough --model overrides it */
+  skipModelFlag?: boolean;
 };
 
 export const ARGS_TEMPLATES: Record<"opencode" | "claude-code" | "codex" | "copilot" | "default", (
@@ -17,7 +19,10 @@ export const ARGS_TEMPLATES: Record<"opencode" | "claude-code" | "codex" | "copi
 ) => string[]> = {
   "opencode": (prompt, model, options) => {
     const cmdArgs = ["run"];
-    if (model) cmdArgs.push("-m", model);
+    // Only emit -m if extraFlags does NOT already contain --model.
+    // Passthrough --model (from --) has TOP priority and must not be duplicated.
+    const hasPassthroughModel = options?.extraFlags?.includes("--model") || options?.skipModelFlag;
+    if (model && !hasPassthroughModel) cmdArgs.push("-m", model);
     // extraFlags (e.g. --agent, --model) MUST come before the positional message
     // argument, otherwise opencode consumes them as the message instead of flags.
     if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);

@@ -147,4 +147,16 @@ For more details, see README.md and docs/QUICKSTART.md.
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 
+## Process Safety Rules
+
+**NEVER kill, stop, or interrupt a running `ralph` process that was NOT spawned by you.**
+This includes any `ralph` loop running in any terminal session, on any user account, or as a background/nohup process on the machine. Ralph loops are long-running autonomous agents that manage production workloads (e.g., health watchers, ops migrations, soak tests). Killing them causes:
+- Lost iteration state and progress
+- Production monitoring gaps
+- Disruption to services that depend on the loop's output
+
+If you need to check on a running Ralph process, **observe only** (read logs, check state files). If you need to deploy a fix, rebuild the binary first, then let the user's existing loop pick up the new version on its next iteration — or coordinate with the user to restart it manually after your changes.
+
+**Indicator that a process is NOT yours:** it is running in a different working directory, different user account, or was started before your current Claude Code session began.
+
 <!-- END BEADS INTEGRATION -->
