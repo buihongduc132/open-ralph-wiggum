@@ -250,14 +250,14 @@ export function createAgentConfig(json: JsonAgentConfig): AgentConfig {
             cmdArgs.push(prompt);
           } else if (seg === "{{model}}") {
             if (model) cmdArgs.push("--model", model);
+          } else if (seg === "{{modelEquals}}") {
+            if (model) cmdArgs.push(`--model=${model}`);
           } else if (seg === "{{allowAllFlags}}") {
             if (options?.allowAllPermissions) {
               cmdArgs.push(...(json.allowAllFlags ?? ["--full-auto"]));
             }
           } else if (seg === "{{extraFlags}}") {
-            if (options?.extraFlags?.length) {
-              cmdArgs.push(...options.extraFlags);
-            }
+            cmdArgs.push(...(options?.extraFlags ?? []));
           } else {
             cmdArgs.push(seg);
           }
@@ -1588,7 +1588,7 @@ if (runtimeTomlConfig) {
   if (runtimeTomlConfig.extra_agent_flags?.length) {
     extraAgentFlags = [...runtimeTomlConfig.extra_agent_flags, ...extraAgentFlags];
   }
-  extraAgentFlags = [...extraAgentFlags, ...passthroughAgentFlags];
+extraAgentFlags = [...extraAgentFlags, ...passthroughAgentFlags];
 
   // Apply -- passthrough --model override AFTER TOML (TOP priority).
   // NOTE: --agent from passthrough is NOT applied to Ralph's agentType because
@@ -2772,6 +2772,10 @@ function extractErrors(output: string): string[] {
 }
 
 async function runRalphLoop(): Promise<void> {
+  // Ensure agentType is set before loadState() uses it.
+  // (main() sets it but runRalphLoop starts running during main's async init)
+  if (!agentType) agentType = initialAgentType ?? "opencode";
+
   // Check if a loop is already running
   const existingState = loadState();
   const ownership = decideLoopOwnership(existingState, process.pid);
