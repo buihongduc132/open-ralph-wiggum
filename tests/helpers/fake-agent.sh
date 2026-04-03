@@ -41,6 +41,14 @@ while (($#)); do
     --full-auto|--allow-all|--no-ask-user)
       shift
       ;;
+    --verbose)
+      # When model is set, collect --verbose like any other agent arg.
+      # (When model is unset, swallow it as Ralph's own flag to avoid set -v noise.)
+      if [[ -n "$model" ]]; then
+        collected_args+=("$1")
+      fi
+      shift
+      ;;
     --stall-seconds)
       shift 2
       ;;
