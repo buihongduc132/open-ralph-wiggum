@@ -1,0 +1,4 @@
+SUCCESS! This works! The test failure is different. Let me look at what one failing test expects more The output to see what's happening: 
+
+The test expects exit code 0, but ralph exits with code 1. Let me check the test output:  ARse bash
+command, bun test tests/config-loading.test.ts --timeout 60000 2>&1 | head -40

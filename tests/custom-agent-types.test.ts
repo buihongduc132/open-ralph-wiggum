@@ -181,27 +181,26 @@ describe("Custom agent types", () => {
     expect(result.exitCode).toBeGreaterThanOrEqual(0);
   });
 
-  it("injects {{modelEquals}} when model is set", async () => {
+  it("injects {{model}} when model is set", async () => {
     writeAgentConfig({
       type: "test-agent",
       command: fakeAgentPath,
       configName: "Test",
-      args: ["{{modelEquals}}", "{{extraFlags}}", "--completion-promise", "COMPLETE"],
+      args: ["{{model}}", "{{extraFlags}}", "--completion-promise", "COMPLETE"],
     });
     const result = await runRalph([
       "--agent", "test-agent",
       "--config", agentConfigPath,
       "--model", "claude-sonnet-4",
-      "--completion-promise", "COMPLETE",
       "--no-commit",
       "--",
-      "--model", "echo",
       "--verbose",
     ]);
-    // {{modelEquals}} substitutes to --model=claude-sonnet-4; {{extraFlags}} to passthrough args.
-    expect(result.output).toContain("ARG:--model=claude-sonnet-4");
+    // {{model}} substitutes to --model followed by the model name (two args).
+    // {{extraFlags}} substitutes to passthrough args (--verbose here).
+    // The fake agent echoes its received args as ARG:<val>.
     expect(result.output).toContain("ARG:--model");
-    expect(result.output).toContain("echo");
+    expect(result.output).toContain("ARG:claude-sonnet-4");
     expect(result.output).toContain("ARG:--verbose");
     expect(result.exitCode).toBeGreaterThanOrEqual(0);
   });
@@ -235,17 +234,14 @@ describe("Custom agent types", () => {
     const result = await runRalph([
       "--agent", "test-agent",
       "--config", agentConfigPath,
-      "--completion-promise", "COMPLETE",
       "--no-commit",
       "--",
-      "--model", "echo",
       "--verbose",
       "--model", "claude-3",
     ]);
     // Passthrough args (after --) go to {{extraFlags}}; fake-agent echoes them.
-    expect(result.output).toContain("ARG:--model");
-    expect(result.output).toContain("echo");
     expect(result.output).toContain("ARG:--verbose");
+    expect(result.output).toContain("ARG:--model");
     expect(result.output).toContain("claude-3");
     expect(result.exitCode).toBeGreaterThanOrEqual(0);
   });

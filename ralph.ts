@@ -602,6 +602,9 @@ const BUILT_IN_AGENTS: Record<AgentType, AgentConfig> = {
   },
 };
 
+
+// Main CLI entry point - only runs when executed directly, not when imported
+if (import.meta.main) {
 // Parse arguments early for config handling
 const args = process.argv.slice(2);
 let explicitTomlConfigPath = false;
@@ -3588,3 +3591,4 @@ runRalphLoop().catch(error => {
   clearState();
   process.exit(1);
 });
+}
