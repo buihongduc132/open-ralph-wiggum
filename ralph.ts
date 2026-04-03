@@ -1588,7 +1588,6 @@ if (runtimeTomlConfig) {
   if (runtimeTomlConfig.extra_agent_flags?.length) {
     extraAgentFlags = [...runtimeTomlConfig.extra_agent_flags, ...extraAgentFlags];
   }
-extraAgentFlags = [...extraAgentFlags, ...passthroughAgentFlags];
 
   // Apply -- passthrough --model override AFTER TOML (TOP priority).
   // NOTE: --agent from passthrough is NOT applied to Ralph's agentType because
@@ -3590,6 +3589,8 @@ async function runRalphLoop(): Promise<void> {
 }
 
 // Run the loop
+// Merge passthrough flags
+extraAgentFlags = [...extraAgentFlags, ...passthroughAgentFlags];
 runRalphLoop().catch(error => {
   console.error("Fatal error:", error);
   clearState();
