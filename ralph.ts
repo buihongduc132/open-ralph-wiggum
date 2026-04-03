@@ -3111,7 +3111,6 @@ Unable to read ${currentTasksFileLabel()}
 
             // Run agent using spawn for better argument handling
             // stdin is inherited so users can respond to permission prompts if needed
-            console.error("FINAL SPAWN:", agentConfig.command, ...cmdArgs);
             currentProc = Bun.spawn([agentConfig.command, ...cmdArgs], {
                cwd: process.cwd(),
                env,
