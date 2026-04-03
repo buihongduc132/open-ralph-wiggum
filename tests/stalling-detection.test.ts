@@ -4,7 +4,8 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const fakeAgentPath = join(process.cwd(), 'tests/helpers/fake-agent.sh');
-const ralphPath = join(process.cwd(), 'bin/ralph');
+const ralphPath = join(process.cwd(), 'ralph.ts');
+const bunPath = process.execPath;
 let workDir = '';
 let stateDir = '';
 let statePath = '';
@@ -65,7 +66,7 @@ function runWithFakeAgent(args: string[]) {
   // We set it to 60000ms so pre-start detection never fires before real stalling.
   const stallSafeArgs = ['--pre-start-timeout', '60000', ...args];
   return Bun.spawn({
-    cmd: [ralphPath, '--no-commit', '--config', agentConfigPath, ...stallSafeArgs],
+    cmd: [bunPath, "run", ralphPath, '--no-commit', '--config', agentConfigPath, ...stallSafeArgs],
     cwd: workDir,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -101,7 +102,7 @@ describe('Stalling Detection - Real Tests', () => {
       }, null, 2));
 
       const proc = Bun.spawn({
-        cmd: [ralphPath, '--no-commit', '--pre-start-timeout', '5000', 'new task'],
+        cmd: [bunPath, "run", ralphPath, '--no-commit', '--pre-start-timeout', '5000', 'new task'],
         cwd: workDir,
         stdout: 'pipe',
         stderr: 'pipe',
@@ -300,7 +301,7 @@ describe('Stalling Detection - Real Tests', () => {
       writeFakeAgentConfig();
 
       const proc = Bun.spawn({
-        cmd: [ralphPath, '--no-commit', '--pre-start-timeout', '60000', '--config', agentConfigPath, 'resume stale state', '--agent', 'codex', '--model', 'stall', '--stalling-timeout', '30s', '--max-iterations', '1'],
+        cmd: [bunPath, "run", ralphPath, '--no-commit', '--pre-start-timeout', '60000', '--config', agentConfigPath, 'resume stale state', '--agent', 'codex', '--model', 'stall', '--stalling-timeout', '30s', '--max-iterations', '1'],
         cwd: workDir,
         stdout: 'pipe',
         stderr: 'pipe',
@@ -479,7 +480,7 @@ describe('Stalling Detection - Real Tests', () => {
   describe('Configuration Validation', () => {
     it('rejects invalid --stalling-action values', async () => {
       const proc = Bun.spawn({
-        cmd: [ralphPath, 'sleep 1',
+        cmd: [bunPath, "run", ralphPath, 'sleep 1',
               '--no-commit',
               '--stalling-action', 'invalid',
               '--max-iterations', '1'],
@@ -498,7 +499,7 @@ describe('Stalling Detection - Real Tests', () => {
 
     it('help shows stalling options', async () => {
       const proc = Bun.spawn({
-        cmd: [ralphPath, '--help'],
+        cmd: [bunPath, "run", ralphPath, '--help'],
         cwd: workDir,
         stdout: 'pipe',
         stderr: 'pipe',

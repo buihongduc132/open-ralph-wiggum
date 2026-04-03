@@ -18,7 +18,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "os";
 import { join } from "path";
 
-const ralphPath = join(process.cwd(), "bin/ralph");
+const ralphPath = join(process.cwd(), "ralph.ts");
 const bunPath = process.execPath;
 const fakeAgentPath = join(process.cwd(), "tests/helpers/fake-agent.sh");
 let workDir = "";
@@ -76,7 +76,7 @@ function writeTomlConfig(tomlContent: string) {
 function spawnRalph(extraArgs: string[] = [], extraPassthroughArgs: string[] = []) {
   return Bun.spawn({
     cmd: [
-      ralphPath,
+      bunPath, "run", ralphPath,
       "--state-dir", join(workDir, ".ralph"),
       "--no-commit",
       "--config", agentConfigPath,
