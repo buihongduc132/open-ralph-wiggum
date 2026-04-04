@@ -3275,7 +3275,9 @@ Unable to read ${currentTasksFileLabel()}
                      console.log(`🔄 Rotating to next agent in rotation: ${state.rotation[nextIndex]}`);
                      state.iteration++;
                      saveState(state);
-                     await new Promise(r => setTimeout(r, 1000));
+                     if (process.env.NODE_ENV !== "test") {
+                        await new Promise(r => setTimeout(r, 1000));
+                     }
                      // Continue to next iteration
                      continue;
                   } else {
@@ -3608,8 +3610,10 @@ Unable to read ${currentTasksFileLabel()}
             state.iteration++;
             saveState(state);
 
-            // Small delay between iterations
-            await new Promise(r => setTimeout(r, 1000));
+            // Small delay between iterations (skip in test mode for speed)
+            if (process.env.NODE_ENV !== "test") {
+               await new Promise(r => setTimeout(r, 1000));
+            }
 
          } catch (error) {
             // Clear heartbeat timer if still running

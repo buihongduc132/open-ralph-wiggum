@@ -75,9 +75,9 @@ if [[ -z "$prompt" ]]; then
   exit 1
 fi
 
+# Use default model if none provided (for testing opencode-raw without model flag)
 if [[ -z "$model" ]]; then
-  echo "Error: model is required" >&2
-  exit 1
+  model="default"
 fi
 
 # Handle special modes driven by model value
