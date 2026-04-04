@@ -29,6 +29,7 @@ async function runRalph(tempDir: string, args: string[]) {
   // cwd=process.cwd() so the binary (./bin/ralph) resolves correctly.
   // The agent config path is absolute, so it also resolves from project root.
   const ralphBinary = join(process.cwd(), "bin/ralph");
+  console.error("TEST ENV OPENCODE:", process.env.RALPH_OPENCODE_BINARY);
   const proc = Bun.spawn({
     cmd: [ralphBinary, ...args],
     cwd: process.cwd(),
@@ -58,7 +59,7 @@ function countMatches(output: string, pattern: string) {
   return output.split(pattern).length - 1;
 }
 
-describe.skip("stall retries", () => {
+describe("stall retries", () => {
   let tempDir: string;
   let stateDir: string;
 
@@ -85,7 +86,7 @@ describe.skip("stall retries", () => {
         "stall_retries = true",
         "stall_retry_minutes = 0",
         // Must be short enough for fake-agent (exit 1 in 0s) to NOT trigger pre-start stalling
-        'pre_start_timeout = 1000',
+        'pre_start_timeout = 5000',
       ].join("\n"),
     );
 
@@ -100,6 +101,7 @@ describe.skip("stall retries", () => {
 
   it("keeps immediate rotation wraparound behavior when stall retries are disabled", async () => {
     const result = await runRalph(tempDir, [
+        "--state-dir", join(tempDir, ".ralph"),
       "exercise normal retries",
       "--rotation",
       "opencode:alpha,codex:beta",
@@ -119,6 +121,7 @@ describe.skip("stall retries", () => {
 
   it("uses the default 15 minute stall interval when no custom value is provided", async () => {
     const result = await runRalph(tempDir, [
+        "--state-dir", join(tempDir, ".ralph"),
       "exercise default stall interval",
       "--agent",
       "opencode",
@@ -159,6 +162,7 @@ describe.skip("stall retries", () => {
     );
 
     const result = await runRalph(tempDir, [
+        "--state-dir", join(tempDir, ".ralph"),
       "--stall-retries",
       "--stall-retry-minutes",
       "0",

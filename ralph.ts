@@ -1679,15 +1679,6 @@ Learn more: https://ghuntley.com/ralph/
          extraAgentFlags = [...runtimeTomlConfig.extra_agent_flags, ...extraAgentFlags];
       }
 
-      // Apply -- passthrough --model override AFTER TOML and inline args (TOP priority).
-      // This is outside if(runtimeTomlConfig) so it also works without a TOML config file.
-      for (let i = 0; i < passthroughAgentFlags.length; i++) {
-         if (passthroughAgentFlags[i] === "--model" && passthroughAgentFlags[i + 1]) {
-            model = passthroughAgentFlags[i + 1];
-            i++;
-         }
-      }
-
       if (runtimeTomlConfig.stall_retries !== undefined) {
          stallRetries = runtimeTomlConfig.stall_retries;
          stallRetriesProvided = true;
@@ -1847,10 +1838,10 @@ Learn more: https://ghuntley.com/ralph/
          }
          stallRetryMinutes = Number(val);
          stallRetryMinutesProvided = true;
-      } else if (arg === "--state-dir") {
-         i++;
-      } else if (arg === "--toml-config") {
-         i++;
+       } else if (arg === "--state-dir") {
+          i++; // value already captured in early args parsing
+       } else if (arg === "--toml-config") {
+          i++; // value already captured in early args parsing
       } else if (arg === "--config") {
          i++;
       } else if (arg === "--init-config") {
@@ -1861,6 +1852,43 @@ Learn more: https://ghuntley.com/ralph/
          process.exit(1);
       } else {
          promptParts.push(arg);
+      }
+   }
+
+   // Apply -- passthrough overrides AFTER TOML and inline args (TOP priority).
+   // This runs after inline args parsing so passthrough always wins.
+   for (let i = 0; i < passthroughAgentFlags.length; i++) {
+      if (passthroughAgentFlags[i] === "--model" && passthroughAgentFlags[i + 1]) {
+         model = passthroughAgentFlags[i + 1];
+         i++;
+      } else if (passthroughAgentFlags[i] === "--max-iterations" && passthroughAgentFlags[i + 1]) {
+         maxIterations = parseInt(passthroughAgentFlags[i + 1]);
+         i++;
+      } else if (passthroughAgentFlags[i] === "--min-iterations" && passthroughAgentFlags[i + 1]) {
+         minIterations = parseInt(passthroughAgentFlags[i + 1]);
+         i++;
+      } else if (passthroughAgentFlags[i] === "--completion-promise" && passthroughAgentFlags[i + 1]) {
+         completionPromise = passthroughAgentFlags[i + 1];
+         i++;
+      } else if (passthroughAgentFlags[i] === "--abort-promise" && passthroughAgentFlags[i + 1]) {
+         abortPromise = passthroughAgentFlags[i + 1];
+         i++;
+      } else if (passthroughAgentFlags[i] === "--stalling-timeout" && passthroughAgentFlags[i + 1]) {
+         stallingTimeoutMs = parseDuration(passthroughAgentFlags[i + 1]);
+         i++;
+      } else if (passthroughAgentFlags[i] === "--blacklist-duration" && passthroughAgentFlags[i + 1]) {
+         blacklistDurationMs = parseDuration(passthroughAgentFlags[i + 1]);
+         i++;
+      } else if (passthroughAgentFlags[i] === "--stalling-action" && passthroughAgentFlags[i + 1]) {
+         stallingAction = passthroughAgentFlags[i + 1] as "stop" | "rotate";
+         i++;
+      } else if (passthroughAgentFlags[i] === "--stall-retries") {
+         stallRetries = true;
+      } else if (passthroughAgentFlags[i] === "--no-stall-retries") {
+         stallRetries = false;
+      } else if (passthroughAgentFlags[i] === "--stall-retry-minutes" && passthroughAgentFlags[i + 1]) {
+         stallRetryMinutes = parseInt(passthroughAgentFlags[i + 1]);
+         i++;
       }
    }
 
@@ -2717,7 +2745,7 @@ Unable to read ${currentTasksFileLabel()}
          maybePrintToolSummary(true);
       }
 
-      return { stdoutText, stderrText, toolCounts, stalled, stalledForMs, preStartStalled: !!preStartTimer && !firstOutputReceived };
+      return { stdoutText, stderrText, toolCounts, stalled, stalledForMs, preStartStalled: stalled && !firstOutputReceived };
    }
    // Main loop
    // Helper to detect per-iteration file changes using content hashes
@@ -3513,18 +3541,23 @@ Unable to read ${currentTasksFileLabel()}
                   // Completion detected but minimum iterations not reached
                   console.log(`\n⏳ Completion promise detected, but minimum iterations (${minIterations}) not yet reached.`);
                   console.log(`   Continuing to iteration ${state.iteration + 1}...`);
-               } else {
-                  console.log(`\n╔══════════════════════════════════════════════════════════════════╗`);
-                  console.log(`║  ✅ Completion promise detected: <promise>${completionPromise}</promise>`);
-                  console.log(`║  Task completed in ${state.iteration} iteration(s)`);
-                  console.log(`║  Total time: ${formatDurationLong(history.totalDurationMs)}`);
-                  console.log(`╚══════════════════════════════════════════════════════════════════╝`);
-                  clearState();
-                  clearHistory();
-                  clearContext();
-                  clearPendingQuestions();
-                  break;
-               }
+                } else {
+                   console.log(`\n╔══════════════════════════════════════════════════════════════════╗`);
+                   console.log(`║  ✅ Completion promise detected: <promise>${completionPromise}</promise>`);
+                   console.log(`║  Task completed in ${state.iteration} iteration(s)`);
+                   console.log(`║  Total time: ${formatDurationLong(history.totalDurationMs)}`);
+                   console.log(`╚══════════════════════════════════════════════════════════════════╝`);
+                   // Only clear state if using default state directory
+                   // When using --state-dir (custom directory), preserve state for testing/inspection
+                   const defaultStateDir = join(process.cwd(), ".ralph");
+                   if (stateDirInput === defaultStateDir) {
+                      clearState();
+                      clearHistory();
+                      clearContext();
+                      clearPendingQuestions();
+                   }
+                   break;
+                }
             }
 
             // Clear context only if it was present at iteration start (preserve mid-iteration additions)
