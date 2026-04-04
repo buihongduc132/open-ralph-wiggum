@@ -30,247 +30,316 @@ import { join } from "path";
 import { ARGS_TEMPLATES } from "../agent-builders";
 
 type BuildArgsFn = (prompt: string, model: string, options?: {
-  extraFlags?: string[];
-  streamOutput?: boolean;
-  allowAllPermissions?: boolean;
+   extraFlags?: string[];
+   streamOutput?: boolean;
+   allowAllPermissions?: boolean;
 }) => string[];
 
 describe("ARGS_TEMPLATES", () => {
-  // -------------------------------------------------------------------------
-  // opencode — the most critical agent; extraFlags must come before the prompt
-  // -------------------------------------------------------------------------
+   // -------------------------------------------------------------------------
+   // opencode — the most critical agent; extraFlags must come before the prompt
+   // -------------------------------------------------------------------------
 
-  describe("opencode", () => {
-    const opencode: BuildArgsFn = ARGS_TEMPLATES["opencode"];
+   describe("opencode", () => {
+      const opencode: BuildArgsFn = ARGS_TEMPLATES["opencode"];
 
-    it("places extraFlags before the positional prompt argument", () => {
-      const result = opencode("my task", "anthropic/claude-sonnet-4", {
-        extraFlags: ["--agent", "orches", "--model", "bhd-litellm/claude-opus"],
+      it("places extraFlags before the positional prompt argument", () => {
+         const result = opencode("my task", "anthropic/claude-sonnet-4", {
+            extraFlags: ["--agent", "orches", "--model", "bhd-litellm/claude-opus"],
+         });
+
+         // extraFlags --model takes priority over Ralph-level -m, so -m is skipped
+         expect(result).toEqual([
+            "run",
+            "--agent", "orches", "--model", "bhd-litellm/claude-opus",
+            "my task",
+         ]);
+
+         // The prompt must be the last element, not consumed as a flag value
+         expect(result[result.length - 1]).toBe("my task");
       });
 
-      // extraFlags --model takes priority over Ralph-level -m, so -m is skipped
-      expect(result).toEqual([
-        "run",
-        "--agent", "orches", "--model", "bhd-litellm/claude-opus",
-        "my task",
-      ]);
+      it("skips -m flag entirely when model is empty (falsy)", () => {
+         const result = opencode("my task", "", {
+            extraFlags: ["--agent", "orches", "--model", "bhd-litellm/claude-opus"],
+         });
 
-      // The prompt must be the last element, not consumed as a flag value
-      expect(result[result.length - 1]).toBe("my task");
-    });
+         // Must NOT contain a bare "-m" flag
+         expect(result).not.toContain("-m");
+         // "-m" with empty string is also wrong — neither element should be "-m" followed by ""
+         for (let i = 0; i < result.length - 1; i++) {
+            expect(result[i]).not.toBe("-m");
+         }
 
-    it("skips -m flag entirely when model is empty (falsy)", () => {
-      const result = opencode("my task", "", {
-        extraFlags: ["--agent", "orches", "--model", "bhd-litellm/claude-opus"],
+         // extraFlags still appear before the prompt
+         expect(result).toEqual([
+            "run",
+            "--agent", "orches", "--model", "bhd-litellm/claude-opus",
+            "my task",
+         ]);
       });
 
-      // Must NOT contain a bare "-m" flag
-      expect(result).not.toContain("-m");
-      // "-m" with empty string is also wrong — neither element should be "-m" followed by ""
-      for (let i = 0; i < result.length - 1; i++) {
-        expect(result[i]).not.toBe("-m");
-      }
+      it("builds opencode run -m model prompt when model is set and no extraFlags", () => {
+         const result = opencode("fix the bug", "anthropic/claude-sonnet-4", {});
 
-      // extraFlags still appear before the prompt
-      expect(result).toEqual([
-        "run",
-        "--agent", "orches", "--model", "bhd-litellm/claude-opus",
-        "my task",
-      ]);
-    });
+         expect(result).toEqual(["run", "-m", "anthropic/claude-sonnet-4", "fix the bug"]);
+         expect(result[result.length - 1]).toBe("fix the bug");
+      });
 
-    it("builds opencode run -m model prompt when model is set and no extraFlags", () => {
-      const result = opencode("fix the bug", "anthropic/claude-sonnet-4", {});
+      it("builds opencode run prompt when no model and no extraFlags", () => {
+         const result = opencode("fix the bug", "", {});
 
-      expect(result).toEqual(["run", "-m", "anthropic/claude-sonnet-4", "fix the bug"]);
-      expect(result[result.length - 1]).toBe("fix the bug");
-    });
+         expect(result).toEqual(["run", "fix the bug"]);
+         expect(result[result.length - 1]).toBe("fix the bug");
+      });
 
-    it("builds opencode run prompt when no model and no extraFlags", () => {
-      const result = opencode("fix the bug", "", {});
+      it("treats prompt as a single trailing positional argument even when it contains spaces", () => {
+         const result = opencode(
+            "fix the auth bug and ensure tests pass",
+            "anthropic/claude-sonnet-4",
+            {},
+         );
 
-      expect(result).toEqual(["run", "fix the bug"]);
-      expect(result[result.length - 1]).toBe("fix the bug");
-    });
+         const lastIdx = result.length - 1;
+         // The entire multi-word prompt must be in one element at the end
+         expect(result[lastIdx]).toBe("fix the auth bug and ensure tests pass");
+         // None of the earlier args should contain "and" (prompt must not be split)
+         const beforePrompt = result.slice(0, lastIdx);
+         expect(beforePrompt.some((arg) => arg.includes("and"))).toBe(false);
+      });
 
-    it("treats prompt as a single trailing positional argument even when it contains spaces", () => {
-      const result = opencode(
-        "fix the auth bug and ensure tests pass",
-        "anthropic/claude-sonnet-4",
-        {},
-      );
+      it("handles extraFlags that include --model to override the Ralph-level model", () => {
+         // When ralph is called without --model but extraFlags carries --model,
+         // the extraFlags --model must appear before the prompt
+         const result = opencode(
+            "run health checks",
+            "", // no Ralph-level model
+            { extraFlags: ["--model", "bhd-litellm/claude-opus", "--agent", "orches"] },
+         );
 
-      const lastIdx = result.length - 1;
-      // The entire multi-word prompt must be in one element at the end
-      expect(result[lastIdx]).toBe("fix the auth bug and ensure tests pass");
-      // None of the earlier args should contain "and" (prompt must not be split)
-      const beforePrompt = result.slice(0, lastIdx);
-      expect(beforePrompt.some((arg) => arg.includes("and"))).toBe(false);
-    });
+         // -m must NOT appear (model is empty)
+         expect(result).not.toContain("-m");
+         // extraFlags must precede the prompt
+         const promptIdx = result.indexOf("run health checks");
+         expect(promptIdx).toBeGreaterThan(0);
+         const beforePrompt = result.slice(1, promptIdx); // slice(1) skips "run"
+         expect(beforePrompt).toEqual(["--model", "bhd-litellm/claude-opus", "--agent", "orches"]);
+      });
 
-    it("handles extraFlags that include --model to override the Ralph-level model", () => {
-      // When ralph is called without --model but extraFlags carries --model,
-      // the extraFlags --model must appear before the prompt
-      const result = opencode(
-        "run health checks",
-        "", // no Ralph-level model
-        { extraFlags: ["--model", "bhd-litellm/claude-opus", "--agent", "orches"] },
-      );
+      // -------------------------------------------------------------------------
+      // RED test: -- passthrough flags (after --) must have TOP priority over TOML
+      // -------------------------------------------------------------------------
+      it("Ralph: extraFlags prepends TOML extra_agent_flags so -- passthrough wins", () => {
+         // Simulate: TOML has extra_flags = ["--verbose"] and -- passthrough has
+         // ["--agent", "orches", "--model", "bhd-litellm/claude-opus"].
+         // Ralph should produce: [...toml_flags, ...passthrough_flags] so passthrough
+         // values (agent, model) end up AFTER TOML values and take effect.
+         const tomlFlags = ["--verbose", "--no-git"];
+         const passthroughFlags = ["--agent", "orches", "--model", "bhd-litellm/claude-opus"];
+         const result = opencode(
+            "do it",
+            "toml-model-should-be-overridden", // Ralph-level model (from TOML)
+            { extraFlags: [...tomlFlags, ...passthroughFlags] },
+         );
 
-      // -m must NOT appear (model is empty)
-      expect(result).not.toContain("-m");
-      // extraFlags must precede the prompt
-      const promptIdx = result.indexOf("run health checks");
-      expect(promptIdx).toBeGreaterThan(0);
-      const beforePrompt = result.slice(1, promptIdx); // slice(1) skips "run"
-      expect(beforePrompt).toEqual(["--model", "bhd-litellm/claude-opus", "--agent", "orches"]);
-    });
+         // --model from passthrough must be in extraFlags (comes after TOML flags)
+         const modelIdx = result.indexOf("--model");
+         expect(modelIdx).toBeGreaterThan(0);
+         // --verbose from TOML must still be present
+         expect(result).toContain("--verbose");
+         // The final --agent value must be "orches" (from passthrough, not TOML)
+         const agentIdx = result.indexOf("--agent");
+         expect(result[agentIdx + 1]).toBe("orches");
+      });
 
-    // -------------------------------------------------------------------------
-    // RED test: -- passthrough flags (after --) must have TOP priority over TOML
-    // -------------------------------------------------------------------------
-    it("Ralph: extraFlags prepends TOML extra_agent_flags so -- passthrough wins", () => {
-      // Simulate: TOML has extra_flags = ["--verbose"] and -- passthrough has
-      // ["--agent", "orches", "--model", "bhd-litellm/claude-opus"].
-      // Ralph should produce: [...toml_flags, ...passthrough_flags] so passthrough
-      // values (agent, model) end up AFTER TOML values and take effect.
-      const tomlFlags = ["--verbose", "--no-git"];
-      const passthroughFlags = ["--agent", "orches", "--model", "bhd-litellm/claude-opus"];
-      const result = opencode(
-        "do it",
-        "toml-model-should-be-overridden", // Ralph-level model (from TOML)
-        { extraFlags: [...tomlFlags, ...passthroughFlags] },
-      );
+      it("Ralph: -- passthrough --model overrides Ralph-level model (TOML or inline)", () => {
+         // When -- --model x is used, opencode must receive --model x, not TOML's model.
+         // This requires extraFlags to contain --model x at the end (after any TOML flags).
+         const result = opencode(
+            "do it",
+            "toml-model", // Ralph's own model variable (from TOML)
+            { extraFlags: ["--model", "override-model"] },
+         );
 
-      // --model from passthrough must be in extraFlags (comes after TOML flags)
-      const modelIdx = result.indexOf("--model");
-      expect(modelIdx).toBeGreaterThan(0);
-      // --verbose from TOML must still be present
-      expect(result).toContain("--verbose");
-      // The final --agent value must be "orches" (from passthrough, not TOML)
-      const agentIdx = result.indexOf("--agent");
-      expect(result[agentIdx + 1]).toBe("orches");
-    });
+         // --model override must be present and come after "run"
+         const modelIdx = result.indexOf("--model");
+         expect(modelIdx).toBe(1); // immediately after "run"
+         expect(result[modelIdx + 1]).toBe("override-model");
+      });
 
-    it("Ralph: -- passthrough --model overrides Ralph-level model (TOML or inline)", () => {
-      // When -- --model x is used, opencode must receive --model x, not TOML's model.
-      // This requires extraFlags to contain --model x at the end (after any TOML flags).
-      const result = opencode(
-        "do it",
-        "toml-model", // Ralph's own model variable (from TOML)
-        { extraFlags: ["--model", "override-model"] },
-      );
+      it("extraFlags alone (no model) still builds a valid opencode run command", () => {
+         const result = opencode(
+            "check services health",
+            "",
+            { extraFlags: ["--agent", "orches"] },
+         );
 
-      // --model override must be present and come after "run"
-      const modelIdx = result.indexOf("--model");
-      expect(modelIdx).toBe(1); // immediately after "run"
-      expect(result[modelIdx + 1]).toBe("override-model");
-    });
+         expect(result).toEqual(["run", "--agent", "orches", "check services health"]);
+         expect(result[result.length - 1]).toBe("check services health");
+      });
+   });
 
-    it("extraFlags alone (no model) still builds a valid opencode run command", () => {
-      const result = opencode(
-        "check services health",
-        "",
-        { extraFlags: ["--agent", "orches"] },
-      );
+   // -------------------------------------------------------------------------
+   // claude-code
+   // -------------------------------------------------------------------------
 
-      expect(result).toEqual(["run", "--agent", "orches", "check services health"]);
-      expect(result[result.length - 1]).toBe("check services health");
-    });
-  });
+   describe("claude-code", () => {
+      const claude: BuildArgsFn = ARGS_TEMPLATES["claude-code"];
 
-  // -------------------------------------------------------------------------
-  // claude-code
-  // -------------------------------------------------------------------------
+      it("passes prompt with -p flag", () => {
+         const result = claude("fix the bug", "claude-sonnet-4", {});
+         expect(result[0]).toBe("-p");
+         expect(result[1]).toBe("fix the bug");
+      });
 
-  describe("claude-code", () => {
-    const claude: BuildArgsFn = ARGS_TEMPLATES["claude-code"];
+      it("includes --dangerously-skip-permissions when allowAllPermissions is set", () => {
+         const result = claude("fix the bug", "claude-sonnet-4", { allowAllPermissions: true });
+         expect(result).toContain("--dangerously-skip-permissions");
+      });
 
-    it("passes prompt with -p flag", () => {
-      const result = claude("fix the bug", "claude-sonnet-4", {});
-      expect(result[0]).toBe("-p");
-      expect(result[1]).toBe("fix the bug");
-    });
+      it("includes --model flag when model is provided", () => {
+         const result = claude("fix the bug", "claude-sonnet-4", {});
+         expect(result).toContain("--model");
+         expect(result).toContain("claude-sonnet-4");
+      });
+   });
+   KT:  // -------------------------------------------------------------------------
+   // -------------------------------------------------------------------------
+   // opencode-raw — like opencode but without the hardcoded 'run' subcommand.
+   // Use this when your custom opencode-compatible binary uses a different subcommand.
+   // Inject the subcommand via extra_agent_flags = ["my-subcommand"] in TOML config.
+   // Pattern: [-m model] [extraFlags] prompt
+   // -------------------------------------------------------------------------
 
-    it("includes --dangerously-skip-permissions when allowAllPermissions is set", () => {
-      const result = claude("fix the bug", "claude-sonnet-4", { allowAllPermissions: true });
-      expect(result).toContain("--dangerously-skip-permissions");
-    });
+   describe("opencode-raw", () => {
+      const opencodeRaw: BuildArgsFn = ARGS_TEMPLATES["opencode-raw"];
 
-    it("includes --model flag when model is provided", () => {
-      const result = claude("fix the bug", "claude-sonnet-4", {});
-      expect(result).toContain("--model");
-      expect(result).toContain("claude-sonnet-4");
-    });
-  });
+      it("places extraFlags before the positional prompt argument", () => {
+         const result = opencodeRaw("my task", "anthropic/claude-sonnet-4", {
+            extraFlags: ["exec", "--agent", "orches"],
+         });
 
-  // -------------------------------------------------------------------------
-  // codex
-  // -------------------------------------------------------------------------
+         // extraFlags injected as-is — no hardcoded subcommand
+         expect(result).toEqual([
+            "-m", "anthropic/claude-sonnet-4",
+            "exec", "--agent", "orches",
+            "my task",
+         ]);
+         // Prompt is the last element
+         expect(result[result.length - 1]).toBe("my task");
+      });
 
-  describe("codex", () => {
-    const codex: BuildArgsFn = ARGS_TEMPLATES["codex"];
+      it("skips -m flag entirely when model is empty (falsy)", () => {
+         const result = opencodeRaw("my task", "", {
+            extraFlags: ["chat", "--agent", "orches"],
+         });
 
-    it("uses exec subcommand and appends prompt as last argument", () => {
-      const result = codex("fix the bug", "gpt-4o", {});
-      expect(result[0]).toBe("exec");
-      expect(result[result.length - 1]).toBe("fix the bug");
-    });
+         // Must NOT contain a bare "-m" flag
+         expect(result).not.toContain("-m");
 
-    it("includes --full-auto when allowAllPermissions is set", () => {
-      const result = codex("fix the bug", "gpt-4o", { allowAllPermissions: true });
-      expect(result).toContain("--full-auto");
-    });
+         expect(result).toEqual([
+            "chat", "--agent", "orches",
+            "my task",
+         ]);
+      });
 
-    it("treats multi-word prompt as a single trailing argument", () => {
-      const result = codex("generate unit tests for all utility functions", "gpt-4o", {});
-      const lastIdx = result.length - 1;
-      expect(result[lastIdx]).toBe("generate unit tests for all utility functions");
-    });
-  });
+      it("builds -m model [extraFlags] prompt when model is set", () => {
+         const result = opencodeRaw("fix the bug", "anthropic/claude-sonnet-4", {
+            extraFlags: ["exec"],
+         });
 
-  // -------------------------------------------------------------------------
-  // copilot
-  // -------------------------------------------------------------------------
+         expect(result).toEqual(["-m", "anthropic/claude-sonnet-4", "exec", "fix the bug"]);
+         expect(result[result.length - 1]).toBe("fix the bug");
+      });
 
-  describe("copilot", () => {
-    const copilot: BuildArgsFn = ARGS_TEMPLATES["copilot"];
+      it("builds [extraFlags] prompt when no model is set", () => {
+         const result = opencodeRaw("fix the bug", "", {
+            extraFlags: ["run"],
+         });
 
-    it("uses -p flag for prompt and appends --model after", () => {
-      const result = copilot("fix the bug", "gpt-4o", {});
-      // copilot builds: ["-p", "fix the bug", "--model", "gpt-4o"]
-      expect(result[0]).toBe("-p");
-      expect(result[1]).toBe("fix the bug");
-      expect(result).toContain("--model");
-      expect(result).toContain("gpt-4o");
-    });
+         expect(result).toEqual(["run", "fix the bug"]);
+         expect(result[result.length - 1]).toBe("fix the bug");
+      });
 
-    it("includes --allow-all --no-ask-user when allowAllPermissions is set", () => {
-      const result = copilot("fix the bug", "gpt-4o", { allowAllPermissions: true });
-      expect(result).toContain("--allow-all");
-      expect(result).toContain("--no-ask-user");
-      // -p and model still present
-      expect(result).toContain("-p");
-      expect(result).toContain("gpt-4o");
-    });
-  });
+      it("treats prompt as a single trailing positional argument even when it contains spaces", () => {
+         const result = opencodeRaw(
+            "fix the auth bug and ensure tests pass",
+            "anthropic/claude-sonnet-4",
+            { extraFlags: ["exec"] },
+         );
 
-  // -------------------------------------------------------------------------
-  // default fallback
-  // -------------------------------------------------------------------------
+         const lastIdx = result.length - 1;
+         expect(result[lastIdx]).toBe("fix the auth bug and ensure tests pass");
+         const beforePrompt = result.slice(0, lastIdx);
+         expect(beforePrompt.some((arg) => arg.includes("and"))).toBe(false);
+      });
+   });
 
-  describe("default fallback", () => {
-    const fallback: BuildArgsFn = ARGS_TEMPLATES["default"];
+   // -------------------------------------------------------------------------
 
-    it("appends prompt as last argument", () => {
-      const result = fallback("fix the bug", "claude-sonnet-4", {});
-      expect(result[result.length - 1]).toBe("fix the bug");
-    });
+   describe("codex", () => {
+      const codex: BuildArgsFn = ARGS_TEMPLATES["codex"];
 
-    it("treats multi-word prompt as a single argument", () => {
-      const result = fallback("fix the auth module and ensure tests pass", "", {});
-      const lastIdx = result.length - 1;
-      expect(result[lastIdx]).toBe("fix the auth module and ensure tests pass");
-    });
-  });
+      it("uses exec subcommand and appends prompt as last argument", () => {
+         const result = codex("fix the bug", "gpt-4o", {});
+         expect(result[0]).toBe("exec");
+         expect(result[result.length - 1]).toBe("fix the bug");
+      });
+
+      it("includes --full-auto when allowAllPermissions is set", () => {
+         const result = codex("fix the bug", "gpt-4o", { allowAllPermissions: true });
+         expect(result).toContain("--full-auto");
+      });
+
+      it("treats multi-word prompt as a single trailing argument", () => {
+         const result = codex("generate unit tests for all utility functions", "gpt-4o", {});
+         const lastIdx = result.length - 1;
+         expect(result[lastIdx]).toBe("generate unit tests for all utility functions");
+      });
+   });
+
+   // -------------------------------------------------------------------------
+   // copilot
+   // -------------------------------------------------------------------------
+
+   describe("copilot", () => {
+      const copilot: BuildArgsFn = ARGS_TEMPLATES["copilot"];
+
+      it("uses -p flag for prompt and appends --model after", () => {
+         const result = copilot("fix the bug", "gpt-4o", {});
+         // copilot builds: ["-p", "fix the bug", "--model", "gpt-4o"]
+         expect(result[0]).toBe("-p");
+         expect(result[1]).toBe("fix the bug");
+         expect(result).toContain("--model");
+         expect(result).toContain("gpt-4o");
+      });
+
+      it("includes --allow-all --no-ask-user when allowAllPermissions is set", () => {
+         const result = copilot("fix the bug", "gpt-4o", { allowAllPermissions: true });
+         expect(result).toContain("--allow-all");
+         expect(result).toContain("--no-ask-user");
+         // -p and model still present
+         expect(result).toContain("-p");
+         expect(result).toContain("gpt-4o");
+      });
+   });
+
+   // -------------------------------------------------------------------------
+   // default fallback
+   // -------------------------------------------------------------------------
+
+   describe("default fallback", () => {
+      const fallback: BuildArgsFn = ARGS_TEMPLATES["default"];
+
+      it("appends prompt as last argument", () => {
+         const result = fallback("fix the bug", "claude-sonnet-4", {});
+         expect(result[result.length - 1]).toBe("fix the bug");
+      });
+
+      it("treats multi-word prompt as a single argument", () => {
+         const result = fallback("fix the auth module and ensure tests pass", "", {});
+         const lastIdx = result.length - 1;
+         expect(result[lastIdx]).toBe("fix the auth module and ensure tests pass");
+      });
+   });
 });

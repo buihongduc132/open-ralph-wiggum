@@ -1,0 +1,17 @@
+{
+  "BTC/USDT": {
+    "symbol": "BTC/USDT",
+    "error": "tuple indices must be integers or slices, not str",
+    "gate_passed": false
+  },
+  "ETH/USDT": {
+    "symbol": "ETH/USDT",
+    "error": "tuple indices must be integers or slices, not str",
+    "gate_passed": false
+  },
+  "SOL/USDT": {
+    "symbol": "SOL/USDT",
+    "error": "tuple indices must be integers or slices, not str",
+    "gate_passed": false
+  }
+}

@@ -85,3 +85,12 @@ test-sigint-temp/
 bin/*
 !bin/ralph.js
 /.ralph
+
+# Data files (too large for git)
+data/
+*.parquet
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo

@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-04-03T19:39:53.566567+00:00",
+  "gate": "FAILED",
+  "gate_rule": "P50 directional_drift > 0 for ALL assets",
+  "assets_failed": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT"
+  ],
+  "message": "Assets ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'] have P50 drift <= 0. Strategy abandoned."
+}

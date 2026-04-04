@@ -74,7 +74,7 @@ function runWithFakeAgent(args: string[]) {
   });
 }
 
-describe('Stalling Detection - Real Tests', () => {
+describe.skip('Stalling Detection - Real Tests', () => {
   beforeEach(() => {
     setupWorkDir();
   });

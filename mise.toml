@@ -1,0 +1,80 @@
+[tasks.weekend-grid]
+description = "Run full weekend-grid pipeline: Phase0 -> Phase1 -> Phase2 -> Phase3"
+run = "echo 'Use: mise run weekend-grid:all'"
+
+[tasks."weekend-grid:phase0"]
+description = "Run Phase 0 empirical calibration (directional drift gate)"
+run = "cd \"$(git rev-parse --show-toplevel)\" && PYTHONPATH=src python3 scripts/run_phase0.py"
+env = { PYTHONPATH = "src" }
+
+[tasks."weekend-grid:phase1"]
+description = "Run Phase 1 fixed grid sweep (486 runs: 3 assets x 162 combos)"
+run = "cd \"$(git rev-parse --show-toplevel)\" && PYTHONPATH=src python3 scripts/run_phase1.py"
+env = { PYTHONPATH = "src" }
+depends = ["weekend-grid:phase0"]
+
+[tasks."weekend-grid:phase2"]
+description = "Run Phase 2 dynamic grid sweep (648 runs: 3 assets x 216 combos)"
+run = "cd \"$(git rev-parse --show-toplevel)\" && PYTHONPATH=src python3 scripts/run_phase2.py"
+env = { PYTHONPATH = "src" }
+depends = ["weekend-grid:phase1"]
+
+[tasks."weekend-grid:phase3"]
+description = "Run Phase 3 winner selection and generate report"
+run = "cd \"$(git rev-parse --show-toplevel)\" && PYTHONPATH=src python3 scripts/run_phase3.py"
+env = { PYTHONPATH = "src" }
+depends = ["weekend-grid:phase2"]
+
+[tasks."weekend-grid:all"]
+description = "Run all weekend-grid phases in sequence"
+run = "cd \"$(git rev-parse --show-toplevel)\" && PYTHONPATH=src python3 scripts/run_phase0.py && PYTHONPATH=src python3 scripts/run_phase1.py && PYTHONPATH=src python3 scripts/run_phase2.py && PYTHONPATH=src python3 scripts/run_phase3.py"
+env = { PYTHONPATH = "src" }
+
+[tasks."weekend-grid:check"]
+description = "Check latest weekend-grid sweep results"
+run = '''
+python3 -c "
+import json
+from pathlib import Path
+
+def check_results():
+    results_dir = Path('results/weekend_grid')
+    phase0 = sorted((results_dir / 'phase0').glob('*.json')) if (results_dir / 'phase0').exists() else []
+    phase1_parquet = sorted((results_dir / 'phase1').glob('*.parquet')) if (results_dir / 'phase1').exists() else []
+    phase2_parquet = sorted((results_dir / 'phase2').glob('*.parquet')) if (results_dir / 'phase2').exists() else []
+    winners = results_dir / 'winners.json'
+
+    print('=== Weekend Grid Results Check ===')
+    print(f'Phase 0 files: {len(phase0)}')
+    for f in phase0:
+        try:
+            with open(f) as fp:
+                data = json.load(fp)
+            print(f'  {f.name}: {list(data.keys()) if isinstance(data, dict) else data}')
+        except Exception as e:
+            print(f'  {f.name}: ERROR - {e}')
+
+    print(f'Phase 1 parquet files: {len(phase1_parquet)}')
+    print(f'Phase 2 parquet files: {len(phase2_parquet)}')
+
+    if winners.exists():
+        with open(winners) as fp:
+            w = json.load(fp)
+        p1_keys = list(w.get('phase1_winners', {}).keys())
+        p2_keys = list(w.get('phase2_winners', {}).keys())
+        print(f'Winners: phase1={p1_keys}')
+        print(f'Winners: phase2={p2_keys}')
+    else:
+        print('No winners.json yet -- pipeline not complete')
+
+check_results()
+"
+'''
+
+[tasks."weekend-grid:cache-clear"]
+description = "Clear all weekend-grid sweep cache for fresh run"
+run = "rm -rf results/weekend_grid && echo 'Cache cleared'"
+
+[tasks."weekend-grid:status"]
+description = "Print current progress from progress.md"
+run = "cat flow/plans/weekend-grid/progress.md"

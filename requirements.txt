@@ -1,0 +1,13 @@
+# Weekend Grid Strategy — Python Dependencies
+# Install: pip install -r requirements.txt
+
+vectorbt>=0.28.0
+pandas>=2.0.0
+numpy>=1.24.0
+ccxt>=4.0.0
+pyarrow>=14.0.0
+pytz>=2024.1
+numba>=0.60.0
+jax>=0.4.0
+jaxlib>=0.4.0
+tqdm>=4.66.0

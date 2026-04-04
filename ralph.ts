@@ -172,6 +172,18 @@ export const ARGS_TEMPLATES: Record<string, (prompt: string, model: string, opti
       cmdArgs.push(prompt);
       return cmdArgs;
    },
+   // opencode-raw: like opencode but without the hardcoded 'run' subcommand.
+   // Use this when your custom binary uses a different subcommand (e.g. 'exec', 'chat').
+   // Inject the subcommand via extra_agent_flags = ["my-subcommand"] in TOML config.
+   // Pattern: [-m model] [extraFlags] prompt
+   "opencode-raw": (prompt, model, options) => {
+      const cmdArgs: string[] = [];
+      if (model) cmdArgs.push("-m", model);
+      // extraFlags MUST come before the positional prompt (same invariant as opencode).
+      if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
+      cmdArgs.push(prompt);
+      return cmdArgs;
+   },
    "claude-code": (prompt, model, options) => {
       const cmdArgs = ["-p", prompt];
       if (options?.streamOutput) cmdArgs.push("--output-format", "stream-json", "--include-partial-messages", "--verbose");
@@ -1777,10 +1789,9 @@ Learn more: https://ghuntley.com/ralph/
             console.error("Error: --pre-start-timeout requires a value (ms, or -1 to disable)");
             process.exit(1);
          }
-         const parsed = parseInt(val);
+         const parsed = parseDuration(val);
          if (isNaN(parsed)) {
-            console.error("Error: --pre-start-timeout requires a number");
-            process.exit(1);
+            console.error("Error: --pre-start-timeout requires a duration (e.g., 500, 2s, 1m, or 0 to disable)");
          }
          preStartTimeoutMs = parsed;
       } else if (arg === "--model") {
@@ -1980,9 +1991,26 @@ Learn more: https://ghuntley.com/ralph/
       await new Promise(resolve => setTimeout(resolve, delayMs));
    }
 
-   // Create or update state
    function saveState(state: RalphState): void {
-      if (!existsSync(stateDir)) {
+      // Guard: if .ralph exists as a file/symlink-to-file instead of a directory,
+      // give a clear fatal error instead of crashing with ENOTDIR.
+      if (existsSync(stateDir)) {
+         try {
+            const stats = lstatSync(stateDir);
+            if (!stats.isDirectory()) {
+               console.error(`\n❌ Ralph Initialization Failed`);
+               console.error(`   ${stateDir} exists but is not a directory!`);
+               console.error(`   Type: ${stats.isSymbolicLink() ? "symlink" : "file"}`);
+               console.error(`\nFix: rm ${stateDir}  # remove the file/symlink`);
+               console.error(`     mkdir ${stateDir}  # then recreate as a directory`);
+               process.exit(1);
+            }
+         } catch (err) {
+            console.error(`\n❌ Ralph Initialization Failed`);
+            console.error(`   Cannot access ${stateDir}: ${err}`);
+            process.exit(1);
+         }
+      } else {
          mkdirSync(stateDir, { recursive: true });
       }
       writeFileSync(statePath, JSON.stringify(state, null, 2));
@@ -2488,7 +2516,7 @@ Unable to read ${currentTasksFileLabel()}
          suppressOutput?: boolean;
          preStartTimeoutMs?: number; // -1 = auto (1/10 stallingTimeout), 0 = disabled, >0 = custom
       },
-   ): Promise<{ stdoutText: string; stderrText: string; toolCounts: Map<string, number>; stalled: boolean; stalledForMs: number | null }> {
+   ): Promise<{ stdoutText: string; stderrText: string; toolCounts: Map<string, number>; stalled: boolean; stalledForMs: number | null; preStartStalled: boolean }> {
       const toolCounts = new Map<string, number>();
       let stdoutText = "";
       let stderrText = "";
@@ -2641,13 +2669,12 @@ Unable to read ${currentTasksFileLabel()}
       }
 
       // Pre-start stalling detection: monitor from iteration start until first output
+      // Pre-start stalling detection: monitor from iteration start until first output
       let preStartTimer: ReturnType<typeof setTimeout> | null = null;
-      const preStartTimeoutMs = options.preStartTimeoutMs ?? -1; // Default: auto (1/3 stalling)
-      // Calculate effective timeout: -1 = auto (1/3 stallingTimeoutMs), 0 = disabled, >0 = custom
-      const effectivePreStartTimeout = preStartTimeoutMs === -1
-         ? Math.floor((options.stallingTimeoutMs ?? (2 * 60 * 60 * 1000)) / 3)
-         : preStartTimeoutMs;
-
+      // Use explicit undefined check so that 0 (disabled) is preserved, not falsy-truncated
+      const preStartTimeoutRaw = options.preStartTimeoutMs === undefined ? -1 : options.preStartTimeoutMs;
+      const stallingTimeout = options.stallingTimeoutMs ?? (2 * 60 * 60 * 1000);
+      const effectivePreStartTimeout = preStartTimeoutRaw === -1 ? Math.floor(stallingTimeout / 3) : preStartTimeoutRaw;
       if (effectivePreStartTimeout > 0) {
          preStartTimer = setTimeout(() => {
             if (!firstOutputReceived) {
@@ -3110,6 +3137,7 @@ Unable to read ${currentTasksFileLabel()}
             });
 
             // Run agent using spawn for better argument handling
+            // preventing the 5s delay when detecting stalling. stdin is not used anyway.
             // stdin is inherited so users can respond to permission prompts if needed
             currentProc = Bun.spawn([agentConfig.command, ...cmdArgs], {
                cwd: process.cwd(),

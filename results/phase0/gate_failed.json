@@ -1,0 +1,11 @@
+{
+  "phase": 0,
+  "gate_passed": false,
+  "message": "At least one asset has P50 drift < 0.5%. Strategy not viable. Stopping.",
+  "timestamp": "2026-04-03T18:12:11.192811+00:00",
+  "failed_assets": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT"
+  ]
+}

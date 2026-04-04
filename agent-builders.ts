@@ -12,7 +12,7 @@ export type AgentBuildArgsOptions = {
   skipModelFlag?: boolean;
 };
 
-export const ARGS_TEMPLATES: Record<"opencode" | "claude-code" | "codex" | "copilot" | "default", (
+export const ARGS_TEMPLATES: Record<"opencode" | "opencode-raw" | "claude-code" | "codex" | "copilot" | "default", (
   prompt: string,
   model: string,
   options?: AgentBuildArgsOptions,
@@ -25,6 +25,18 @@ export const ARGS_TEMPLATES: Record<"opencode" | "claude-code" | "codex" | "copi
     if (model && !hasPassthroughModel) cmdArgs.push("-m", model);
     // extraFlags (e.g. --agent, --model) MUST come before the positional message
     // argument, otherwise opencode consumes them as the message instead of flags.
+    if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
+    cmdArgs.push(prompt);
+    return cmdArgs;
+  },
+  // opencode-raw: like opencode but without the hardcoded 'run' subcommand.
+  // Use this when your custom opencode-compatible binary uses a different subcommand.
+  // Inject the subcommand via extra_agent_flags = ["my-subcommand"] in TOML config.
+  // Pattern: [-m model] [extraFlags] prompt
+  "opencode-raw": (prompt, model, options) => {
+    const cmdArgs: string[] = [];
+    const hasPassthroughModel = options?.extraFlags?.includes("--model") || options?.skipModelFlag;
+    if (model && !hasPassthroughModel) cmdArgs.push("-m", model);
     if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
     cmdArgs.push(prompt);
     return cmdArgs;
