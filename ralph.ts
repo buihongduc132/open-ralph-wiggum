@@ -2704,18 +2704,20 @@ Unable to read ${currentTasksFileLabel()}
       const stallingTimeout = options.stallingTimeoutMs ?? (2 * 60 * 60 * 1000);
       const effectivePreStartTimeout = preStartTimeoutRaw === -1 ? Math.floor(stallingTimeout / 3) : preStartTimeoutRaw;
       if (effectivePreStartTimeout > 0) {
-         preStartTimer = setTimeout(() => {
-            if (!firstOutputReceived) {
-               stalled = true;
-               stalledForMs = Date.now() - options.iterationStart;
-               const elapsed = formatDuration(stalledForMs);
-               console.log(`⚠️  Pre-start stalling detected: no output for ${effectivePreStartTimeout}ms (elapsed: ${elapsed})`);
-               console.log(`   The agent may be hanging before producing output...`);
-               // Kill the process to stop the iteration
-               proc.kill();
-            }
-         }, effectivePreStartTimeout);
-      }
+          preStartTimer = setTimeout(() => {
+             // Only mark as pre-start stalled if the process is still running
+             // If the process exited quickly without output, that's not a stall - it's just a fast failure
+             if (!firstOutputReceived && proc.exitCode === null) {
+                stalled = true;
+                stalledForMs = Date.now() - options.iterationStart;
+                const elapsed = formatDuration(stalledForMs);
+                console.log(`⚠️  Pre-start stalling detected: no output for ${effectivePreStartTimeout}ms (elapsed: ${elapsed})`);
+                console.log(`   The agent may be hanging before producing output...`);
+                // Kill the process to stop the iteration
+                proc.kill();
+             }
+          }, effectivePreStartTimeout);
+       }
 
       try {
          await Promise.all([
