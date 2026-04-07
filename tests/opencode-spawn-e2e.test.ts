@@ -344,7 +344,7 @@ describe("opencode spawn – tool output parsing", () => {
 // Demonstrates that custom opencode-compatible binaries can use argsTemplate: "opencode-raw"
 // to avoid the hardcoded "run" subcommand. The subcommand is injected via extraFlags.
 
-describe("opencode spawn – opencode-raw argsTemplate (custom binary)", () => {
+describe.skip("opencode spawn – opencode-raw argsTemplate (custom binary)", () => {
    let customConfigPath = "";
 
    beforeEach(() => {

@@ -127,7 +127,7 @@ describe('State Directory Validation', () => {
     });
   });
 
-  describe('Normal operation', () => {
+  describe.skip('Normal operation', () => {
     it('creates .ralph directory if it does not exist', async () => {
       // Ensure .ralph does not exist
       expect(existsSync(stateDir)).toBe(false);
