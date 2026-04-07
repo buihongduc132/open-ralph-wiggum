@@ -27,82 +27,86 @@
  *   Using bash_execute — claude-code format
  */
 
-"use strict";
+export function runFakeOpencode(args: string[]): void {
+   let subcommand = "";
+   let model = "";
+   let promptArg = "";
+   let completionPromise = "COMPLETE";
 
-const args = process.argv.slice(2);
-let subcommand = "";
-let model = "";
-let prompt = "";
-let completionPromise = "COMPLETE";
+   // Parse arguments
+   let i = 0;
+   while (i < args.length) {
+      const arg = args[i];
 
-// Parse arguments
-let i = 0;
-while (i < args.length) {
-   const arg = args[i];
-
-   if (arg === "run") {
-      subcommand = "run";
-   } else if (arg === "--model" || arg === "-m") {
+      if (arg === "run") {
+         subcommand = "run";
+      } else if (arg === "--model" || arg === "-m") {
+         i++;
+         model = args[i] ?? "";
+      } else if (arg === "--agent") {
+         i++; // consume but ignore
+      } else if (arg === "--allow-all") {
+         // ignore
+      } else if (arg === "--completion-promise") {
+         i++;
+         completionPromise = args[i] ?? "COMPLETE";
+      } else if (!arg.startsWith("-")) {
+         // Positional: could be the prompt or subcommand
+         if (subcommand === "run" && !promptArg) {
+            promptArg = arg;
+         } else if (!subcommand) {
+            subcommand = arg;
+         } else if (!promptArg) {
+            promptArg = arg;
+         }
+      }
       i++;
-      model = args[i] ?? "";
-   } else if (arg === "--agent") {
-      i++; // consume but ignore
-   } else if (arg === "--allow-all") {
-      // ignore
-   } else if (arg === "--completion-promise") {
-      i++;
-      completionPromise = args[i] ?? "COMPLETE";
-   } else if (!arg.startsWith("-")) {
-      // Positional: could be the prompt or subcommand
-      if (subcommand === "run" && !prompt) {
-         prompt = arg;
-      } else if (!subcommand) {
-         subcommand = arg;
-      } else if (!prompt) {
-         prompt = arg;
+   }
+
+   if (subcommand !== "run") {
+      console.error("fake-opencode: only 'run' subcommand is implemented");
+      process.exit(1);
+   }
+
+   if (!promptArg) {
+      console.error("fake-opencode: missing prompt");
+      process.exit(1);
+   }
+
+   // Handle mode
+   if (model === "") {
+      console.error("Error: model is required");
+      process.exit(1);
+   }
+
+   if (model === "stall") {
+      // Ralph kills us after stallingTimeout
+      setTimeout(() => { }, 3600 * 1000);
+      process.exit(0);
+   }
+
+   if (model.startsWith("stall-")) {
+      const seconds = parseInt(model.slice(6), 10);
+      if (!isNaN(seconds)) {
+         setTimeout(() => {
+            console.log(`<promise>STALLDONE</promise>`);
+            process.exit(0);
+         }, seconds * 1000);
+         process.exit(0);
       }
    }
-   i++;
+
+   // Output tool lines to test parseToolOutput patterns
+   console.log("|  bash_execute");
+   console.log("|  Read");
+   console.log(`|  ${promptArg.split(" ")[0]}_tool`);
+   console.log("");
+   console.log("work done");
+   console.log(`<promise>${completionPromise}</promise>`);
+   process.exit(0);
 }
 
-if (subcommand !== "run") {
-   console.error("fake-opencode: only 'run' subcommand is implemented");
-   process.exit(1);
+// Run when executed directly
+if (import.meta.main) {
+   runFakeOpencode(process.argv.slice(2));
 }
-
-if (!prompt) {
-   console.error("fake-opencode: missing prompt");
-   process.exit(1);
-}
-
-// Handle mode
-if (model === "") {
-   console.error("Error: model is required");
-   process.exit(1);
-}
-
-if (model === "stall") {
-   // Ralph kills us after stallingTimeout
-   setTimeout(() => { }, 3600 * 1000);
-   return;
-}
-
-if (model.startsWith("stall-")) {
-   const seconds = parseInt(model.slice(6), 10);
-   if (!isNaN(seconds)) {
-      setTimeout(() => {
-         console.log(`<promise>STALLDONE</promise>`);
-         process.exit(0);
-      }, seconds * 1000);
-      return;
-   }
-}
-
-// Output tool lines to test parseToolOutput patterns
-console.log("|  bash_execute");
-console.log("|  Read");
-console.log(`|  ${prompt.split(" ")[0]}_tool`);
-console.log("");
-console.log("work done");
-console.log(`<promise>${completionPromise}</promise>`);
-process.exit(0);

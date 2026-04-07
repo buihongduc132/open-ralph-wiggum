@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+export {};
+
 console.log("fixture agent ready");
 
 const shutdown = () => {
