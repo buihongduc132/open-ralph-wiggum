@@ -2648,7 +2648,7 @@ Unable to read ${currentTasksFileLabel()}
       // Use explicit undefined check so that 0 (disabled) is preserved, not falsy-truncated
       const preStartTimeoutRaw = options.preStartTimeoutMs === undefined ? -1 : options.preStartTimeoutMs;
       const stallingTimeout = options.stallingTimeoutMs ?? (2 * 60 * 60 * 1000);
-      const effectivePreStartTimeout = preStartTimeoutRaw === -1 ? Math.floor(stallingTimeout / 3) : preStartTimeoutRaw;
+      const effectivePreStartTimeout = preStartTimeoutRaw === -1 ? Math.floor(stallingTimeout / 10) : preStartTimeoutRaw;
       if (effectivePreStartTimeout > 0) {
           preStartTimer = setTimeout(() => {
              // Only mark as pre-start stalled if the process is still running
