@@ -27,12 +27,12 @@
  *   Using bash_execute — claude-code format
  */
 
-"use strict";
+export {};
 
 const args = process.argv.slice(2);
 let subcommand = "";
 let model = "";
-let prompt = "";
+let promptArg = "";
 let completionPromise = "COMPLETE";
 
 // Parse arguments
@@ -54,12 +54,12 @@ while (i < args.length) {
       completionPromise = args[i] ?? "COMPLETE";
    } else if (!arg.startsWith("-")) {
       // Positional: could be the prompt or subcommand
-      if (subcommand === "run" && !prompt) {
-         prompt = arg;
+      if (subcommand === "run" && !promptArg) {
+         promptArg = arg;
       } else if (!subcommand) {
          subcommand = arg;
-      } else if (!prompt) {
-         prompt = arg;
+      } else if (!promptArg) {
+         promptArg = arg;
       }
    }
    i++;
@@ -70,7 +70,7 @@ if (subcommand !== "run") {
    process.exit(1);
 }
 
-if (!prompt) {
+if (!promptArg) {
    console.error("fake-opencode: missing prompt");
    process.exit(1);
 }
@@ -84,7 +84,7 @@ if (model === "") {
 if (model === "stall") {
    // Ralph kills us after stallingTimeout
    setTimeout(() => { }, 3600 * 1000);
-   return;
+   process.exit(0);
 }
 
 if (model.startsWith("stall-")) {
@@ -94,14 +94,13 @@ if (model.startsWith("stall-")) {
          console.log(`<promise>STALLDONE</promise>`);
          process.exit(0);
       }, seconds * 1000);
-      return;
    }
 }
 
 // Output tool lines to test parseToolOutput patterns
 console.log("|  bash_execute");
 console.log("|  Read");
-console.log(`|  ${prompt.split(" ")[0]}_tool`);
+console.log(`|  ${promptArg.split(" ")[0]}_tool`);
 console.log("");
 console.log("work done");
 console.log(`<promise>${completionPromise}</promise>`);

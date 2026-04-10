@@ -68,7 +68,7 @@ type AgentType = (typeof AGENT_TYPES)[number];
 
 type AgentEnvOptions = { filterPlugins?: boolean; allowAllPermissions?: boolean };
 
-type AgentBuildArgsOptions = { allowAllPermissions?: boolean; extraFlags?: string[]; streamOutput?: boolean };
+
 
 interface AgentConfig {
    type: AgentType;
@@ -146,12 +146,10 @@ const PARSE_PATTERNS: Record<string, (line: string) => string | null> = {
       }
       return null;
    },
-   "codex": null,
-   "copilot": null,
    "default": (line) => {
-      const match = stripAnsi(line).match(/(?:Tool:|Using|Called|Running)\s+([A-Za-z0-9_-]+)/i);
-      return match ? match[1] : null;
-   },
+       const match = stripAnsi(line).match(/(?:Tool:|Using|Called|Running)\s+([A-Za-z0-9_-]+)/i);
+       return match ? match[1] : null;
+    },
 };
 
 const defaultParseToolOutput = (line: string): string | null => {
@@ -162,60 +160,7 @@ const defaultParseToolOutput = (line: string): string | null => {
 PARSE_PATTERNS["codex"] = defaultParseToolOutput;
 PARSE_PATTERNS["copilot"] = defaultParseToolOutput;
 
-export const ARGS_TEMPLATES: Record<string, (prompt: string, model: string, options?: AgentBuildArgsOptions) => string[]> = {
-   "opencode": (prompt, model, options) => {
-      const cmdArgs = ["run"];
-      if (model) cmdArgs.push("-m", model);
-      // extraFlags (e.g. --agent, --model) MUST come before the positional message
-      // argument, otherwise opencode consumes them as the message instead of flags.
-      if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
-      cmdArgs.push(prompt);
-      return cmdArgs;
-   },
-   // opencode-raw: like opencode but without the hardcoded 'run' subcommand.
-   // Use this when your custom binary uses a different subcommand (e.g. 'exec', 'chat').
-   // Inject the subcommand via extra_agent_flags = ["my-subcommand"] in TOML config.
-   // Pattern: [-m model] [extraFlags] prompt
-   "opencode-raw": (prompt, model, options) => {
-      const cmdArgs: string[] = [];
-      if (model) cmdArgs.push("-m", model);
-      // extraFlags MUST come before the positional prompt (same invariant as opencode).
-      if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
-      cmdArgs.push(prompt);
-      return cmdArgs;
-   },
-   "claude-code": (prompt, model, options) => {
-      const cmdArgs = ["-p", prompt];
-      if (options?.streamOutput) cmdArgs.push("--output-format", "stream-json", "--include-partial-messages", "--verbose");
-      if (model) cmdArgs.push("--model", model);
-      if (options?.allowAllPermissions) cmdArgs.push("--dangerously-skip-permissions");
-      if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
-      return cmdArgs;
-   },
-   "codex": (prompt, model, options) => {
-      const cmdArgs = ["exec"];
-      if (model) cmdArgs.push("--model", model);
-      if (options?.allowAllPermissions) cmdArgs.push("--full-auto");
-      if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
-      cmdArgs.push(prompt);
-      return cmdArgs;
-   },
-   "copilot": (prompt, model, options) => {
-      const cmdArgs = ["-p", prompt];
-      if (model) cmdArgs.push("--model", model);
-      if (options?.allowAllPermissions) cmdArgs.push("--allow-all", "--no-ask-user");
-      if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
-      return cmdArgs;
-   },
-   "default": (prompt, model, options) => {
-      const cmdArgs: string[] = [];
-      if (model) cmdArgs.push("--model", model);
-      if (options?.allowAllPermissions) cmdArgs.push("--full-auto");
-      if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
-      cmdArgs.push(prompt);
-      return cmdArgs;
-   },
-};
+
 
 function loadPluginsFromConfig(configPath: string): string[] {
    if (!existsSync(configPath)) {
@@ -280,7 +225,7 @@ function ensureRalphConfig(options: { filterPlugins?: boolean; allowAllPermissio
 
 const ENV_TEMPLATES: Record<string, (options: AgentEnvOptions) => Record<string, string>> = {
    "opencode": (options) => {
-      const env = { ...process.env };
+      const env = { ...process.env } as Record<string, string>;
       if (options.filterPlugins || options.allowAllPermissions) {
          env.OPENCODE_CONFIG = ensureRalphConfig({
             filterPlugins: options.filterPlugins,
@@ -289,7 +234,7 @@ const ENV_TEMPLATES: Record<string, (options: AgentEnvOptions) => Record<string,
       }
       return env;
    },
-   "default": () => ({ ...process.env }),
+   "default": () => ({ ...process.env } as Record<string, string>),
 };
 
 export function loadAgentConfig(configPath?: string): Record<string, JsonAgentConfig> | null {
@@ -342,7 +287,7 @@ export function createAgentConfig(json: JsonAgentConfig, basePath?: string): Age
             return cmdArgs;
          },
          buildEnv: (opts) => {
-            const env: Record<string, string | undefined> = { ...process.env };
+            const env: Record<string, string> = { ...process.env } as Record<string, string>;
             if (json.envBlock) {
                Object.assign(env, json.envBlock);
             }
@@ -1175,8 +1120,8 @@ Learn more: https://ghuntley.com/ralph/
             const activeIndex = state.rotation && state.rotation.length > 0
                ? ((state.rotationIndex ?? 0) % state.rotation.length + state.rotation.length) % state.rotation.length
                : 0;
-            console.log(`\n   Rotation (position ${activeIndex + 1}/${state.rotation.length}):`);
-            state.rotation.forEach((entry, index) => {
+            console.log(`\n   Rotation (position ${activeIndex + 1}/${state.rotation!.length}):`);
+            state.rotation!.forEach((entry, index) => {
                const activeLabel = index === activeIndex ? "  **ACTIVE**" : "";
                console.log(`   ${index + 1}. ${entry}${activeLabel}`);
             });
@@ -2614,14 +2559,15 @@ Unable to read ${currentTasksFileLabel()}
          let buffer = "";
 
          // Create abort promise if signal provided
-         const abortPromise = options.abortSignal
-            ? new Promise<{ value: undefined; done: true }>((resolve, reject) => {
-               const handler = () => {
-                  options.abortSignal?.removeEventListener('abort', handler);
-                  resolve({ value: undefined, done: true });
-               };
-               options.abortSignal.addEventListener('abort', handler);
-            })
+          const abortPromise = options.abortSignal
+             ? new Promise<{ value: undefined; done: true }>((resolve) => {
+                const signal = options.abortSignal!;
+                const handler = () => {
+                   signal.removeEventListener('abort', handler);
+                   resolve({ value: undefined, done: true });
+                };
+                signal.addEventListener('abort', handler);
+             })
             : new Promise<{ value: undefined; done: true }>(() => { });
 
          while (true) {
@@ -2722,14 +2668,14 @@ Unable to read ${currentTasksFileLabel()}
       try {
          await Promise.all([
             streamText(
-               proc.stdout,
+               proc.stdout as ReadableStream<Uint8Array>,
                chunk => {
                   stdoutText += chunk;
                },
                false,
             ),
             streamText(
-               proc.stderr,
+               proc.stderr as ReadableStream<Uint8Array>,
                chunk => {
                   stderrText += chunk;
                },
@@ -2844,7 +2790,7 @@ Unable to read ${currentTasksFileLabel()}
    async function runRalphLoop(): Promise<void> {
       // Ensure agentType is set before loadState() uses it.
       // (main() sets it but runRalphLoop starts running during main's async init)
-      if (!agentType) agentType = initialAgentType ?? "opencode";
+      if (!agentType) agentType = "opencode";
 
       // Check if a loop is already running
       const existingState = loadState();
@@ -2857,22 +2803,24 @@ Unable to read ${currentTasksFileLabel()}
 
       const resuming = ownership.status === "resume";
       if (resuming) {
-         minIterations = existingState.minIterations;
-         maxIterations = existingState.maxIterations;
-         completionPromise = existingState.completionPromise;
-         abortPromise = existingState.abortPromise ?? "";
-         tasksMode = existingState.tasksMode;
-         taskPromise = existingState.taskPromise;
-         prompt = existingState.prompt;
-         promptTemplatePath = existingState.promptTemplate ?? "";
-         model = existingState.model;
-         agentType = existingState.agent;
-         rotation = existingState.rotation ?? null;
+         // existingState is guaranteed non-null when status === "resume"
+         const state = existingState!;
+         minIterations = state.minIterations;
+         maxIterations = state.maxIterations;
+         completionPromise = state.completionPromise;
+         abortPromise = state.abortPromise ?? "";
+         tasksMode = state.tasksMode;
+         taskPromise = state.taskPromise;
+         prompt = state.prompt;
+         promptTemplatePath = state.promptTemplate ?? "";
+         model = state.model;
+         agentType = state.agent;
+         rotation = state.rotation ?? null;
          if (!stallRetriesProvided) {
-            stallRetries = existingState.stallRetries ?? false;
+            stallRetries = state.stallRetries ?? false;
          }
          if (!stallRetryMinutesProvided) {
-            stallRetryMinutes = existingState.stallRetryMinutes ?? 15;
+            stallRetryMinutes = state.stallRetryMinutes ?? 15;
          }
          if (ownership.ownerPid && ownership.ownerPid !== process.pid) {
             console.log(`⚠️  Recovered stale active state from PID ${ownership.ownerPid}`);
@@ -3113,7 +3061,7 @@ Unable to read ${currentTasksFileLabel()}
 
          const usingRotation = !!(state.rotation && state.rotation.length > 0);
          let rotationIndex = usingRotation
-            ? ((state.rotationIndex ?? 0) % state.rotation.length + state.rotation.length) % state.rotation.length
+            ? ((state.rotationIndex ?? 0) % state.rotation!.length + state.rotation!.length) % state.rotation!.length
             : 0;
          let currentAgent: AgentType = state.agent;
          let currentModel = state.model;

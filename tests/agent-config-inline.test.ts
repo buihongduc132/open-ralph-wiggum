@@ -187,8 +187,9 @@ describe("Group 4: envBlock", () => {
   it("4c: no envBlock — returns full process.env copy", () => {
     const cfg = createAgentConfig({ type: "myagent", command: "myagent", configName: "MyAgent", args: ["run", "{{prompt}}"] });
     const env = cfg.buildEnv({});
-    expect(env["PATH"]).toBe(process.env["PATH"]);
-    expect(env["HOME"]).toBe(process.env["HOME"]);
+    // PATH and HOME are always defined in a shell environment
+    expect(env["PATH"]).toBe(process.env["PATH"]!);
+    expect(env["HOME"]).toBe(process.env["HOME"]!);
   });
 });
 

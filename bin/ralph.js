@@ -171,6 +171,74 @@ function selectRotationEntry(rotation, rotationIndex, blacklistedAgents) {
   };
 }
 
+// agent-builders.ts
+var ARGS_TEMPLATES = {
+  opencode: (prompt, model, options) => {
+    const cmdArgs = ["run"];
+    const hasPassthroughModel = options?.extraFlags?.includes("--model") || options?.skipModelFlag;
+    if (model && !hasPassthroughModel)
+      cmdArgs.push("-m", model);
+    if (options?.extraFlags?.length)
+      cmdArgs.push(...options.extraFlags);
+    cmdArgs.push(prompt);
+    return cmdArgs;
+  },
+  "opencode-raw": (prompt, model, options) => {
+    const cmdArgs = [];
+    const hasPassthroughModel = options?.extraFlags?.includes("--model") || options?.skipModelFlag;
+    if (model && !hasPassthroughModel)
+      cmdArgs.push("-m", model);
+    if (options?.extraFlags?.length)
+      cmdArgs.push(...options.extraFlags);
+    cmdArgs.push(prompt);
+    return cmdArgs;
+  },
+  "claude-code": (prompt, model, options) => {
+    const cmdArgs = ["-p", prompt];
+    if (options?.streamOutput)
+      cmdArgs.push("--output-format", "stream-json", "--include-partial-messages", "--verbose");
+    if (model)
+      cmdArgs.push("--model", model);
+    if (options?.allowAllPermissions)
+      cmdArgs.push("--dangerously-skip-permissions");
+    if (options?.extraFlags?.length)
+      cmdArgs.push(...options.extraFlags);
+    return cmdArgs;
+  },
+  codex: (prompt, model, options) => {
+    const cmdArgs = ["exec"];
+    if (model)
+      cmdArgs.push("--model", model);
+    if (options?.allowAllPermissions)
+      cmdArgs.push("--full-auto");
+    if (options?.extraFlags?.length)
+      cmdArgs.push(...options.extraFlags);
+    cmdArgs.push(prompt);
+    return cmdArgs;
+  },
+  copilot: (prompt, model, options) => {
+    const cmdArgs = ["-p", prompt];
+    if (model)
+      cmdArgs.push("--model", model);
+    if (options?.allowAllPermissions)
+      cmdArgs.push("--allow-all", "--no-ask-user");
+    if (options?.extraFlags?.length)
+      cmdArgs.push(...options.extraFlags);
+    return cmdArgs;
+  },
+  default: (prompt, model, options) => {
+    const cmdArgs = [];
+    if (model)
+      cmdArgs.push("--model", model);
+    if (options?.allowAllPermissions)
+      cmdArgs.push("--full-auto");
+    if (options?.extraFlags?.length)
+      cmdArgs.push(...options.extraFlags);
+    cmdArgs.push(prompt);
+    return cmdArgs;
+  }
+};
+
 // template-utils.ts
 function stripFrontmatter(content) {
   const fmMatch = content.match(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---\r?\n/);
@@ -233,8 +301,6 @@ var PARSE_PATTERNS = {
     }
     return null;
   },
-  codex: null,
-  copilot: null,
   default: (line) => {
     const match = stripAnsi(line).match(/(?:Tool:|Using|Called|Running)\s+([A-Za-z0-9_-]+)/i);
     return match ? match[1] : null;
@@ -246,70 +312,6 @@ var defaultParseToolOutput = (line) => {
 };
 PARSE_PATTERNS["codex"] = defaultParseToolOutput;
 PARSE_PATTERNS["copilot"] = defaultParseToolOutput;
-var ARGS_TEMPLATES = {
-  opencode: (prompt, model, options) => {
-    const cmdArgs = ["run"];
-    if (model)
-      cmdArgs.push("-m", model);
-    if (options?.extraFlags?.length)
-      cmdArgs.push(...options.extraFlags);
-    cmdArgs.push(prompt);
-    return cmdArgs;
-  },
-  "opencode-raw": (prompt, model, options) => {
-    const cmdArgs = [];
-    if (model)
-      cmdArgs.push("-m", model);
-    if (options?.extraFlags?.length)
-      cmdArgs.push(...options.extraFlags);
-    cmdArgs.push(prompt);
-    return cmdArgs;
-  },
-  "claude-code": (prompt, model, options) => {
-    const cmdArgs = ["-p", prompt];
-    if (options?.streamOutput)
-      cmdArgs.push("--output-format", "stream-json", "--include-partial-messages", "--verbose");
-    if (model)
-      cmdArgs.push("--model", model);
-    if (options?.allowAllPermissions)
-      cmdArgs.push("--dangerously-skip-permissions");
-    if (options?.extraFlags?.length)
-      cmdArgs.push(...options.extraFlags);
-    return cmdArgs;
-  },
-  codex: (prompt, model, options) => {
-    const cmdArgs = ["exec"];
-    if (model)
-      cmdArgs.push("--model", model);
-    if (options?.allowAllPermissions)
-      cmdArgs.push("--full-auto");
-    if (options?.extraFlags?.length)
-      cmdArgs.push(...options.extraFlags);
-    cmdArgs.push(prompt);
-    return cmdArgs;
-  },
-  copilot: (prompt, model, options) => {
-    const cmdArgs = ["-p", prompt];
-    if (model)
-      cmdArgs.push("--model", model);
-    if (options?.allowAllPermissions)
-      cmdArgs.push("--allow-all", "--no-ask-user");
-    if (options?.extraFlags?.length)
-      cmdArgs.push(...options.extraFlags);
-    return cmdArgs;
-  },
-  default: (prompt, model, options) => {
-    const cmdArgs = [];
-    if (model)
-      cmdArgs.push("--model", model);
-    if (options?.allowAllPermissions)
-      cmdArgs.push("--full-auto");
-    if (options?.extraFlags?.length)
-      cmdArgs.push(...options.extraFlags);
-    cmdArgs.push(prompt);
-    return cmdArgs;
-  }
-};
 function loadPluginsFromConfig(configPath) {
   if (!existsSync(configPath)) {
     return [];
@@ -2355,12 +2357,13 @@ Your answer: `, (answer) => {
       const reader = stream.getReader();
       const decoder = new TextDecoder;
       let buffer = "";
-      const abortPromise2 = options.abortSignal ? new Promise((resolve2, reject) => {
+      const abortPromise2 = options.abortSignal ? new Promise((resolve2) => {
+        const signal = options.abortSignal;
         const handler = () => {
-          options.abortSignal?.removeEventListener("abort", handler);
+          signal.removeEventListener("abort", handler);
           resolve2({ value: undefined, done: true });
         };
-        options.abortSignal.addEventListener("abort", handler);
+        signal.addEventListener("abort", handler);
       }) : new Promise(() => {});
       while (true) {
         const result = options.abortSignal ? await Promise.race([reader.read(), abortPromise2]) : await reader.read();
@@ -2492,7 +2495,7 @@ Your answer: `, (answer) => {
   }
   async function runRalphLoop() {
     if (!agentType)
-      agentType = initialAgentType ?? "opencode";
+      agentType = "opencode";
     const existingState = loadState();
     const ownership = decideLoopOwnership(existingState, process.pid);
     if (ownership.status === "already-running") {
@@ -2502,22 +2505,23 @@ Your answer: `, (answer) => {
     }
     const resuming = ownership.status === "resume";
     if (resuming) {
-      minIterations = existingState.minIterations;
-      maxIterations = existingState.maxIterations;
-      completionPromise = existingState.completionPromise;
-      abortPromise = existingState.abortPromise ?? "";
-      tasksMode = existingState.tasksMode;
-      taskPromise = existingState.taskPromise;
-      prompt = existingState.prompt;
-      promptTemplatePath = existingState.promptTemplate ?? "";
-      model = existingState.model;
-      agentType = existingState.agent;
-      rotation = existingState.rotation ?? null;
+      const state2 = existingState;
+      minIterations = state2.minIterations;
+      maxIterations = state2.maxIterations;
+      completionPromise = state2.completionPromise;
+      abortPromise = state2.abortPromise ?? "";
+      tasksMode = state2.tasksMode;
+      taskPromise = state2.taskPromise;
+      prompt = state2.prompt;
+      promptTemplatePath = state2.promptTemplate ?? "";
+      model = state2.model;
+      agentType = state2.agent;
+      rotation = state2.rotation ?? null;
       if (!stallRetriesProvided) {
-        stallRetries = existingState.stallRetries ?? false;
+        stallRetries = state2.stallRetries ?? false;
       }
       if (!stallRetryMinutesProvided) {
-        stallRetryMinutes = existingState.stallRetryMinutes ?? 15;
+        stallRetryMinutes = state2.stallRetryMinutes ?? 15;
       }
       if (ownership.ownerPid && ownership.ownerPid !== process.pid) {
         console.log(`\u26A0\uFE0F  Recovered stale active state from PID ${ownership.ownerPid}`);
@@ -3198,6 +3202,5 @@ ${answerContext}`);
 export {
   resolveCommand,
   loadAgentConfig,
-  createAgentConfig,
-  ARGS_TEMPLATES
+  createAgentConfig
 };
