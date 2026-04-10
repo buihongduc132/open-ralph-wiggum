@@ -3530,11 +3530,9 @@ Unable to read ${currentTasksFileLabel()}
             if (state.rotation && state.rotation.length > 0) {
                state.rotationIndex = ((state.rotationIndex ?? 0) + 1) % state.rotation.length;
             }
-            if (exitCode !== 0) {
+            if (exitCode !== 0 && usingRotation) {
                const fallbackPool = getFallbackPool(state);
-               const currentFallbackKey = usingRotation
-                  ? state.rotation![rotationIndex]
-                  : getFallbackKey(currentAgent, currentModel);
+               const currentFallbackKey = state.rotation![rotationIndex];
                state.fallbackBlacklist = markFallbackExhausted(state.fallbackBlacklist, currentFallbackKey);
                const exhaustedAllFallbacks = fallbackPool.every(entry => state.fallbackBlacklist?.includes(entry));
                const willContinue = !(maxIterations > 0 && state.iteration + 1 > maxIterations);
