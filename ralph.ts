@@ -739,7 +739,7 @@ Options:
                       rotate: Switch to next agent and blacklist current one
   --heartbeat-interval DURATION  How often to print heartbeat status messages (default: 10s)
                        Supports: ms, s, m, h (e.g., 5000, 30s, 5m, 2h)
-  --pre-start-timeout MS   Timeout for pre-start stalling detection in ms (default: auto=1/3 stalling-timeout)
+  --pre-start-timeout MS   Timeout for pre-start stalling detection in ms (default: auto=1/10 stalling-timeout)
                        Set to 0 to disable, or a specific value (e.g., 1000 for 1 second)
   --state-dir PATH    Use a custom state directory for state-management commands instead of ./.ralph
   --toml-config PATH  Use runtime config from a TOML file
@@ -2719,7 +2719,7 @@ Unable to read ${currentTasksFileLabel()}
          // Get hash for each file (using git hash-object for content comparison)
          for (const file of allFiles) {
             try {
-               const hash = await $`git hash-object ${file} 2>/dev/null || stat -f '%m' ${file} 2>/dev/null || echo ''`.cwd(cwd).text();
+               const hash = await $`git hash-object ${file} 2>/dev/null || stat -c '%Y' ${file} 2>/dev/null || echo ''`.cwd(cwd).text();
                files.set(file, hash.trim());
             } catch {
                // File may not exist, skip
@@ -2807,7 +2807,9 @@ Unable to read ${currentTasksFileLabel()}
          promptTemplatePath = state.promptTemplate ?? "";
          model = state.model;
          agentType = state.agent;
-         rotation = state.rotation ?? null;
+         if (!rotationInput) {
+            rotation = state.rotation ?? null;
+         }
          if (!stallRetriesProvided) {
             stallRetries = state.stallRetries ?? false;
          }
