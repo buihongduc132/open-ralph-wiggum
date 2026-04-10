@@ -242,24 +242,5 @@ describe("Group 6: loadAgentConfig — custom agent types accepted", () => {
     expect(cfg.buildArgs("test", "", { allowAllPermissions: true })).toEqual(["agent", "run", "--task", "test", "--full-auto"]);
   });
 
-  it("6d: promptViaStdin is passed through to AgentConfig", () => {
-    const cfg = createAgentConfig({
-      type: "pi", command: "pi", configName: "Pi",
-      args: ["--model", "{{model}}"],
-      promptViaStdin: true,
-    });
-    expect(cfg.promptViaStdin).toBe(true);
-    // Note: {{model}} emits --model flag, so "--model" + "{{model}}" → ["--model", "--model", "gemini-2.0-flash"]
-    expect(cfg.buildArgs("hello", "gemini-2.0-flash", {})).toEqual(["--model", "--model", "gemini-2.0-flash"]);
-  });
-
-  it("6e: promptViaStdin defaults to undefined for agents without it", () => {
-    const cfg = createAgentConfig({
-      type: "my-agent", command: "my-agent", configName: "My Agent",
-      args: ["--task", "{{prompt}}"],
-    });
-    expect(cfg.promptViaStdin).toBeUndefined();
-    expect(cfg.buildArgs("hello", "", {})).toEqual(["--task", "hello"]);
-  });
 });
 

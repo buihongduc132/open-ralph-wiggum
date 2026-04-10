@@ -77,7 +77,6 @@ interface AgentConfig {
    buildEnv: (options: AgentEnvOptions) => Record<string, string>;
    parseToolOutput: (line: string) => string | null;
    configName: string;
-   promptViaStdin?: boolean;
 }
 
 interface JsonAgentConfig {
@@ -91,7 +90,6 @@ interface JsonAgentConfig {
    toolPattern?: string;
    allowAllFlags?: string[];
    envBlock?: Record<string, string>;
-   promptViaStdin?: boolean;
 }
 
 interface RalphConfig {
@@ -299,7 +297,6 @@ export function createAgentConfig(json: JsonAgentConfig, basePath?: string): Age
             return match ? (match[1] ?? null) : null;
          },
          configName: json.configName,
-         promptViaStdin: json.promptViaStdin,
       };
    }
 
@@ -315,7 +312,6 @@ export function createAgentConfig(json: JsonAgentConfig, basePath?: string): Age
       buildEnv: ENV_TEMPLATES[envTemplate as keyof typeof ENV_TEMPLATES] || ENV_TEMPLATES["default"],
       parseToolOutput: PARSE_PATTERNS[parsePattern] || PARSE_PATTERNS["default"],
       configName: json.configName,
-      promptViaStdin: json.promptViaStdin,
    };
 }
 
