@@ -1725,11 +1725,7 @@ Learn more: https://ghuntley.com/ralph/
             console.error("Error: --pre-start-timeout requires a value (ms, or -1 to disable)");
             process.exit(1);
          }
-         const parsed = parseDuration(val);
-         if (isNaN(parsed)) {
-            console.error("Error: --pre-start-timeout requires a duration (e.g., 500, 2s, 1m, or 0 to disable)");
-         }
-         preStartTimeoutMs = parsed;
+         preStartTimeoutMs = parseDuration(val);
       } else if (arg === "--model") {
          const val = args[++i];
          if (!val) {
