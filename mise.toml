@@ -78,3 +78,12 @@ run = "rm -rf results/weekend_grid && echo 'Cache cleared'"
 [tasks."weekend-grid:status"]
 description = "Print current progress from progress.md"
 run = "cat flow/plans/weekend-grid/progress.md"
+
+[tasks."build:dev"]
+description = "Build JS bundle and deploy as ralph-dev"
+dir = "/home/bhd/Documents/Projects/bhd/open-ralph-wiggum"
+run = '''
+bun build ralph.ts --outfile bin/ralph.js --target bun
+cp bin/ralph.js ~/.local/bin/ralph-dev.js
+echo "Deployed: ~/.local/bin/ralph-dev.js"
+'''
