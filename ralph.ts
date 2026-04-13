@@ -750,10 +750,12 @@ Options:
   --questions         Enable interactive question handling (default: enabled)
   --no-questions      Disable interactive question handling (agent will loop on questions)
   --no-plugins        Disable non-auth OpenCode plugins for this run (opencode only)
-  --stall-retries     Sleep and restart after all fallbacks are exhausted
-  --stall-retry-minutes N  Minutes to sleep before restarting exhausted fallbacks (default: 15)
-  --no-commit         Don't auto-commit after each iteration
-  --allow-all         Auto-approve all tool permissions (default: on)
+   --stall-retries     Sleep and restart after all fallbacks are exhausted
+   --stall-retry-minutes N  Minutes to sleep before restarting exhausted fallbacks (default: 15)
+   --no-commit         Don't auto-commit after each iteration
+   --reuse-state       Explicitly reuse existing state when config differs from stored state
+                       (use this when intentionally resuming a loop with different args)
+   --allow-all         Auto-approve all tool permissions (default: on)
   --no-allow-all      Require interactive permission prompts
   --config PATH       Use custom agent config file
   --init-config       Initialize agent config and runtime config
@@ -1508,6 +1510,9 @@ Learn more: https://ghuntley.com/ralph/
    let stallRetryMinutes = 15;
    let stallRetriesProvided = false;
    let stallRetryMinutesProvided = false;
+   let maxIterationsProvided = false;
+   let minIterationsProvided = false;
+   let reuseState = false;
 
    const promptParts: string[] = [];
    let extraAgentFlags: string[] = [];
@@ -1647,6 +1652,7 @@ Learn more: https://ghuntley.com/ralph/
             process.exit(1);
          }
          minIterations = parseInt(val);
+         minIterationsProvided = true;
       } else if (arg === "--max-iterations") {
          const val = args[++i];
          if (!val || isNaN(parseInt(val))) {
@@ -1654,6 +1660,7 @@ Learn more: https://ghuntley.com/ralph/
             process.exit(1);
          }
          maxIterations = parseInt(val);
+         maxIterationsProvided = true;
       } else if (arg === "--completion-promise") {
          const val = args[++i];
          if (!val) {
@@ -1757,6 +1764,8 @@ Learn more: https://ghuntley.com/ralph/
          allowAllPermissions = true;
       } else if (arg === "--no-allow-all") {
          allowAllPermissions = false;
+      } else if (arg === "--reuse-state") {
+         reuseState = true;
       } else if (arg === "--questions") {
          handleQuestions = true;
       } else if (arg === "--no-questions") {
@@ -2793,34 +2802,80 @@ Unable to read ${currentTasksFileLabel()}
          process.exit(1);
       }
 
-      const resuming = ownership.status === "resume";
-      if (resuming) {
-         // existingState is guaranteed non-null when status === "resume"
-         const state = existingState!;
-         minIterations = state.minIterations;
-         maxIterations = state.maxIterations;
-         completionPromise = state.completionPromise;
-         abortPromise = state.abortPromise ?? "";
-         tasksMode = state.tasksMode;
-         taskPromise = state.taskPromise;
-         prompt = state.prompt;
-         promptTemplatePath = state.promptTemplate ?? "";
-         model = state.model;
-         agentType = state.agent;
-         if (!rotationInput) {
-            rotation = state.rotation ?? null;
-         }
-         if (!stallRetriesProvided) {
-            stallRetries = state.stallRetries ?? false;
-         }
-         if (!stallRetryMinutesProvided) {
-            stallRetryMinutes = state.stallRetryMinutes ?? 15;
-         }
-         if (ownership.ownerPid && ownership.ownerPid !== process.pid) {
-            console.log(`⚠️  Recovered stale active state from PID ${ownership.ownerPid}`);
-         }
-         console.log(`🔄 Resuming Ralph loop from ${statePath}`);
-      }
+       const resuming = ownership.status === "resume";
+
+       // ── Config mismatch check: run BEFORE decideLoopOwnership exit path.
+       // This ensures we detect config drift before being blocked by the
+       // "already-running" guard, giving a more informative error.
+       if (existingState?.active && !reuseState) {
+          const mismatches: string[] = [];
+          if (existingState.agent !== agentType) {
+             mismatches.push(`agent (stored: ${existingState.agent}, current: ${agentType})`);
+          }
+          if (existingState.model && existingState.model !== model && model !== "") {
+             mismatches.push(`model (stored: ${existingState.model}, current: ${model})`);
+          }
+          if (existingState.minIterations !== minIterations && minIterationsProvided) {
+             mismatches.push(`min-iterations (stored: ${existingState.minIterations}, current: ${minIterations})`);
+          }
+          if (existingState.maxIterations !== maxIterations && maxIterationsProvided) {
+             mismatches.push(`max-iterations (stored: ${existingState.maxIterations}, current: ${maxIterations})`);
+          }
+          if (existingState.completionPromise !== completionPromise) {
+             mismatches.push(`completion-promise (stored: ${existingState.completionPromise}, current: ${completionPromise})`);
+          }
+          if (!!existingState.rotation !== (!!rotation) ||
+             (existingState.rotation && rotation &&
+              JSON.stringify(existingState.rotation.sort()) !== JSON.stringify([...rotation].sort()))) {
+             mismatches.push("rotation");
+          }
+          if (existingState.tasksMode !== tasksMode) {
+             mismatches.push(`tasks mode (stored: ${existingState.tasksMode}, current: ${tasksMode})`);
+          }
+          if (mismatches.length > 0) {
+             console.error(`\n❌ Config Mismatch: stored state was created with different arguments.`);
+             console.error(`   Detected difference(s): ${mismatches.join("; ")}`);
+             console.error(`\nTo reuse the existing state, pass --reuse-state:`);
+             console.error(`   ralph --reuse-state [your args...]`);
+             console.error(`\nTo start fresh, clear the state file:`);
+             console.error(`   rm ${statePath}`);
+             process.exit(1);
+          }
+       }
+
+       if (ownership.status === "already-running") {
+          console.error(`Error: Ralph loop is already running with PID ${ownership.ownerPid}.`);
+          console.error(`Stop the existing process or clear ${statePath} if it is stale.`);
+          process.exit(1);
+       }
+
+       if (resuming) {
+          // existingState is guaranteed non-null when status === "resume"
+          const state = existingState!;
+          minIterations = state.minIterations;
+          maxIterations = state.maxIterations;
+          completionPromise = state.completionPromise;
+          abortPromise = state.abortPromise ?? "";
+          tasksMode = state.tasksMode;
+          taskPromise = state.taskPromise;
+          prompt = state.prompt;
+          promptTemplatePath = state.promptTemplate ?? "";
+          model = state.model;
+          agentType = state.agent;
+          if (!rotationInput) {
+             rotation = state.rotation ?? null;
+          }
+          if (!stallRetriesProvided) {
+             stallRetries = state.stallRetries ?? false;
+          }
+          if (!stallRetryMinutesProvided) {
+             stallRetryMinutes = state.stallRetryMinutes ?? 15;
+          }
+          if (ownership.ownerPid && ownership.ownerPid !== process.pid) {
+             console.log(`⚠️  Recovered stale active state from PID ${ownership.ownerPid}`);
+          }
+          console.log(`🔄 Resuming Ralph loop from ${statePath}`);
+       }
 
       if (tasksMode && completionPromise.trim() === taskPromise.trim()) {
          console.error("Error: completion and task promises must be different in tasks mode.");
@@ -3096,7 +3151,7 @@ Unable to read ${currentTasksFileLabel()}
          const iterationStart = Date.now();
 
          try {
-            // Build command arguments (permission flags are handled inside buildArgs)
+             // Build command arguments (permission flags are handled inside buildArgs)
             const cmdArgs = agentConfig.buildArgs(fullPrompt, currentModel, {
                allowAllPermissions,
                extraFlags: extraAgentFlags,
@@ -3107,6 +3162,10 @@ Unable to read ${currentTasksFileLabel()}
                filterPlugins: disablePlugins,
                allowAllPermissions: allowAllPermissions,
             });
+
+            console.log(`DEBUG: Agent Command: ${agentConfig.command}`);
+            console.log(`DEBUG: Agent Args: ${JSON.stringify(cmdArgs)}`);
+            console.log(`DEBUG: Agent Env (OPENCODE_CONFIG): ${env.OPENCODE_CONFIG}`);
 
             // Run agent using spawn for better argument handling
             // preventing the 5s delay when detecting stalling. stdin is not used anyway.
