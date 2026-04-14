@@ -1,12 +1,6 @@
 #!/usr/bin/env bun
 // @bun
-var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
-  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
-}) : x)(function(x) {
-  if (typeof require !== "undefined")
-    return require.apply(this, arguments);
-  throw Error('Dynamic require of "' + x + '" is not supported');
-});
+var __require = import.meta.require;
 
 // ralph.ts
 var {$ } = globalThis.Bun;
@@ -51,7 +45,7 @@ function tasksMarkdownAllComplete(tasksMarkdown) {
 }
 
 // loop-runtime.ts
-var {readFileSync} = (() => ({}));
+import { readFileSync } from "fs";
 
 class StreamActivityTracker {
   now;
@@ -376,6 +370,7 @@ var ENV_TEMPLATES = {
         allowAllPermissions: options.allowAllPermissions
       });
     }
+    env.OPENCODE_CONFIG_DIR = stateDir;
     return env;
   },
   default: () => ({ ...process.env })
@@ -440,8 +435,7 @@ function createAgentConfig(json, basePath) {
         const match = line.match(toolRegex);
         return match ? match[1] ?? null : null;
       },
-      configName: json.configName,
-      promptViaStdin: json.promptViaStdin
+      configName: json.configName
     };
   }
   const argsTemplate = json.argsTemplate || "default";
@@ -453,8 +447,7 @@ function createAgentConfig(json, basePath) {
     buildArgs: ARGS_TEMPLATES[argsTemplate] || ARGS_TEMPLATES["default"],
     buildEnv: ENV_TEMPLATES[envTemplate] || ENV_TEMPLATES["default"],
     parseToolOutput: PARSE_PATTERNS[parsePattern] || PARSE_PATTERNS["default"],
-    configName: json.configName,
-    promptViaStdin: json.promptViaStdin
+    configName: json.configName
   };
 }
 function getDefaultConfig() {
@@ -1053,6 +1046,8 @@ Fix: rm ${stateDir}  # remove the file/symlink`);
     try {
       let template = readFileSync2(templatePath, "utf-8");
       template = stripFrontmatter(template);
+      if (!template?.trim())
+        return null;
       const context = loadContext() || "";
       let tasksContent = "";
       if (state.tasksMode && existsSync(tasksPath)) {
@@ -1436,7 +1431,7 @@ Options:
                       rotate: Switch to next agent and blacklist current one
   --heartbeat-interval DURATION  How often to print heartbeat status messages (default: 10s)
                        Supports: ms, s, m, h (e.g., 5000, 30s, 5m, 2h)
-  --pre-start-timeout MS   Timeout for pre-start stalling detection in ms (default: auto=1/3 stalling-timeout)
+  --pre-start-timeout MS   Timeout for pre-start stalling detection in ms (default: auto=1/10 stalling-timeout)
                        Set to 0 to disable, or a specific value (e.g., 1000 for 1 second)
   --state-dir PATH    Use a custom state directory for state-management commands instead of ./.ralph
   --toml-config PATH  Use runtime config from a TOML file
@@ -1447,10 +1442,12 @@ Options:
   --questions         Enable interactive question handling (default: enabled)
   --no-questions      Disable interactive question handling (agent will loop on questions)
   --no-plugins        Disable non-auth OpenCode plugins for this run (opencode only)
-  --stall-retries     Sleep and restart after all fallbacks are exhausted
-  --stall-retry-minutes N  Minutes to sleep before restarting exhausted fallbacks (default: 15)
-  --no-commit         Don't auto-commit after each iteration
-  --allow-all         Auto-approve all tool permissions (default: on)
+   --stall-retries     Sleep and restart after all fallbacks are exhausted
+   --stall-retry-minutes N  Minutes to sleep before restarting exhausted fallbacks (default: 15)
+   --no-commit         Don't auto-commit after each iteration
+   --reuse-state       Explicitly reuse existing state when config differs from stored state
+                       (use this when intentionally resuming a loop with different args)
+   --allow-all         Auto-approve all tool permissions (default: on)
   --no-allow-all      Require interactive permission prompts
   --config PATH       Use custom agent config file
   --init-config       Initialize agent config and runtime config
@@ -1956,6 +1953,9 @@ ${newEntry}`);
   let stallRetryMinutes = 15;
   let stallRetriesProvided = false;
   let stallRetryMinutesProvided = false;
+  let maxIterationsProvided = false;
+  let minIterationsProvided = false;
+  let reuseState = false;
   const promptParts = [];
   let extraAgentFlags = [];
   let passthroughAgentFlags = [];
@@ -2047,6 +2047,7 @@ ${newEntry}`);
         process.exit(1);
       }
       minIterations = parseInt(val);
+      minIterationsProvided = true;
     } else if (arg === "--max-iterations") {
       const val = args[++i];
       if (!val || isNaN(parseInt(val))) {
@@ -2054,6 +2055,7 @@ ${newEntry}`);
         process.exit(1);
       }
       maxIterations = parseInt(val);
+      maxIterationsProvided = true;
     } else if (arg === "--completion-promise") {
       const val = args[++i];
       if (!val) {
@@ -2121,11 +2123,7 @@ ${newEntry}`);
         console.error("Error: --pre-start-timeout requires a value (ms, or -1 to disable)");
         process.exit(1);
       }
-      const parsed = parseDuration(val);
-      if (isNaN(parsed)) {
-        console.error("Error: --pre-start-timeout requires a duration (e.g., 500, 2s, 1m, or 0 to disable)");
-      }
-      preStartTimeoutMs = parsed;
+      preStartTimeoutMs = parseDuration(val);
     } else if (arg === "--model") {
       const val = args[++i];
       if (!val) {
@@ -2161,6 +2159,8 @@ ${newEntry}`);
       allowAllPermissions = true;
     } else if (arg === "--no-allow-all") {
       allowAllPermissions = false;
+    } else if (arg === "--reuse-state") {
+      reuseState = true;
     } else if (arg === "--questions") {
       handleQuestions = true;
     } else if (arg === "--no-questions") {
@@ -2227,12 +2227,23 @@ ${newEntry}`);
     } else if (passthroughAgentFlags[i] === "--stall-retry-minutes" && passthroughAgentFlags[i + 1]) {
       stallRetryMinutes = parseInt(passthroughAgentFlags[i + 1]);
       i++;
+    } else if (passthroughAgentFlags[i] === "--state-dir" && passthroughAgentFlags[i + 1]) {
+      stateDirInput = resolve(passthroughAgentFlags[i + 1]);
+      setStatePaths(stateDirInput);
+      i++;
     }
   }
   const usingCustomStateDir = stateDir !== resolve(process.cwd(), ".ralph");
   if (usingCustomStateDir && autoCommit) {
     console.error("Error: --state-dir currently requires --no-commit.");
     console.error("Shared git/worktree side effects are not isolated for custom state directories yet.");
+    process.exit(1);
+  }
+  const passthroughHasStateDir = passthroughAgentFlags.includes("--state-dir");
+  if (passthroughHasStateDir && autoCommit) {
+    console.error("Error: --state-dir in passthrough (after --) requires --no-commit in Ralph's own args.");
+    console.error("Place --state-dir BEFORE the -- separator, and add --no-commit:");
+    console.error('  ralph "task" --state-dir ./dir/ --no-commit -- --agent ...');
     process.exit(1);
   }
   if (rotationInput) {
@@ -2432,7 +2443,7 @@ Your answer: `, (answer) => {
     let preStartTimer = null;
     const preStartTimeoutRaw = options.preStartTimeoutMs === undefined ? -1 : options.preStartTimeoutMs;
     const stallingTimeout = options.stallingTimeoutMs ?? 2 * 60 * 60 * 1000;
-    const effectivePreStartTimeout = preStartTimeoutRaw === -1 ? Math.floor(stallingTimeout / 3) : preStartTimeoutRaw;
+    const effectivePreStartTimeout = preStartTimeoutRaw === -1 ? Math.floor(stallingTimeout / 10) : preStartTimeoutRaw;
     if (effectivePreStartTimeout > 0) {
       preStartTimer = setTimeout(() => {
         if (!firstOutputReceived && proc.exitCode === null) {
@@ -2486,7 +2497,7 @@ Your answer: `, (answer) => {
       }
       for (const file of allFiles) {
         try {
-          const hash = await $`git hash-object ${file} 2>/dev/null || stat -f '%m' ${file} 2>/dev/null || echo ''`.cwd(cwd).text();
+          const hash = await $`git hash-object ${file} 2>/dev/null || stat -c '%Y' ${file} 2>/dev/null || echo ''`.cwd(cwd).text();
           files.set(file, hash.trim());
         } catch {}
       }
@@ -2504,11 +2515,54 @@ Your answer: `, (answer) => {
       process.exit(1);
     }
     const resuming = ownership.status === "resume";
+    if (existingState?.active && !reuseState) {
+      const mismatches = [];
+      if (existingState.agent !== agentType) {
+        mismatches.push(`agent (stored: ${existingState.agent}, current: ${agentType})`);
+      }
+      if (existingState.model && existingState.model !== model && model !== "") {
+        mismatches.push(`model (stored: ${existingState.model}, current: ${model})`);
+      }
+      if (existingState.minIterations !== minIterations && minIterationsProvided) {
+        mismatches.push(`min-iterations (stored: ${existingState.minIterations}, current: ${minIterations})`);
+      }
+      if (existingState.maxIterations !== maxIterations && maxIterationsProvided) {
+        mismatches.push(`max-iterations (stored: ${existingState.maxIterations}, current: ${maxIterations})`);
+      }
+      if (existingState.completionPromise !== completionPromise) {
+        mismatches.push(`completion-promise (stored: ${existingState.completionPromise}, current: ${completionPromise})`);
+      }
+      if (!!existingState.rotation !== !!rotation || existingState.rotation && rotation && JSON.stringify(existingState.rotation.sort()) !== JSON.stringify([...rotation].sort())) {
+        mismatches.push("rotation");
+      }
+      if (existingState.tasksMode !== tasksMode) {
+        mismatches.push(`tasks mode (stored: ${existingState.tasksMode}, current: ${tasksMode})`);
+      }
+      if (mismatches.length > 0) {
+        console.error(`
+\u274C Config Mismatch: stored state was created with different arguments.`);
+        console.error(`   Detected difference(s): ${mismatches.join("; ")}`);
+        console.error(`
+To reuse the existing state, pass --reuse-state:`);
+        console.error(`   ralph --reuse-state [your args...]`);
+        console.error(`
+To start fresh, clear the state file:`);
+        console.error(`   rm ${statePath}`);
+        process.exit(1);
+      }
+    }
+    if (ownership.status === "already-running") {
+      console.error(`Error: Ralph loop is already running with PID ${ownership.ownerPid}.`);
+      console.error(`Stop the existing process or clear ${statePath} if it is stale.`);
+      process.exit(1);
+    }
     if (resuming) {
       const state2 = existingState;
       minIterations = state2.minIterations;
       maxIterations = state2.maxIterations;
-      completionPromise = state2.completionPromise;
+      if (state2.completionPromise) {
+        completionPromise = state2.completionPromise;
+      }
       abortPromise = state2.abortPromise ?? "";
       tasksMode = state2.tasksMode;
       taskPromise = state2.taskPromise;
@@ -2516,7 +2570,9 @@ Your answer: `, (answer) => {
       promptTemplatePath = state2.promptTemplate ?? "";
       model = state2.model;
       agentType = state2.agent;
-      rotation = state2.rotation ?? null;
+      if (!rotationInput) {
+        rotation = state2.rotation ?? null;
+      }
       if (!stallRetriesProvided) {
         stallRetries = state2.stallRetries ?? false;
       }
@@ -2614,7 +2670,9 @@ Your answer: `, (answer) => {
     if (stallRetryMinutesProvided || state.stallRetryMinutes === undefined) {
       state.stallRetryMinutes = stallRetryMinutes;
     }
-    saveState(state);
+    try {
+      saveState(state);
+    } catch {}
     if (tasksMode && !existsSync(tasksPath)) {
       if (!existsSync(stateDir)) {
         mkdirSync(stateDir, { recursive: true });
@@ -2631,7 +2689,9 @@ Add your tasks below using: \`ralph --add-task "description"\`
       struggleIndicators: { repeatedErrors: {}, noProgressIterations: 0, shortIterations: 0 }
     };
     if (!resuming) {
-      saveHistory(history);
+      try {
+        saveHistory(history);
+      } catch {}
     }
     const promptPreview = prompt.replace(/\s+/g, " ").substring(0, 80) + (prompt.length > 80 ? "..." : "");
     if (promptSource) {
@@ -2716,7 +2776,9 @@ Gracefully stopping Ralph loop...`);
           console.log(`\uD83D\uDCCB Blacklist expired for ${agent}`);
         }
         state.blacklistedAgents = active;
-        saveState(state);
+        try {
+          saveState(state);
+        } catch {}
       }
       const usingRotation = !!(state.rotation && state.rotation.length > 0);
       let rotationIndex2 = usingRotation ? ((state.rotationIndex ?? 0) % state.rotation.length + state.rotation.length) % state.rotation.length : 0;
@@ -2738,7 +2800,9 @@ Gracefully stopping Ralph loop...`);
 \u26A0\uFE0F  All agents in rotation are blacklisted. Clearing blacklists.`);
           }
           state.blacklistedAgents = [];
-          saveState(state);
+          try {
+            saveState(state);
+          } catch {}
         }
         rotationIndex2 = selection.rotationIndex;
         const [entryAgent, entryModel] = selection.entry.split(":");
@@ -2759,6 +2823,9 @@ Gracefully stopping Ralph loop...`);
           filterPlugins: disablePlugins,
           allowAllPermissions
         });
+        console.log(`DEBUG: Agent Command: ${agentConfig2.command}`);
+        console.log(`DEBUG: Agent Args: ${JSON.stringify(cmdArgs)}`);
+        console.error(`DEBUG: Agent Env (OPENCODE_CONFIG_DIR): ${env.OPENCODE_CONFIG_DIR}`);
         currentProc = Bun.spawn([agentConfig2.command, ...cmdArgs], {
           cwd: process.cwd(),
           env,
@@ -2842,7 +2909,9 @@ Gracefully stopping Ralph loop...`);
               state.rotationIndex = nextIndex;
               console.log(`\uD83D\uDD04 Rotating to next agent in rotation: ${state.rotation[nextIndex]}`);
               state.iteration++;
-              saveState(state);
+              try {
+                saveState(state);
+              } catch {}
               if (true) {
                 await new Promise((r) => setTimeout(r, 1000));
               }
@@ -2851,7 +2920,9 @@ Gracefully stopping Ralph loop...`);
               console.log(`
 \uD83D\uDED1 Stopping loop due to stalling`);
               state.active = false;
-              saveState(state);
+              try {
+                saveState(state);
+              } catch {}
               break;
             }
           }
@@ -2918,13 +2989,17 @@ Gracefully stopping Ralph loop...`);
               state.rotationIndex = nextIndex;
               console.log(`\uD83D\uDD04 Rotating to next agent in rotation: ${state.rotation[nextIndex]}`);
               state.iteration++;
-              saveState(state);
+              try {
+                saveState(state);
+              } catch {}
               continue;
             } else {
               console.log(`
 \uD83D\uDED1 Stopping loop due to stalling`);
               state.active = false;
-              saveState(state);
+              try {
+                saveState(state);
+              } catch {}
               break;
             }
           }
@@ -3127,9 +3202,9 @@ ${answerContext}`);
         if (state.rotation && state.rotation.length > 0) {
           state.rotationIndex = ((state.rotationIndex ?? 0) + 1) % state.rotation.length;
         }
-        if (exitCode !== 0) {
+        if (exitCode !== 0 && usingRotation) {
           const fallbackPool = getFallbackPool(state);
-          const currentFallbackKey = usingRotation ? state.rotation[rotationIndex2] : getFallbackKey(currentAgent, currentModel);
+          const currentFallbackKey = state.rotation[rotationIndex2];
           state.fallbackBlacklist = markFallbackExhausted(state.fallbackBlacklist, currentFallbackKey);
           const exhaustedAllFallbacks = fallbackPool.every((entry) => state.fallbackBlacklist?.includes(entry));
           const willContinue = !(maxIterations > 0 && state.iteration + 1 > maxIterations);
@@ -3144,7 +3219,9 @@ ${answerContext}`);
           }
         }
         state.iteration++;
-        saveState(state);
+        try {
+          saveState(state);
+        } catch {}
         if (true) {
           await new Promise((r) => setTimeout(r, 1000));
         }
@@ -3182,12 +3259,16 @@ ${answerContext}`);
         };
         history.iterations.push(errorRecord);
         history.totalDurationMs += iterationDuration;
-        saveHistory(history);
+        try {
+          saveHistory(history);
+        } catch {}
         if (state.rotation && state.rotation.length > 0) {
           state.rotationIndex = ((state.rotationIndex ?? 0) + 1) % state.rotation.length;
         }
         state.iteration++;
-        saveState(state);
+        try {
+          saveState(state);
+        } catch {}
         await new Promise((r) => setTimeout(r, 2000));
       }
     }

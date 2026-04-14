@@ -230,6 +230,10 @@ const ENV_TEMPLATES: Record<string, (options: AgentEnvOptions) => Record<string,
             allowAllPermissions: options.allowAllPermissions,
          });
       }
+      // Propagate stateDir to the sub-agent so it uses Ralph's state directory as its config base.
+      // Note: read `stateDir` at call-time (not closure-capture time) so that --state-dir
+      // passthrough changes take effect.
+      env.OPENCODE_CONFIG_DIR = stateDir;
       return env;
    },
    "default": () => ({ ...process.env } as Record<string, string>),
@@ -1832,18 +1836,33 @@ Learn more: https://ghuntley.com/ralph/
          stallRetries = true;
       } else if (passthroughAgentFlags[i] === "--no-stall-retries") {
          stallRetries = false;
-      } else if (passthroughAgentFlags[i] === "--stall-retry-minutes" && passthroughAgentFlags[i + 1]) {
-         stallRetryMinutes = parseInt(passthroughAgentFlags[i + 1]);
-         i++;
-      }
-   }
+       } else if (passthroughAgentFlags[i] === "--stall-retry-minutes" && passthroughAgentFlags[i + 1]) {
+          stallRetryMinutes = parseInt(passthroughAgentFlags[i + 1]);
+          i++;
+       } else if (passthroughAgentFlags[i] === "--state-dir" && passthroughAgentFlags[i + 1]) {
+          stateDirInput = resolve(passthroughAgentFlags[i + 1]);
+          setStatePaths(stateDirInput);
+          i++;
+       }
+    }
 
-   const usingCustomStateDir = stateDir !== resolve(process.cwd(), ".ralph");
-   if (usingCustomStateDir && autoCommit) {
-      console.error("Error: --state-dir currently requires --no-commit.");
-      console.error("Shared git/worktree side effects are not isolated for custom state directories yet.");
-      process.exit(1);
-   }
+    const usingCustomStateDir = stateDir !== resolve(process.cwd(), ".ralph");
+    if (usingCustomStateDir && autoCommit) {
+       console.error("Error: --state-dir currently requires --no-commit.");
+       console.error("Shared git/worktree side effects are not isolated for custom state directories yet.");
+       process.exit(1);
+    }
+
+    // Error if --state-dir appears in passthrough (after --) without --no-commit in Ralph's own args.
+    // This is a common usability mistake: user places --state-dir after -- thinking Ralph will use it,
+    // but Ralph ignores it (it gets forwarded to the sub-agent). Adding a clear error helps.
+    const passthroughHasStateDir = passthroughAgentFlags.includes("--state-dir");
+    if (passthroughHasStateDir && autoCommit) {
+       console.error("Error: --state-dir in passthrough (after --) requires --no-commit in Ralph's own args.");
+       console.error("Place --state-dir BEFORE the -- separator, and add --no-commit:");
+       console.error("  ralph \"task\" --state-dir ./dir/ --no-commit -- --agent ...");
+       process.exit(1);
+    }
 
    if (rotationInput) {
       rotation = parseRotationInput(rotationInput);
@@ -2137,12 +2156,17 @@ Learn more: https://ghuntley.com/ralph/
          process.exit(1);
       }
 
-      try {
-         let template = readFileSync(templatePath, "utf-8");
+       try {
+          let template = readFileSync(templatePath, "utf-8");
 
-         // Strip YAML frontmatter so it doesn't conflict with opencode's "---"
-         // end-of-options marker in the message body.
-         template = stripFrontmatter(template);
+          // Strip YAML frontmatter so it doesn't conflict with opencode's "---"
+          // end-of-options marker in the message body.
+          template = stripFrontmatter(template);
+
+          // If the template is empty or whitespace-only (e.g. intentional stub file),
+           // return null so buildPrompt falls back to the default path which uses
+           // state.prompt (the CLI positional argument string) as the agent message.
+           if (!template?.trim()) return null;
 
          // Load context
          const context = loadContext() || "";
@@ -2854,8 +2878,13 @@ Unable to read ${currentTasksFileLabel()}
           const state = existingState!;
           minIterations = state.minIterations;
           maxIterations = state.maxIterations;
-          completionPromise = state.completionPromise;
-          abortPromise = state.abortPromise ?? "";
+           // Only restore completionPromise from state if it was actually saved in the state file.
+           // Without this check, --reuse-state would always discard the CLI --completion-promise
+           // value even when resuming a state that never had completionPromise set.
+           if (state.completionPromise) {
+              completionPromise = state.completionPromise;
+           }
+           abortPromise = state.abortPromise ?? "";
           tasksMode = state.tasksMode;
           taskPromise = state.taskPromise;
           prompt = state.prompt;
@@ -2976,7 +3005,7 @@ Unable to read ${currentTasksFileLabel()}
          state.stallRetryMinutes = stallRetryMinutes;
       }
 
-      saveState(state);
+      try { saveState(state); } catch { /* best-effort */ }
 
       // Create tasks file if tasks mode is enabled and file doesn't exist
       if (tasksMode && !existsSync(tasksPath)) {
@@ -2994,7 +3023,7 @@ Unable to read ${currentTasksFileLabel()}
          struggleIndicators: { repeatedErrors: {}, noProgressIterations: 0, shortIterations: 0 }
       };
       if (!resuming) {
-         saveHistory(history);
+         try { saveHistory(history); } catch { /* best-effort */ }
       }
 
       const promptPreview = prompt.replace(/\s+/g, " ").substring(0, 80) + (prompt.length > 80 ? "..." : "");
@@ -3104,11 +3133,11 @@ Unable to read ${currentTasksFileLabel()}
             for (const agent of expiredAgents) {
                console.log(`📋 Blacklist expired for ${agent}`);
             }
-            state.blacklistedAgents = active;
-            saveState(state);
-         }
+             state.blacklistedAgents = active;
+             try { saveState(state); } catch { /* best-effort */ }
+          }
 
-         const usingRotation = !!(state.rotation && state.rotation.length > 0);
+          const usingRotation = !!(state.rotation && state.rotation.length > 0);
          let rotationIndex = usingRotation
             ? ((state.rotationIndex ?? 0) % state.rotation!.length + state.rotation!.length) % state.rotation!.length
             : 0;
@@ -3134,11 +3163,11 @@ Unable to read ${currentTasksFileLabel()}
                } else {
                   console.log(`\n⚠️  All agents in rotation are blacklisted. Clearing blacklists.`);
                }
-               state.blacklistedAgents = [];
-               saveState(state);
-            }
+                state.blacklistedAgents = [];
+                try { saveState(state); } catch { /* best-effort */ }
+             }
 
-            rotationIndex = selection.rotationIndex;
+             rotationIndex = selection.rotationIndex;
             const [entryAgent, entryModel] = selection.entry.split(":");
             currentAgent = entryAgent as AgentType;
             currentModel = entryModel;
@@ -3165,7 +3194,7 @@ Unable to read ${currentTasksFileLabel()}
 
             console.log(`DEBUG: Agent Command: ${agentConfig.command}`);
             console.log(`DEBUG: Agent Args: ${JSON.stringify(cmdArgs)}`);
-            console.log(`DEBUG: Agent Env (OPENCODE_CONFIG): ${env.OPENCODE_CONFIG}`);
+            console.error(`DEBUG: Agent Env (OPENCODE_CONFIG_DIR): ${env.OPENCODE_CONFIG_DIR}`);
 
             // Run agent using spawn for better argument handling
             // preventing the 5s delay when detecting stalling. stdin is not used anyway.
@@ -3273,21 +3302,21 @@ Unable to read ${currentTasksFileLabel()}
                      // Rotate to next agent
                      const nextIndex = ((state.rotationIndex ?? 0) + 1) % state.rotation.length;
                      state.rotationIndex = nextIndex;
-                     console.log(`🔄 Rotating to next agent in rotation: ${state.rotation[nextIndex]}`);
-                     state.iteration++;
-                     saveState(state);
-                     if (process.env.NODE_ENV !== "test") {
-                        await new Promise(r => setTimeout(r, 1000));
-                     }
-                     // Continue to next iteration
-                     continue;
-                  } else {
-                     // Stop action (default)
-                     console.log(`\n🛑 Stopping loop due to stalling`);
-                     state.active = false;
-                     saveState(state);
-                     break;
-                  }
+                      console.log(`🔄 Rotating to next agent in rotation: ${state.rotation[nextIndex]}`);
+                      state.iteration++;
+                      try { saveState(state); } catch { /* best-effort */ }
+                      if (process.env.NODE_ENV !== "test") {
+                         await new Promise(r => setTimeout(r, 1000));
+                      }
+                      // Continue to next iteration
+                      continue;
+                   } else {
+                      // Stop action (default)
+                      console.log(`\n🛑 Stopping loop due to stalling`);
+                      state.active = false;
+                      try { saveState(state); } catch { /* best-effort */ }
+                      break;
+                   }
                }
             } else {
                const buffered = await streamProcessOutput(proc, {
@@ -3363,22 +3392,22 @@ Unable to read ${currentTasksFileLabel()}
                      // Rotate to next agent
                      const nextIndex = ((state.rotationIndex ?? 0) + 1) % state.rotation.length;
                      state.rotationIndex = nextIndex;
-                     console.log(`🔄 Rotating to next agent in rotation: ${state.rotation[nextIndex]}`);
-                     state.iteration++;
-                     saveState(state);
-                     // Continue to next iteration
-                     continue;
-                  } else {
-                     // Stop action (default)
-                     console.log(`\n🛑 Stopping loop due to stalling`);
-                     state.active = false;
-                     saveState(state);
-                     break;
-                  }
-               }
-            }
+                      console.log(`🔄 Rotating to next agent in rotation: ${state.rotation[nextIndex]}`);
+                      state.iteration++;
+                      try { saveState(state); } catch { /* best-effort */ }
+                      // Continue to next iteration
+                      continue;
+                   } else {
+                      // Stop action (default)
+                      console.log(`\n🛑 Stopping loop due to stalling`);
+                      state.active = false;
+                      try { saveState(state); } catch { /* best-effort */ }
+                      break;
+                   }
+                }
+             }
 
-            const exitCode = await exitCodePromise;
+             const exitCode = await exitCodePromise;
             currentProc = null; // Clear reference after subprocess completes
 
             if (!streamOutput) {
@@ -3607,7 +3636,7 @@ Unable to read ${currentTasksFileLabel()}
                }
             }
             state.iteration++;
-            saveState(state);
+            try { saveState(state); } catch { /* best-effort */ }
 
             // Small delay between iterations (skip in test mode for speed)
             if (process.env.NODE_ENV !== "test") {
@@ -3656,13 +3685,13 @@ Unable to read ${currentTasksFileLabel()}
             };
             history.iterations.push(errorRecord);
             history.totalDurationMs += iterationDuration;
-            saveHistory(history);
+            try { saveHistory(history); } catch { /* best-effort */ }
 
             if (state.rotation && state.rotation.length > 0) {
                state.rotationIndex = ((state.rotationIndex ?? 0) + 1) % state.rotation.length;
             }
             state.iteration++;
-            saveState(state);
+            try { saveState(state); } catch { /* best-effort */ }
             await new Promise(r => setTimeout(r, 2000));
          }
       }
