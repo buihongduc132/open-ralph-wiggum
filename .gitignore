@@ -94,3 +94,23 @@ data/
 __pycache__/
 *.pyc
 *.pyo
+.ralph-dev
+
+# Ralph runtime state (generated on every run — ephemeral)
+ralph/
+ralph-history.json
+ralph-loop.state.json
+ralph-opencode.config.json
+
+# Ralph workspace cache / memory
+.cachebro/
+.opencode/
+
+# Ralph test fixtures (tmp dirs created by tests)
+tests/tmp/
+
+# MemPalace workspace
+mempalace.yaml
+
+# Entity store (runtime memory, not source)
+entities.json
