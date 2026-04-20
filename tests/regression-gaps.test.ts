@@ -459,16 +459,24 @@ describe("GAP-10: --no-plugins → filterPlugins env propagation", () => {
   it("--no-plugins generates OPENCODE_CONFIG env for sub-agent", async () => {
     const sd = join(workDir, ".ralph");
     mkdirSync(sd, { recursive: true });
+    const envInspectorPath = join(process.cwd(), "tests/helpers/fake-env-inspector.sh");
+    const envConfigPath = join(workDir, "env-agents.json");
+    writeFileSync(envConfigPath, JSON.stringify({
+      version: "1.0",
+      agents: [{ type: "opencode", command: envInspectorPath, configName: "Env Inspector",
+        argsTemplate: "default", envTemplate: "opencode", parsePattern: "default" }],
+    }));
     const proc = Bun.spawn({
       cmd: [bunPath, "run", ralphPath, "--state-dir", sd, "--no-commit",
-        "--no-plugins", "--config", agentConfigPath, "--max-iterations", "1", "do it",
+        "--no-plugins", "--config", envConfigPath, "--max-iterations", "1", "do it",
         "--", "--agent", "opencode", "--model", TEST_MODEL],
       cwd: workDir, stdin: "ignore", stdout: "pipe", stderr: "pipe",
       env: { ...process.env, NODE_ENV: "test" },
     });
     expect((await proc.exited)).toBe(0);
     const err = await new Response(proc.stderr).text();
-    expect(err).toContain("OPENCODE_CONFIG");
+    expect(err).toContain("ENV_OPENCODE_CONFIG=");
+    expect(err).not.toContain("ENV_OPENCODE_CONFIG=__NOT_SET__");
   });
 });
 

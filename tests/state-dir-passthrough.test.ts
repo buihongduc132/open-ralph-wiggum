@@ -201,52 +201,53 @@ describe("BUG: --state-dir after -- (passthrough separator) is ignored", () => {
         expect(existsSync(join(projectRoot, ".ralph", "ralph-loop.state.json"))).toBe(false);
      });
 
-   /**
-    * RED TEST 2 (SECONDARY BUG): OPENCODE_CONFIG_DIR is never propagated to sub-agent
-    *
-    * Even when --state-dir is correctly captured (before --), Ralph's ENV_TEMPLATES
-    * only sets OPENCODE_CONFIG (pointing to a file inside stateDir) but never sets
-    * OPENCODE_CONFIG_DIR. Without OPENCODE_CONFIG_DIR, opencode uses its default
-    * profile/config directory regardless of what stateDir Ralph uses.
-    *
-    * The DEBUG log line:
-    *   console.log(`DEBUG: Agent Env (OPENCODE_CONFIG): ${env.OPENCODE_CONFIG}`);
-    * proves whether OPENCODE_CONFIG_DIR is included in the env.
-    *
-    * EXPECTED: FAIL on current code (OPENCODE_CONFIG_DIR is absent)
-    * EXPECTED: PASS after fix (OPENCODE_CONFIG_DIR=customStateDir is set)
-    */
-    it("FAIL RED: sub-agent must receive OPENCODE_CONFIG_DIR pointing to state directory", async () => {
-       const projectRoot = process.cwd();
-       const customStateDir = join(projectRoot, "tests", "tmp", "my-custom-state");
+    /**
+     * UPSTREAM BEHAVIOR: OPENCODE_CONFIG_DIR is NOT set by upstream ralph.
+     *
+     * Upstream Ralph never sets OPENCODE_CONFIG_DIR in the sub-agent environment.
+     * Only OPENCODE_CONFIG (pointing to a config file inside stateDir) is set.
+     * This test verifies that upstream behavior is preserved: OPENCODE_CONFIG_DIR
+     * must be __NOT_SET__ in the sub-agent's env.
+     *
+     * Uses fake-env-inspector.sh which dumps env vars to stderr as:
+     *   ENV_OPENCODE_CONFIG_DIR=<value or __NOT_SET__>
+     */
+    it("UPSTREAM: sub-agent must NOT receive OPENCODE_CONFIG_DIR (upstream never sets it)", async () => {
+        const projectRoot = process.cwd();
+        const customStateDir = join(projectRoot, "tests", "tmp", "my-custom-state");
 
-       const proc = Bun.spawn({
-          cmd: [
-             bunPath, "run", ralphPath,
-             "--state-dir", customStateDir,
-             "--no-commit",
-             "--config", agentConfigPath,
-             "--max-iterations", "1",
-             "do it",
-             "--",
-             "--agent", "opencode",
-             "--model", TEST_MODEL,
-          ],
-          cwd: projectRoot,
-          stdin: "ignore",
-          stdout: "pipe",
-          stderr: "pipe",
-          env: { ...process.env, NODE_ENV: "test" },
-       });
+        const envInspectorPath = join(process.cwd(), "tests/helpers/fake-env-inspector.sh");
+        const envConfigPath = join(workDir, "env-agents.json");
+        writeFileSync(envConfigPath, JSON.stringify({
+          version: "1.0",
+          agents: [{ type: "opencode", command: envInspectorPath, configName: "Env Inspector",
+            argsTemplate: "default", envTemplate: "opencode", parsePattern: "default" }],
+        }));
 
-       const stderr = await new Response(proc.stderr).text();
-       await proc.exited;
+        const proc = Bun.spawn({
+           cmd: [
+              bunPath, "run", ralphPath,
+              "--state-dir", customStateDir,
+              "--no-commit",
+              "--config", envConfigPath,
+              "--max-iterations", "1",
+              "do it",
+              "--",
+              "--agent", "opencode",
+              "--model", TEST_MODEL,
+           ],
+           cwd: projectRoot,
+           stdin: "ignore",
+           stdout: "pipe",
+           stderr: "pipe",
+           env: { ...process.env, NODE_ENV: "test", OPENCODE_CONFIG_DIR: undefined },
+        });
 
-       // The sub-agent env MUST contain OPENCODE_CONFIG_DIR set to the custom state dir
-       // This is what allows opencode to use Ralph's state dir as its config base
-       expect(stderr).toContain("OPENCODE_CONFIG_DIR");
-       expect(stderr).toContain("my-custom-state");
-    });
+        const stderr = await new Response(proc.stderr).text();
+        await proc.exited;
+
+        expect(stderr).toContain("ENV_OPENCODE_CONFIG_DIR=__NOT_SET__");
+     });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

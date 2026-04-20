@@ -1,5 +1,18 @@
 # Agent Instructions
 
+## Model & Timeout Defaults
+
+**Model: `zai-direct/glm-5.1`** — use `zai` provider via `https://api.z.ai/api/coding/paas/v4`
+
+**Bash command timeout: 4 hours (14400000ms)**
+Every shell command MUST include `timeout_ms: 14400000`. Never let bash commands time out.
+```json
+{"command": "some-long-running-command", "timeout_ms": 14400000}
+```
+Do NOT use `bash -lc` wrapper — call binaries directly.
+
+## Issue Tracking
+
 This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
 
 ## Quick Reference

@@ -182,7 +182,7 @@ function ensureRalphConfig(options: { filterPlugins?: boolean; allowAllPermissio
    }
    const configPath = join(stateDir, "ralph-opencode.config.json");
    const userConfigPath = join(process.env.XDG_CONFIG_HOME ?? join(process.env.HOME ?? "", ".config"), "opencode", "opencode.json");
-   const projectConfigPath = join(stateDir, "opencode.json");
+    const projectConfigPath = join(process.cwd(), ".ralph", "opencode.json");
    const legacyProjectConfigPath = join(process.cwd(), ".opencode", "opencode.json");
 
    const config: Record<string, unknown> = {
@@ -230,10 +230,6 @@ const ENV_TEMPLATES: Record<string, (options: AgentEnvOptions) => Record<string,
             allowAllPermissions: options.allowAllPermissions,
          });
       }
-      // Propagate stateDir to the sub-agent so it uses Ralph's state directory as its config base.
-      // Note: read `stateDir` at call-time (not closure-capture time) so that --state-dir
-      // passthrough changes take effect.
-      env.OPENCODE_CONFIG_DIR = stateDir;
       return env;
    },
    "default": () => ({ ...process.env } as Record<string, string>),
@@ -3194,8 +3190,6 @@ Unable to read ${currentTasksFileLabel()}
 
             console.log(`DEBUG: Agent Command: ${agentConfig.command}`);
             console.log(`DEBUG: Agent Args: ${JSON.stringify(cmdArgs)}`);
-            console.error(`DEBUG: Agent Env (OPENCODE_CONFIG_DIR): ${env.OPENCODE_CONFIG_DIR}`);
-
             // Run agent using spawn for better argument handling
             // preventing the 5s delay when detecting stalling. stdin is not used anyway.
             // stdin is inherited so users can respond to permission prompts if needed
