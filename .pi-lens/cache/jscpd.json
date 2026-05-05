@@ -1,0 +1,64 @@
+{
+  "success": true,
+  "clones": [
+    {
+      "fileA": "src/weekend_grid/backtest.py",
+      "startA": 232,
+      "fileB": "src/weekend_grid/backtest.py",
+      "startB": 215,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "scripts/run_phase1.py",
+      "startA": 184,
+      "fileB": "src/weekend_grid/calculator.py",
+      "startB": 178,
+      "lines": 7,
+      "tokens": 0
+    },
+    {
+      "fileA": "scripts/run_phase0.py",
+      "startA": 4,
+      "fileB": "scripts/run_phase2.py",
+      "startB": 25,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "scripts/run_phase0.py",
+      "startA": 23,
+      "fileB": "scripts/run_phase1.py",
+      "startB": 85,
+      "lines": 7,
+      "tokens": 0
+    },
+    {
+      "fileA": "scripts/run_phase0.py",
+      "startA": 31,
+      "fileB": "scripts/run_phase1.py",
+      "startB": 94,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "agent-builders.ts",
+      "startA": 44,
+      "fileB": "agent-builders.ts",
+      "startB": 25,
+      "lines": 7,
+      "tokens": 0
+    },
+    {
+      "fileA": "agent-builders.ts",
+      "startA": 75,
+      "fileB": "agent-builders.ts",
+      "startB": 60,
+      "lines": 8,
+      "tokens": 0
+    }
+  ],
+  "duplicatedLines": 51,
+  "totalLines": 3425,
+  "percentage": 1.49
+}
