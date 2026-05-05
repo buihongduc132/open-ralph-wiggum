@@ -9,7 +9,7 @@
 import { $ } from "bun";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, lstatSync } from "fs";
 import { dirname, isAbsolute, join, relative, resolve } from "path";
-import { checkTerminalPromise, stripAnsi, tasksMarkdownAllComplete } from "./completion";
+import { checkTerminalPromise, containsPromiseTag, stripAnsi, tasksMarkdownAllComplete } from "./completion";
 import {
    decideLoopOwnership,
    pruneExpiredBlacklistedAgents,
@@ -579,14 +579,9 @@ function getAgentBinaryEnvName(agentType: string): string {
  */
 export function resolveCommand(cmd: string, envOverride?: string, basePath?: string): string {
    if (envOverride) return envOverride;
-   // On Windows, try the .cmd version first if the base command isn't found
-   if (IS_WINDOWS) {
-      const cmdPath = Bun.which(cmd);
-      if (!cmdPath) {
-         const cmdWithExt = `${cmd}.cmd`;
-         const cmdExtPath = Bun.which(cmdWithExt);
-         if (cmdExtPath) return cmdWithExt;
-      }
+   if (IS_WINDOWS && !/[\\/]/.test(cmd) && !/\.(cmd|exe|bat)$/i.test(cmd)) {
+      const cmdWithExt = `${cmd}.cmd`;
+      if (Bun.which(cmdWithExt)) return cmdWithExt;
    }
    // For relative paths (e.g. tests/helpers/fake-agent.sh), resolve against the
    // config file's directory (basePath) so Bun.spawn finds them regardless of cwd.
@@ -2348,10 +2343,15 @@ Unable to read ${currentTasksFileLabel()}
    }
 
    /**
-    * Check if output contains a completion promise as the final non-empty line.
+    * Check if output contains a completion promise.
+    * First checks if the promise tag is the final non-empty line (strict mode).
+    * Falls back to a full-text search of the raw output for stream-json agents
+    * where the promise may appear inside JSON values rather than as a standalone line.
     */
-   function checkCompletion(output: string, promise: string): boolean {
-      return checkTerminalPromise(output, promise);
+   function checkCompletion(output: string, promise: string, rawOutput?: string): boolean {
+      if (checkTerminalPromise(output, promise)) return true;
+      if (rawOutput && containsPromiseTag(rawOutput, promise)) return true;
+      return false;
    }
 
    function detectPlaceholderPluginError(output: string): boolean {
@@ -3417,9 +3417,9 @@ Unable to read ${currentTasksFileLabel()}
             }
 
             const combinedOutput = `${result}\n${stderr}`;
-            const completionSignalDetected = checkCompletion(result, completionPromise);
-            const abortDetected = abortPromise ? checkCompletion(result, abortPromise) : false;
-            const taskCompletionDetected = tasksMode ? checkCompletion(result, taskPromise) : false;
+            const completionSignalDetected = checkCompletion(result, completionPromise, result);
+            const abortDetected = abortPromise ? checkCompletion(result, abortPromise, result) : false;
+            const taskCompletionDetected = tasksMode ? checkCompletion(result, taskPromise, result) : false;
 
             let completionDetected = completionSignalDetected;
             if (tasksMode && completionSignalDetected) {
