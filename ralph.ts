@@ -2363,7 +2363,8 @@ Unable to read ${currentTasksFileLabel()}
       return output.includes("ProviderModelNotFoundError") ||
          output.includes("Provider returned error") ||
          output.includes("model not found") ||
-         output.includes("No model configured");
+         output.includes("No model configured") ||
+         output.includes(".split is not a function");
    }
 
    function extractClaudeStreamDisplayLines(rawLine: string): string[] {

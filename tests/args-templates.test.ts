@@ -342,4 +342,347 @@ describe("ARGS_TEMPLATES", () => {
          expect(result[lastIdx]).toBe("fix the auth module and ensure tests pass");
       });
    });
+
+    // -------------------------------------------------------------------------
+    // gemy
+    // -------------------------------------------------------------------------
+
+    describe("gemy", () => {
+       const gemy: BuildArgsFn = (ARGS_TEMPLATES as any)["gemy"] || (() => []);
+
+       it("uses -p flag for the prompt", () => {
+          const result = gemy("my task", "", {});
+          expect(result).toEqual(["-p", "my task"]);
+       });
+
+       it("includes -m and the model name when provided", () => {
+          const result = gemy("fix the bug", "gemini-1.5-pro", {});
+          expect(result).toContain("-m");
+          expect(result).toContain("gemini-1.5-pro");
+          expect(result).toContain("-p");
+          expect(result).toContain("fix the bug");
+       });
+
+       it("includes -y when allowAllPermissions is true", () => {
+          const result = gemy("fix the bug", "", { allowAllPermissions: true });
+          expect(result).toContain("-y");
+       });
+
+       // -------------------------------------------------------------------------
+       // RED tests: uncovered cases for gemy
+       // -------------------------------------------------------------------------
+
+       it("places extraFlags between -y and -p", () => {
+          const result = gemy("my task", "", {
+             allowAllPermissions: true,
+             extraFlags: ["--verbose", "--debug"],
+          });
+
+          // Order should be: -y, extraFlags, -p, prompt
+          const yIdx = result.indexOf("-y");
+          const pIdx = result.indexOf("-p");
+          const verboseIdx = result.indexOf("--verbose");
+          const debugIdx = result.indexOf("--debug");
+
+          expect(yIdx).toBeGreaterThanOrEqual(0);
+          expect(pIdx).toBeGreaterThan(yIdx);
+          expect(verboseIdx).toBeGreaterThan(yIdx);
+          expect(debugIdx).toBeGreaterThan(yIdx);
+          expect(verboseIdx).toBeLessThan(pIdx);
+          expect(debugIdx).toBeLessThan(pIdx);
+       });
+
+       it("skips -m flag entirely when model is empty (falsy)", () => {
+          const result = gemy("my task", "", {});
+
+          // Must NOT contain -m
+          expect(result).not.toContain("-m");
+          // Must NOT have -m followed by empty string
+          for (let i = 0; i < result.length - 1; i++) {
+             expect(result[i]).not.toBe("-m");
+          }
+       });
+
+       it("treats multi-word prompt as a single argument at the expected position", () => {
+          const result = gemy(
+             "fix the auth bug and ensure tests pass",
+             "gemini-1.5-pro",
+             {},
+          );
+
+          // The entire multi-word prompt must be in one element at the end
+          const lastIdx = result.length - 1;
+          expect(result[lastIdx]).toBe("fix the auth bug and ensure tests pass");
+          // None of the earlier args should contain "and" (prompt must not be split)
+          const beforePrompt = result.slice(0, lastIdx);
+          expect(beforePrompt.some((arg) => arg.includes("and"))).toBe(false);
+       });
+
+       it("combines all flags (model + allowAllPermissions + extraFlags) in correct order", () => {
+          const result = gemy("my task", "gemini-1.5-pro", {
+             allowAllPermissions: true,
+             extraFlags: ["--verbose"],
+          });
+
+          // Order: -m, model, -y, extraFlags, -p, prompt
+          expect(result).toEqual([
+             "-m",
+             "gemini-1.5-pro",
+             "-y",
+             "--verbose",
+             "-p",
+             "my task",
+          ]);
+       });
+
+       it("works with no options object (just -p and prompt)", () => {
+          const result = gemy("my task", "");
+          expect(result).toEqual(["-p", "my task"]);
+       });
+
+       it("includes extraFlags with --model (gemini allows this passthrough)", () => {
+          const result = gemy("my task", "gemini-1.5-pro", {
+             extraFlags: ["--model", "override-model"],
+          });
+
+          // Both the -m flag and the extraFlags --model should be present
+          expect(result).toContain("-m");
+          expect(result).toContain("gemini-1.5-pro");
+          expect(result).toContain("--model");
+          expect(result).toContain("override-model");
+       });
+    });
+
+   // -------------------------------------------------------------------------
+   // gemini
+   // -------------------------------------------------------------------------
+
+   // -------------------------------------------------------------------------
+   // gemini
+   // -------------------------------------------------------------------------
+
+   describe("gemini", () => {
+      const gemini: BuildArgsFn = (ARGS_TEMPLATES as Record<string, BuildArgsFn>)["gemini"] || (() => []);
+
+      it("uses -p flag for the prompt", () => {
+         const result = gemini("my task", "", {});
+         expect(result).toEqual(["-p", "my task"]);
+      });
+
+      it("includes -m and the model name when provided", () => {
+         const result = gemini("fix the bug", "gemini-1.5-pro", {});
+         expect(result).toContain("-m");
+         expect(result).toContain("gemini-1.5-pro");
+         expect(result).toContain("-p");
+         expect(result).toContain("fix the bug");
+      });
+
+      it("includes -y when allowAllPermissions is true", () => {
+         const result = gemini("fix the bug", "", { allowAllPermissions: true });
+         expect(result).toContain("-y");
+      });
+
+      // -------------------------------------------------------------------------
+      // RED tests: uncovered cases for gemini
+      // -------------------------------------------------------------------------
+
+      it("places extraFlags between -y and -p", () => {
+         const result = gemini("my task", "", {
+            allowAllPermissions: true,
+            extraFlags: ["--verbose", "--debug"],
+         });
+
+         const yIdx = result.indexOf("-y");
+         const pIdx = result.indexOf("-p");
+         const verboseIdx = result.indexOf("--verbose");
+         const debugIdx = result.indexOf("--debug");
+
+         expect(yIdx).toBeGreaterThanOrEqual(0);
+         expect(pIdx).toBeGreaterThan(yIdx);
+         expect(verboseIdx).toBeGreaterThan(yIdx);
+         expect(debugIdx).toBeGreaterThan(yIdx);
+         expect(verboseIdx).toBeLessThan(pIdx);
+         expect(debugIdx).toBeLessThan(pIdx);
+      });
+
+      it("skips -m flag entirely when model is empty (falsy)", () => {
+         const result = gemini("my task", "", {});
+         expect(result).not.toContain("-m");
+         for (let i = 0; i < result.length - 1; i++) {
+            expect(result[i]).not.toBe("-m");
+         }
+      });
+
+      it("treats multi-word prompt as a single argument at the expected position", () => {
+         const result = gemini(
+            "fix the auth bug and ensure tests pass",
+            "gemini-1.5-pro",
+            {},
+         );
+
+         const lastIdx = result.length - 1;
+         expect(result[lastIdx]).toBe("fix the auth bug and ensure tests pass");
+         const beforePrompt = result.slice(0, lastIdx);
+         expect(beforePrompt.some((arg) => arg.includes("and"))).toBe(false);
+      });
+
+      it("combines all flags (model + allowAllPermissions + extraFlags) in correct order", () => {
+         const result = gemini("my task", "gemini-1.5-pro", {
+            allowAllPermissions: true,
+            extraFlags: ["--verbose"],
+         });
+
+         // Order: -m, model, -y, extraFlags, -p, prompt
+         expect(result).toEqual([
+            "-m", "gemini-1.5-pro",
+            "-y",
+            "--verbose",
+            "-p", "my task",
+         ]);
+      });
+
+      it("works with no options object (just -p and prompt)", () => {
+         const result = gemini("my task", "");
+         expect(result).toEqual(["-p", "my task"]);
+      });
+
+      it("includes extraFlags with --model (gemini allows this passthrough)", () => {
+         const result = gemini("my task", "gemini-1.5-pro", {
+            extraFlags: ["--model", "override-model"],
+         });
+
+         expect(result).toContain("-m");
+         expect(result).toContain("gemini-1.5-pro");
+         expect(result).toContain("--model");
+         expect(result).toContain("override-model");
+      });
+   });
+
+   // -------------------------------------------------------------------------
+   // omox (oh-my-opencode) — RED tests (builder not yet implemented)
+   //
+   // omox CLI flags (from `omox run --help`):
+   //   -a, --agent <name>        Agent to use
+   //   -m, --model <provider/m>  Model override
+   //   -d, --directory <path>    Working directory
+   //   -p, --port <port>         Server port
+   //   --json                    Output structured JSON
+   //   --verbose                 Show full event stream
+   //   --session-id <id>         Resume existing session
+   //
+   // Pattern: run [-m model] [extraFlags] <message>
+   // -------------------------------------------------------------------------
+
+   describe("omox", () => {
+      const omox: BuildArgsFn = (ARGS_TEMPLATES as Record<string, BuildArgsFn>)["omox"] || (() => []);
+
+      it("builds basic run command with positional prompt", () => {
+         const result = omox("my task", "", {});
+         expect(result).toEqual(["run", "my task"]);
+         expect(result[result.length - 1]).toBe("my task");
+      });
+
+      it("includes -m flag before prompt when model is provided", () => {
+         const result = omox("task", "anthropic/claude-sonnet-4", {});
+         expect(result).toEqual(["run", "-m", "anthropic/claude-sonnet-4", "task"]);
+         expect(result[result.length - 1]).toBe("task");
+      });
+
+      it("places extraFlags before the positional prompt", () => {
+         const result = omox("task", "", {
+            extraFlags: ["-a", "Sisyphus"],
+         });
+         expect(result).toEqual(["run", "-a", "Sisyphus", "task"]);
+         expect(result[result.length - 1]).toBe("task");
+      });
+
+      it("skips -m flag entirely when model is empty (falsy)", () => {
+         const result = omox("my task", "", {});
+         expect(result).not.toContain("-m");
+         for (let i = 0; i < result.length - 1; i++) {
+            expect(result[i]).not.toBe("-m");
+         }
+      });
+
+      it("treats multi-word prompt as a single trailing argument", () => {
+         const result = omox(
+            "fix the auth bug and ensure tests pass",
+            "anthropic/claude-sonnet-4",
+            {},
+         );
+
+         const lastIdx = result.length - 1;
+         expect(result[lastIdx]).toBe("fix the auth bug and ensure tests pass");
+         const beforePrompt = result.slice(0, lastIdx);
+         expect(beforePrompt.some((arg) => arg.includes("and"))).toBe(false);
+      });
+
+      it("combines -m and extraFlags -a before prompt", () => {
+         const result = omox("task", "anthropic/claude-sonnet-4", {
+            extraFlags: ["-a", "Sisyphus"],
+         });
+         expect(result).toEqual([
+            "run",
+            "-m", "anthropic/claude-sonnet-4",
+            "-a", "Sisyphus",
+            "task",
+         ]);
+         expect(result[result.length - 1]).toBe("task");
+      });
+
+      it("does not emit any permission flag when allowAllPermissions is set", () => {
+         // omox has no -y or --dangerously-skip-permissions equivalent
+         const result = omox("task", "", { allowAllPermissions: true });
+         expect(result).not.toContain("-y");
+         expect(result).not.toContain("--dangerously-skip-permissions");
+         expect(result).not.toContain("--full-auto");
+         expect(result).not.toContain("--allow-all");
+         expect(result).toEqual(["run", "task"]);
+      });
+
+      it("skips Ralph-level -m when extraFlags contains --model (passthrough wins)", () => {
+         const result = omox("task", "toml-model", {
+            extraFlags: ["--model", "override-model"],
+         });
+         // Ralph-level -m should be skipped since passthrough --model is present
+         expect(result).not.toContain("-m");
+         expect(result).toContain("--model");
+         expect(result).toContain("override-model");
+         expect(result).not.toContain("toml-model");
+      });
+
+      it("passes through omox-specific flags --json and --verbose", () => {
+         const result = omox("task", "", {
+            extraFlags: ["--json", "--verbose"],
+         });
+         expect(result).toContain("--json");
+         expect(result).toContain("--verbose");
+         expect(result).toEqual(["run", "--json", "--verbose", "task"]);
+      });
+
+      it("handles --session-id passthrough via extraFlags", () => {
+         const result = omox("continue the work", "anthropic/claude-sonnet-4", {
+            extraFlags: ["--session-id", "ses_abc123"],
+         });
+         expect(result).toContain("--session-id");
+         expect(result).toContain("ses_abc123");
+         expect(result[result.length - 1]).toBe("continue the work");
+      });
+
+      it("places TOML + passthrough flags so passthrough --model wins", () => {
+         // Simulate: TOML extra_agent_flags = ["--verbose"] + passthrough = ["--model", "override"]
+         const tomlFlags = ["--verbose"];
+         const passthroughFlags = ["--model", "override-model"];
+         const result = omox("do it", "toml-model", {
+            extraFlags: [...tomlFlags, ...passthroughFlags],
+         });
+
+         expect(result).toContain("--verbose");
+         expect(result).toContain("--model");
+         expect(result).toContain("override-model");
+         // Ralph-level -m should be skipped (passthrough has --model)
+         expect(result).not.toContain("-m");
+         expect(result[result.length - 1]).toBe("do it");
+      });
+   });
 });

@@ -114,3 +114,16 @@ mempalace.yaml
 
 # Entity store (runtime memory, not source)
 entities.json
+
+# Added by maintenance script
+venv/
+.venv/
+.abw/
+logs/
+target/
+.pytest_cache/
+dist/
+build/
+*.log
+.gitnexus
+.pi-lens/
