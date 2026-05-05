@@ -21,7 +21,7 @@ import {
 import { ARGS_TEMPLATES, type AgentBuildArgsOptions } from "./agent-builders";
 import { stripFrontmatter } from "./template-utils";
 
-const VERSION = "1.2.2";
+const VERSION = "1.3.0";
 
 // Detect Windows platform for command resolution
 const IS_WINDOWS = process.platform === "win32";
@@ -63,7 +63,7 @@ let customConfigPath = "";
 let initConfigPath: string | undefined = undefined;
 let initTomlConfigPath = "";
 
-const AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot"] as const;
+const AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot", "cursor-agent"] as const;
 type AgentType = (typeof AGENT_TYPES)[number];
 
 type AgentEnvOptions = { filterPlugins?: boolean; allowAllPermissions?: boolean };
@@ -569,6 +569,10 @@ function loadRuntimeTomlConfig(configPath: string, explicit: boolean): RalphRunt
    }
 }
 
+function getAgentBinaryEnvName(agentType: string): string {
+  return `RALPH_${agentType.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_BINARY`;
+}
+
 /**
  * Resolve a command for cross-platform compatibility.
  * On Windows, many npm-installed CLIs require the .cmd extension.
@@ -717,7 +721,7 @@ Arguments:
   prompt              Task description for the AI to work on
 
 Options:
-  --agent AGENT       AI agent to use: opencode (default), claude-code, codex, copilot
+  --agent AGENT       AI agent to use: opencode (default), claude-code, codex, copilot, cursor-agent
   --min-iterations N  Minimum iterations before completion allowed (default: 1)
   --max-iterations N  Maximum iterations before stopping (default: unlimited)
   --completion-promise TEXT  Phrase that signals completion (default: COMPLETE)
@@ -727,7 +731,7 @@ Options:
   --model MODEL       Model to use (agent-specific, e.g., anthropic/claude-sonnet)
   --rotation LIST     Agent/model rotation for each iteration (comma-separated)
                       Each entry must be "agent:model" format
-                      Valid agents: opencode, claude-code, codex
+                      Valid agents: opencode, claude-code, codex, copilot, cursor-agent
                       Example: --rotation "opencode:claude-sonnet-4,claude-code:gpt-4o"
                       When used, --agent and --model are ignored
   --stalling-timeout DURATION  Time without activity before considering agent stalled (default: 2h)
