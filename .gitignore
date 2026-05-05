@@ -126,3 +126,4 @@ dist/
 build/
 *.log
 .gitnexus
+.pi-lens/
