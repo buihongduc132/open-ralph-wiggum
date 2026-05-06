@@ -137,6 +137,44 @@ describe("Custom agent types", () => {
     expect(result.output).not.toContain("unknown agent");
   });
 
+  it("stops streaming agent after completion promise is emitted", async () => {
+    const piWrapperPath = join(process.cwd(), "tests/helpers/fake-pi-wrapper.sh");
+    writeFileSync(
+      piWrapperPath,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "echo \"Ready.\"",
+        "echo \"<promise>COMPLETE</promise>\"",
+        "sleep 30",
+      ].join("\n"),
+    );
+    chmodSync(piWrapperPath, 0o755);
+
+    writeAgentConfig({
+      type: "pi",
+      command: piWrapperPath,
+      configName: "PI Agent",
+      args: ["{{prompt}}"],
+    });
+
+    const startedAt = Date.now();
+    const result = await runRalph([
+      "--agent", "pi",
+      "--config", agentConfigPath,
+      "--completion-promise", "COMPLETE",
+      "--no-commit",
+      "--max-iterations", "1",
+      "--heartbeat-interval", "200ms",
+    ]);
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toContain("✅ Completion promise detected");
+    expect(result.output).not.toContain("exited with code");
+    expect(elapsedMs).toBeLessThan(5000);
+  });
+
   it("accepts a custom agent type 'ocxo' without warning", async () => {
     writeAgentConfig({
       type: "ocxo",

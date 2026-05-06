@@ -1,6 +1,6 @@
 <p align="center">
   <h1 align="center">Open Ralph Wiggum</h1>
-  <h3 align="center">Autonomous Agentic Loop for Claude Code, Codex, Copilot CLI, Cursor Agent & OpenCode</h3>
+  <h3 align="center">Autonomous Agentic Loop for Claude Code, Codex, Copilot CLI, Cursor Agent, OpenCode & custom agent/sub-agent CLIs</h3>
 </p>
 
 <p align="center">
@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <em>Works with <b>Claude Code</b>, <b>OpenAI Codex</b>, <b>Copilot CLI</b>, <b>Cursor Agent</b>, and <b>OpenCode</b> — switch agents with <code>--agent</code>.</em><br>
+  <em>Works with <b>Claude Code</b>, <b>OpenAI Codex</b>, <b>Copilot CLI</b>, <b>Cursor Agent</b>, <b>OpenCode</b>, and custom agent/sub-agent CLIs via <code>agents.json</code>.</em><br>
   <em>Based on the <a href="https://ghuntley.com/ralph/">Ralph Wiggum technique</a> by Geoffrey Huntley</em>
 </p>
 
@@ -40,7 +40,9 @@
 
 ## Supported Agents
 
-Open Ralph Wiggum works with multiple AI coding agents. Switch between them using the `--agent` flag:
+Open Ralph Wiggum works with multiple AI coding agents. Switch between built-ins using the `--agent` flag, or register custom agent/sub-agent CLIs with `agents.json`.
+
+### Built-in agents
 
 | Agent | Flag | Description |
 |-------|------|-------------|
@@ -49,6 +51,60 @@ Open Ralph Wiggum works with multiple AI coding agents. Switch between them usin
 | **Copilot CLI** | `--agent copilot` | GitHub Copilot CLI for agentic coding |
 | **Cursor Agent** | `--agent cursor-agent` | Cursor Agent CLI for headless AI coding |
 | **OpenCode** | `--agent opencode` | Default agent, open-source AI coding assistant |
+
+### Custom agent / sub-agent CLIs
+
+Ralph supports arbitrary agent types from `agents.json`, so newly added sub-agent wrappers can run without patching the core allow-list.
+
+| Type / pattern | Purpose | Config path |
+|---|---|---|
+| `ocxo`, `omp`, `pi`, or any custom `type` | Register your own agent/sub-agent CLI name | `--config ./agents.json` |
+| `argsTemplate: "opencode-raw"` | OpenCode-compatible binary without hardcoded `run` | `agents.json` |
+| `argsTemplate: "omox"` | oh-my-opencode style `run [-m model] [flags] <prompt>` | `agents.json` |
+| `argsTemplate: "gemini"` / `"gemy"` | Gemini-style `-m/-y/-p` wrappers | `agents.json` |
+| `RALPH_<TYPE>_BINARY` | Override the binary path for any custom type | shell env |
+
+Example `agents.json`:
+
+```json
+{
+  "version": "1.0",
+  "agents": [
+    {
+      "type": "ocxo",
+      "command": "ocxo",
+      "configName": "OCXO",
+      "argsTemplate": "opencode"
+    },
+    {
+      "type": "omp",
+      "command": "omp",
+      "configName": "OMP",
+      "args": ["agent", "run", "--task", "{{prompt}}", "{{modelEquals}}", "{{extraFlags}}"],
+      "toolPattern": "^\\[TOOL\\]\\s+(\\w+)",
+      "allowAllFlags": ["--full-auto"]
+    },
+    {
+      "type": "pi",
+      "command": "pi",
+      "configName": "Pi",
+      "argsTemplate": "gemini"
+    },
+    {
+      "type": "omox",
+      "command": "omox",
+      "configName": "OMOX",
+      "argsTemplate": "omox"
+    }
+  ]
+}
+```
+
+Initialize a starter config with:
+
+```bash
+ralph --init-config
+```
 
 ## Quality Gates
 
@@ -92,17 +148,19 @@ done
 
 ### Multi-Agent Flexibility
 
-Switch between AI coding agents without changing your workflow:
+Switch between built-in agents or wire in your own sub-agent wrapper without changing the loop workflow:
 
 - **Claude Code** (`--agent claude-code`) — Anthropic's powerful coding agent
 - **Codex** (`--agent codex`) — OpenAI's code-specialized model
 - **Copilot CLI** (`--agent copilot`) — GitHub's agentic coding tool
 - **Cursor Agent** (`--agent cursor-agent`) — Cursor's headless AI coding agent
 - **OpenCode** (`--agent opencode`) — Open-source default option
+- **Custom agents** (`--agent <type>` + `--config agents.json`) — `ocxo`, `omp`, `pi`, `omox`, Gemini wrappers, or any compatible internal sub-agent CLI
 
 ## Key Features
 
-- **Multi-Agent Support** — Use Claude Code, Codex, or OpenCode with the same workflow
+- **Multi-Agent Support** — Use built-ins or custom sub-agent CLIs with the same workflow
+- **Custom Agent Registry** — Load arbitrary agent types from `agents.json` with inline args or named templates
 - **Self-Correcting Loops** — Agent sees its previous work and fixes its own mistakes
 - **Autonomous Execution** — Set it running and come back to finished code
 - **Task Tracking** — Built-in task management with `--tasks` mode
@@ -199,6 +257,7 @@ Configure agent binaries with these environment variables:
 | `RALPH_CODEX_BINARY` | Path to Codex CLI | `"codex"` |
 | `RALPH_COPILOT_BINARY` | Path to Copilot CLI | `"copilot"` |
 | `RALPH_CURSOR_AGENT_BINARY` | Path to Cursor Agent CLI | `"cursor-agent"` |
+| `RALPH_<TYPE>_BINARY` | Path override for any custom agent/sub-agent type from `agents.json` | Derived from `type` |
 
 **Note for Windows users:** Ralph automatically resolves `.cmd` extensions for npm-installed CLIs. If you encounter "command not found" errors, you can use these environment variables to specify the full path to the executable.
 
@@ -235,6 +294,41 @@ Options:
   --toml-config PATH       Use runtime config from a TOML file
   --init-config [PATH]     Write default agent config to PATH and exit
   --help                   Show help
+```
+
+### Custom agent config
+
+Use `--config` to register internal sub agents or wrapper CLIs without changing Ralph source.
+
+Supported config styles:
+
+- `args`: fully inline command arguments with `{{prompt}}`, `{{model}}`, `{{modelEquals}}`, `{{allowAllFlags}}`, `{{extraFlags}}`
+- `argsTemplate`: built-in builders such as `opencode`, `opencode-raw`, `claude-code`, `codex`, `copilot`, `default`, `gemini`, `gemy`, `omox`
+- `promptViaStdin`: send the prompt over stdin for CLIs that do not accept a prompt argument
+- `toolPattern`: custom tool-output parser for compact status summaries
+- `allowAllFlags`: per-agent approval flags
+
+Example:
+
+```json
+{
+  "version": "1.0",
+  "agents": [
+    {
+      "type": "pi",
+      "command": "pi",
+      "configName": "Pi Agent",
+      "args": ["run", "{{prompt}}", "{{modelEquals}}", "{{extraFlags}}"],
+      "allowAllFlags": ["--allow-all"]
+    },
+    {
+      "type": "gemy",
+      "command": "gemy",
+      "configName": "Gemy",
+      "argsTemplate": "gemy"
+    }
+  ]
+}
 ```
 
 ### Runtime TOML Config

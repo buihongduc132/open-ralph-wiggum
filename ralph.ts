@@ -9,7 +9,7 @@
 import { $ } from "bun";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, lstatSync } from "fs";
 import { dirname, isAbsolute, join, relative, resolve } from "path";
-import { checkTerminalPromise, containsPromiseTag, stripAnsi, tasksMarkdownAllComplete } from "./completion";
+import { checkTerminalPromise, containsPromiseTag, escapeRegex, stripAnsi, tasksMarkdownAllComplete } from "./completion";
 import {
    decideLoopOwnership,
    pruneExpiredBlacklistedAgents,
@@ -583,7 +583,7 @@ export function resolveCommand(cmd: string, envOverride?: string, basePath?: str
       const cmdWithExt = `${cmd}.cmd`;
       if (Bun.which(cmdWithExt)) return cmdWithExt;
    }
-   // For relative paths (e.g. tests/helpers/fake-agent.sh), resolve against the
+   // For relative paths used by local helper commands, resolve against the
    // config file's directory (basePath) so Bun.spawn finds them regardless of cwd.
    if (!isAbsolute(cmd)) {
       const ralphDir = import.meta.dirname;
@@ -2158,7 +2158,7 @@ Learn more: https://ghuntley.com/ralph/
           // end-of-options marker in the message body.
           template = stripFrontmatter(template);
 
-          // If the template is empty or whitespace-only (e.g. intentional stub file),
+          // If the template is empty or whitespace-only (e.g. intentional placeholder file),
            // return null so buildPrompt falls back to the default path which uses
            // state.prompt (the CLI positional argument string) as the agent message.
            if (!template?.trim()) return null;
@@ -2502,6 +2502,7 @@ Unable to read ${currentTasksFileLabel()}
 
    async function streamProcessOutput(
       proc: ReturnType<typeof Bun.spawn>,
+      procPid: number,
       options: {
          compactTools: boolean;
          toolSummaryIntervalMs: number;
@@ -2514,8 +2515,9 @@ Unable to read ${currentTasksFileLabel()}
          onStallingDetected?: () => void;
          suppressOutput?: boolean;
          preStartTimeoutMs?: number; // -1 = auto (1/10 stallingTimeout), 0 = disabled, >0 = custom
+         stopOnPromise?: string;
       },
-   ): Promise<{ stdoutText: string; stderrText: string; toolCounts: Map<string, number>; stalled: boolean; stalledForMs: number | null; preStartStalled: boolean }> {
+   ): Promise<{ stdoutText: string; stderrText: string; toolCounts: Map<string, number>; stalled: boolean; stalledForMs: number | null; preStartStalled: boolean; terminatedAfterPromise: boolean }> {
       const toolCounts = new Map<string, number>();
       let stdoutText = "";
       let stderrText = "";
@@ -2525,6 +2527,12 @@ Unable to read ${currentTasksFileLabel()}
       let stalled = false;
       let stalledForMs: number | null = null;
       let firstOutputReceived = false;
+      let terminatedAfterPromise = false;
+      const stopController = new AbortController();
+
+      const promisePattern = options.stopOnPromise
+         ? new RegExp(`^<promise>\\s*${escapeRegex(options.stopOnPromise)}\\s*</promise>$`, "i")
+         : null;
 
       const compactTools = options.compactTools;
       const parseToolOutput = options.agent.parseToolOutput;
@@ -2547,6 +2555,10 @@ Unable to read ${currentTasksFileLabel()}
          activityTracker.markLine();
          const tool = parseToolOutput(line);
          const outputLines = options.agent.type === "claude-code" ? extractClaudeStreamDisplayLines(line) : [line];
+         let completionPromiseSeen = false;
+         if (!isError && promisePattern) {
+            completionPromiseSeen = outputLines.some(outputLine => promisePattern.test(outputLine.trim()));
+         }
          if (tool) {
             toolCounts.set(tool, (toolCounts.get(tool) ?? 0) + 1);
             if (compactTools && outputLines.length === 0) {
@@ -2572,6 +2584,21 @@ Unable to read ${currentTasksFileLabel()}
             }
             lastPrintedAt = Date.now();
          }
+
+         if (completionPromiseSeen && proc.exitCode === null && !terminatedAfterPromise) {
+            terminatedAfterPromise = true;
+            clearInterval(heartbeatTimer);
+            stopController.abort();
+            try {
+               process.kill(-procPid, "SIGKILL");
+            } catch {
+               try {
+                  proc.kill("SIGKILL");
+               } catch {
+                  // Process may have already exited.
+               }
+            }
+         }
       };
 
       const streamText = async (
@@ -2585,19 +2612,35 @@ Unable to read ${currentTasksFileLabel()}
          let buffer = "";
 
          // Create abort promise if signal provided
-          const abortPromise = options.abortSignal
-             ? new Promise<{ value: undefined; done: true }>((resolve) => {
-                const signal = options.abortSignal!;
-                const handler = () => {
-                   signal.removeEventListener('abort', handler);
-                   resolve({ value: undefined, done: true });
-                };
-                signal.addEventListener('abort', handler);
-             })
+         const abortSignals = [stopController.signal, options.abortSignal].filter(Boolean) as AbortSignal[];
+         const abortPromise = abortSignals.length > 0
+            ? new Promise<{ value: undefined; done: true }>((resolve) => {
+               const handlers = new Map<AbortSignal, () => void>();
+               const cleanup = () => {
+                  for (const [signal, handler] of handlers) {
+                     signal.removeEventListener("abort", handler);
+                  }
+               };
+               const resolveAbort = () => {
+                  cleanup();
+                  resolve({ value: undefined, done: true });
+               };
+               for (const signal of abortSignals) {
+                  if (signal.aborted) {
+                     resolveAbort();
+                     return;
+                  }
+                  const handler = () => {
+                     resolveAbort();
+                  };
+                  handlers.set(signal, handler);
+                  signal.addEventListener("abort", handler);
+               }
+            })
             : new Promise<{ value: undefined; done: true }>(() => { });
 
          while (true) {
-            const result = options.abortSignal
+            const result = abortSignals.length > 0
                ? await Promise.race([reader.read(), abortPromise])
                : await reader.read();
 
@@ -2636,7 +2679,12 @@ Unable to read ${currentTasksFileLabel()}
                if (options.onStallingDetected) {
                   options.onStallingDetected();
                }
-               proc.kill();
+               stopController.abort();
+               try {
+                  process.kill(-procPid, "SIGKILL");
+               } catch {
+                  proc.kill("SIGKILL");
+               }
             }
             return;
          }
@@ -2657,8 +2705,13 @@ Unable to read ${currentTasksFileLabel()}
                if (options.onStallingDetected) {
                   options.onStallingDetected();
                }
+               stopController.abort();
                // Kill the process to stop the iteration
-               proc.kill();
+               try {
+                  process.kill(-procPid, "SIGKILL");
+               } catch {
+                  proc.kill("SIGKILL");
+               }
             }
          }
       }, options.heartbeatIntervalMs);
@@ -2685,8 +2738,13 @@ Unable to read ${currentTasksFileLabel()}
                 const elapsed = formatDuration(stalledForMs);
                 console.log(`⚠️  Pre-start stalling detected: no output for ${effectivePreStartTimeout}ms (elapsed: ${elapsed})`);
                 console.log(`   The agent may be hanging before producing output...`);
+                stopController.abort();
                 // Kill the process to stop the iteration
-                proc.kill();
+                try {
+                   process.kill(-procPid, "SIGKILL");
+                } catch {
+                   proc.kill("SIGKILL");
+                }
              }
           }, effectivePreStartTimeout);
        }
@@ -2719,7 +2777,7 @@ Unable to read ${currentTasksFileLabel()}
          maybePrintToolSummary(true);
       }
 
-      return { stdoutText, stderrText, toolCounts, stalled, stalledForMs, preStartStalled: stalled && !firstOutputReceived };
+      return { stdoutText, stderrText, toolCounts, stalled, stalledForMs, preStartStalled: stalled && !firstOutputReceived, terminatedAfterPromise };
    }
    // Main loop
    // Helper to detect per-iteration file changes using content hashes
@@ -2733,8 +2791,13 @@ Unable to read ${currentTasksFileLabel()}
       const files = new Map<string, string>();
       const cwd = process.cwd();
       try {
+         const insideWorkTree = await $`git rev-parse --is-inside-work-tree`.cwd(cwd).quiet().text().catch(() => "");
+         if (insideWorkTree.trim() !== "true") {
+            return { files };
+         }
+
          // Get list of all tracked and modified files
-         const status = await $`git status --porcelain`.cwd(cwd).text();
+         const status = await $`git -c status.showUntrackedFiles=no status --porcelain`.cwd(cwd).text();
          const trackedFiles = await $`git ls-files`.cwd(cwd).text();
 
          // Combine modified and tracked files
@@ -3086,9 +3149,13 @@ Unable to read ${currentTasksFileLabel()}
          // Kill the subprocess if it's running
          if (currentProc) {
             try {
-               currentProc.kill();
+               process.kill(-currentProc.pid, "SIGKILL");
             } catch {
-               // Process may have already exited
+               try {
+                  currentProc.kill("SIGKILL");
+               } catch {
+                  // Process may have already exited
+               }
             }
          }
 
@@ -3201,22 +3268,24 @@ Unable to read ${currentTasksFileLabel()}
             currentProc = Bun.spawn([agentConfig.command, ...cmdArgs], {
                cwd: process.cwd(),
                env,
-               stdin: "inherit",
+               stdin: "ignore",
                stdout: "pipe",
                stderr: "pipe",
+               detached: true,
             });
             const proc = currentProc;
             const exitCodePromise = proc.exited;
             let result = "";
             let stderr = "";
             let toolCounts = new Map<string, number>();
+            let terminatedAfterPromise = false;
 
             if (streamOutput) {
                // Create AbortController for this iteration
                const abortController = new AbortController();
                currentAbortController = abortController;
 
-               const streamed = await streamProcessOutput(proc, {
+               const streamed = await streamProcessOutput(proc, proc.pid, {
                   compactTools: !verboseTools,
                   toolSummaryIntervalMs: 3000,
                   heartbeatIntervalMs: heartbeatIntervalMs,
@@ -3225,6 +3294,7 @@ Unable to read ${currentTasksFileLabel()}
                   abortSignal: abortController.signal,
                   stallingTimeoutMs: state.stallingTimeoutMs,
                   preStartTimeoutMs,
+                  stopOnPromise: completionPromise,
                   onHeartbeatTimer: (timer) => {
                      currentHeartbeatTimer = timer;
                   },
@@ -3234,6 +3304,7 @@ Unable to read ${currentTasksFileLabel()}
                result = streamed.stdoutText;
                stderr = streamed.stderrText;
                toolCounts = streamed.toolCounts;
+               terminatedAfterPromise = streamed.terminatedAfterPromise;
 
                // Handle stalling detection
                const isPreStartStalled = streamed.preStartStalled;
@@ -3259,9 +3330,13 @@ Unable to read ${currentTasksFileLabel()}
                   // For pre-start stalling, we need to kill the process if it's still running
                   if (isPreStartStalled && currentProc) {
                      try {
-                        currentProc.kill();
+                        process.kill(-currentProc.pid, "SIGKILL");
                      } catch {
-                        // Process may have already exited
+                        try {
+                           currentProc.kill("SIGKILL");
+                        } catch {
+                           // Process may have already exited
+                        }
                      }
                   }
 
@@ -3318,7 +3393,7 @@ Unable to read ${currentTasksFileLabel()}
                    }
                }
             } else {
-               const buffered = await streamProcessOutput(proc, {
+               const buffered = await streamProcessOutput(proc, proc.pid, {
                   compactTools: !verboseTools,
                   toolSummaryIntervalMs: 3000,
                   heartbeatIntervalMs: heartbeatIntervalMs,
@@ -3406,7 +3481,16 @@ Unable to read ${currentTasksFileLabel()}
                 }
              }
 
-             const exitCode = await exitCodePromise;
+            const exitCode = terminatedAfterPromise
+               ? 0
+               : await exitCodePromise;
+            if (terminatedAfterPromise && currentProc) {
+               try {
+                  currentProc.kill("SIGKILL");
+               } catch {
+                  // Best-effort cleanup for agents that keep descendants alive.
+               }
+            }
             currentProc = null; // Clear reference after subprocess completes
 
             if (!streamOutput) {
@@ -3504,7 +3588,7 @@ Unable to read ${currentTasksFileLabel()}
                process.exit(1);
             }
 
-            if (exitCode !== 0) {
+            if (exitCode !== 0 && !(streamOutput && terminatedAfterPromise)) {
                console.warn(`\n⚠️  ${agentConfig.configName} exited with code ${exitCode}. Continuing to next iteration.`);
             }
 
@@ -3658,9 +3742,13 @@ Unable to read ${currentTasksFileLabel()}
             // Kill subprocess if still running to prevent orphaned processes
             if (currentProc) {
                try {
-                  currentProc.kill();
+                  process.kill(-currentProc.pid, "SIGKILL");
                } catch {
-                  // Process may have already exited
+                  try {
+                     currentProc.kill("SIGKILL");
+                  } catch {
+                     // Process may have already exited
+                  }
                }
                currentProc = null;
             }

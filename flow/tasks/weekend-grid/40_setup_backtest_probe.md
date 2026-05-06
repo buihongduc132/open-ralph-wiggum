@@ -9,7 +9,7 @@
 ## Superseded by
 
 See updated specs in:
-- `flow/tasks/weekend-grid/10todo/01_phase0_calibration.md` — Phase 0 stub
+- `flow/tasks/weekend-grid/10todo/01_phase0_calibration.md` — Phase 0 placeholder
 - `flow/tasks/weekend-grid/10todo/02_phase1_fixed_grid.md` — Full BacktestProbe with VectorBT
 
 ## Strategy Direction (CORRECTED)

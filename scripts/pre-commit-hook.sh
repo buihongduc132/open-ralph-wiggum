@@ -110,7 +110,7 @@ fi
 
 # ── 4. bun test (full suite, fresh gate) ────────────────────────────────────
 # Excludes stalling-detection and stall-retry tests which have known pre-existing
-# flakiness due to timing-sensitive fake-agent harness.
+# flakiness due to timing-sensitive helper-agent harness.
 STABLE_TESTS=(
   tests/args-templates.test.ts
   tests/config-loading.test.ts

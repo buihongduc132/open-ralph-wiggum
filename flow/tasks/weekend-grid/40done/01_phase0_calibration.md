@@ -86,11 +86,11 @@ Implement:
   Return two lists: closes_at_wc and closes_at_wo for each window.
   Use nearest-timestamp lookup within 1 hour tolerance.
 
-#### `src/weekend_grid/backtest.py` (BacktestProbe) — Phase 0 stub
+#### `src/weekend_grid/backtest.py` (BacktestProbe) — Phase 0 placeholder
 Implement a placeholder that raises `NotImplementedError` with message:
 "Use VectorBT for full backtesting in Phase 1+"
 
-#### `src/weekend_grid/sweep.py` (SweepLayer) — Phase 0 stub
+#### `src/weekend_grid/sweep.py` (SweepLayer) — Phase 0 placeholder
 Implement placeholder returning empty results.
 
 #### `src/weekend_grid/cache.py` (CacheLayer)
