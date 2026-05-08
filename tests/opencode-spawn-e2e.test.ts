@@ -28,6 +28,21 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+
+async function waitForExitOrTimeout(proc: Bun.Subprocess, timeoutMs: number): Promise<number> {
+   return await Promise.race([
+      proc.exited,
+      new Promise<number>((_, reject) => {
+         const timer = setTimeout(() => {
+            try {
+               proc.kill("SIGKILL");
+            } catch {}
+            reject(new Error(`process did not exit within ${timeoutMs}ms`));
+         }, timeoutMs);
+         proc.exited.finally(() => clearTimeout(timer));
+      }),
+   ]);
+}
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -148,15 +163,15 @@ describe("opencode spawn – model flag", () => {
          env: { ...process.env, NODE_ENV: "test" },
       });
 
-      const [stdout, stderr] = await Promise.all([
-         new Response(proc.stdout).text(),
-         new Response(proc.stderr).text(),
-      ]);
-      const exitCode = await proc.exited;
+      const stdoutPromise = new Response(proc.stdout).text();
+      const stderrPromise = new Response(proc.stderr).text();
+      const exitCode = await waitForExitOrTimeout(proc, 5000);
+      const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
 
       expect(exitCode).toBe(0);
       expect(stdout).toContain("Allow tool execution? [yes/no]");
       expect(stdout).toContain("<promise>COMPLETE</promise>");
+      expect(stdout).not.toContain("working...");
       expect(stderr).not.toContain("interactive stdin unavailable");
    });
 

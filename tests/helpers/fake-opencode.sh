@@ -101,8 +101,9 @@ if [[ "$model" == stall-* ]]; then
 fi
 
 if [[ "$model" == "interactive-stdin" ]]; then
-  echo "Allow tool execution? [yes/no]"
+  printf "Allow tool execution? [yes/no]"
   if IFS= read -r answer; then
+    printf "\n"
     if [[ "$answer" == "yes" ]]; then
       echo "<promise>$completion_promise</promise>"
       exit 0
