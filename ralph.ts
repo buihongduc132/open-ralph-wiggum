@@ -1927,6 +1927,12 @@ Learn more: https://ghuntley.com/ralph/
       process.exit(1);
    }
 
+   if (!streamOutput && !allowAllPermissions) {
+      console.error("Error: --no-stream cannot be used when interactive permission prompts are enabled.");
+      console.error("Use --stream, or re-enable auto-approval with --allow-all.");
+      process.exit(1);
+   }
+
    interface RalphState {
       active: boolean;
       iteration: number;
@@ -2516,6 +2522,7 @@ Unable to read ${currentTasksFileLabel()}
          suppressOutput?: boolean;
          preStartTimeoutMs?: number; // -1 = auto (1/10 stallingTimeout), 0 = disabled, >0 = custom
          stopOnPromise?: string;
+         flushPartialLines?: boolean;
       },
    ): Promise<{ stdoutText: string; stderrText: string; toolCounts: Map<string, number>; stalled: boolean; stalledForMs: number | null; preStartStalled: boolean; terminatedAfterPromise: boolean }> {
       const toolCounts = new Map<string, number>();
@@ -2551,7 +2558,16 @@ Unable to read ${currentTasksFileLabel()}
          }
       };
 
-      const handleLine = (line: string, isError: boolean) => {
+      const writeOutput = (text: string, isError: boolean) => {
+         if (options.suppressOutput || text.length === 0) return;
+         if (isError) {
+            process.stderr.write(text);
+         } else {
+            process.stdout.write(text);
+         }
+      };
+
+      const handleLine = (line: string, isError: boolean, displayedPrefixLength = 0) => {
          activityTracker.markLine();
          const tool = parseToolOutput(line);
          const outputLines = options.agent.type === "claude-code" ? extractClaudeStreamDisplayLines(line) : [line];
@@ -2569,19 +2585,15 @@ Unable to read ${currentTasksFileLabel()}
 
          for (const outputLine of outputLines) {
             if (outputLine.length === 0) {
-               if (!options.suppressOutput) {
-                  console.log("");
-               }
+               writeOutput("\n", isError);
                lastPrintedAt = Date.now();
                continue;
             }
-            if (!options.suppressOutput) {
-               if (isError) {
-                  console.error(outputLine);
-               } else {
-                  console.log(outputLine);
-               }
-            }
+            const alreadyDisplayed = displayedPrefixLength > 0 && outputLines.length === 1
+               ? Math.min(displayedPrefixLength, outputLine.length)
+               : 0;
+            writeOutput(outputLine.slice(alreadyDisplayed), isError);
+            writeOutput("\n", isError);
             lastPrintedAt = Date.now();
          }
 
@@ -2610,6 +2622,7 @@ Unable to read ${currentTasksFileLabel()}
          const reader = stream.getReader();
          const decoder = new TextDecoder();
          let buffer = "";
+         let partialCharsDisplayed = 0;
 
          // Create abort promise if signal provided
          const abortSignals = [stopController.signal, options.abortSignal].filter(Boolean) as AbortSignal[];
@@ -2655,7 +2668,18 @@ Unable to read ${currentTasksFileLabel()}
                const lines = buffer.split(/\r?\n/);
                buffer = lines.pop() ?? "";
                for (const line of lines) {
-                  handleLine(line, isError);
+                  handleLine(line, isError, partialCharsDisplayed);
+                  partialCharsDisplayed = 0;
+               }
+               if (
+                  options.flushPartialLines &&
+                  !options.suppressOutput &&
+                  options.agent.type !== "claude-code" &&
+                  buffer.length > partialCharsDisplayed
+               ) {
+                  writeOutput(buffer.slice(partialCharsDisplayed), isError);
+                  partialCharsDisplayed = buffer.length;
+                  lastPrintedAt = Date.now();
                }
             }
          }
@@ -2665,7 +2689,7 @@ Unable to read ${currentTasksFileLabel()}
             buffer += flushed;
          }
          if (buffer.length > 0) {
-            handleLine(buffer, isError);
+            handleLine(buffer, isError, partialCharsDisplayed);
          }
       };
 
@@ -3262,13 +3286,13 @@ Unable to read ${currentTasksFileLabel()}
 
             console.log(`DEBUG: Agent Command: ${agentConfig.command}`);
             console.log(`DEBUG: Agent Args: ${JSON.stringify(cmdArgs)}`);
-            // Run agent using spawn for better argument handling
-            // preventing the 5s delay when detecting stalling. stdin is not used anyway.
-            // stdin is inherited so users can respond to permission prompts if needed
+            // Run agent using spawn for better argument handling.
+            // Interactive permission prompts require live stdin and visible output,
+            // so we only inherit stdin when prompts are allowed and streaming stays on.
             currentProc = Bun.spawn([agentConfig.command, ...cmdArgs], {
                cwd: process.cwd(),
                env,
-               stdin: "ignore",
+               stdin: allowAllPermissions ? "ignore" : "inherit",
                stdout: "pipe",
                stderr: "pipe",
                detached: true,
@@ -3298,6 +3322,7 @@ Unable to read ${currentTasksFileLabel()}
                   onHeartbeatTimer: (timer) => {
                      currentHeartbeatTimer = timer;
                   },
+                  flushPartialLines: !allowAllPermissions,
                });
                currentHeartbeatTimer = null; // Clear after streaming completes
                currentAbortController = null; // Clear after streaming completes
