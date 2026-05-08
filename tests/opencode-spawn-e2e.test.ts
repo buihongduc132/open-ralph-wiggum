@@ -122,6 +122,44 @@ describe("opencode spawn – model flag", () => {
    });
    afterEach(cleanup);
 
+   it("fails fast when --no-stream hides interactive permission prompts", async () => {
+      const result = await runRalph([
+         "--agent", "opencode",
+         "--model", "claude-sonnet-4",
+         "--no-stream",
+         "--no-allow-all",
+         "--max-iterations", "1",
+      ]);
+
+      expect(result.exitCode).toBe(1);
+      expect(`${result.stdout}\n${result.stderr}`).toContain("--no-stream cannot be used when interactive permission prompts are enabled");
+   });
+
+   it("inherits stdin in stream mode when interactive permissions are enabled", async () => {
+      const proc = Bun.spawn({
+         cmd: [
+            "sh",
+            "-c",
+            `printf 'yes\\n' | "${bunPath}" run "${ralphPath}" --state-dir "${stateDir}" --config "${agentConfigPath}" --no-commit --agent opencode --model interactive-stdin --completion-promise COMPLETE --no-allow-all --max-iterations 1 "do it"`,
+         ],
+         cwd: workDir,
+         stdout: "pipe",
+         stderr: "pipe",
+         env: { ...process.env, NODE_ENV: "test" },
+      });
+
+      const [stdout, stderr] = await Promise.all([
+         new Response(proc.stdout).text(),
+         new Response(proc.stderr).text(),
+      ]);
+      const exitCode = await proc.exited;
+
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("Allow tool execution? [yes/no]");
+      expect(stdout).toContain("<promise>COMPLETE</promise>");
+      expect(stderr).not.toContain("interactive stdin unavailable");
+   });
+
    it("Ralph passes -m model when model is set via --model flag", async () => {
       // The fake opencode treats any non-empty model as valid and completes.
       // If -m was NOT passed (model empty), fake-opencode exits 1 with

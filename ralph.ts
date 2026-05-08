@@ -1927,6 +1927,12 @@ Learn more: https://ghuntley.com/ralph/
       process.exit(1);
    }
 
+   if (!streamOutput && !allowAllPermissions) {
+      console.error("Error: --no-stream cannot be used when interactive permission prompts are enabled.");
+      console.error("Use --stream, or re-enable auto-approval with --allow-all.");
+      process.exit(1);
+   }
+
    interface RalphState {
       active: boolean;
       iteration: number;
@@ -3262,13 +3268,13 @@ Unable to read ${currentTasksFileLabel()}
 
             console.log(`DEBUG: Agent Command: ${agentConfig.command}`);
             console.log(`DEBUG: Agent Args: ${JSON.stringify(cmdArgs)}`);
-            // Run agent using spawn for better argument handling
-            // preventing the 5s delay when detecting stalling. stdin is not used anyway.
-            // stdin is inherited so users can respond to permission prompts if needed
+            // Run agent using spawn for better argument handling.
+            // Interactive permission prompts require live stdin and visible output,
+            // so we only inherit stdin when prompts are allowed and streaming stays on.
             currentProc = Bun.spawn([agentConfig.command, ...cmdArgs], {
                cwd: process.cwd(),
                env,
-               stdin: "ignore",
+               stdin: allowAllPermissions ? "ignore" : "inherit",
                stdout: "pipe",
                stderr: "pipe",
                detached: true,

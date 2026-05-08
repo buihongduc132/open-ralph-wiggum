@@ -100,6 +100,20 @@ if [[ "$model" == stall-* ]]; then
   exit 0
 fi
 
+if [[ "$model" == "interactive-stdin" ]]; then
+  echo "Allow tool execution? [yes/no]"
+  if IFS= read -r answer; then
+    if [[ "$answer" == "yes" ]]; then
+      echo "<promise>$completion_promise</promise>"
+      exit 0
+    fi
+    echo "interactive denied" >&2
+    exit 1
+  fi
+  echo "interactive stdin unavailable" >&2
+  exit 1
+fi
+
 # Normal mode: output tool lines (matching parseToolOutput patterns) + completion
 echo "|  bash_execute"
 echo "|  Read"
