@@ -8,7 +8,7 @@ import { existsSync, readFileSync as readFileSync2, writeFileSync, mkdirSync, st
 import { dirname, isAbsolute, join, relative, resolve } from "path";
 
 // completion.ts
-var ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
+var ANSI_PATTERN = /\u001B\[[0-9;]*m/g;
 function stripAnsi(input) {
   return input.replace(ANSI_PATTERN, "");
 }
@@ -28,6 +28,11 @@ function checkTerminalPromise(output, promise) {
   const escapedPromise = escapeRegex(promise);
   const pattern = new RegExp(`^<promise>\\s*${escapedPromise}\\s*</promise>$`, "i");
   return pattern.test(lastLine);
+}
+function containsPromiseTag(output, promise) {
+  const escapedPromise = escapeRegex(promise);
+  const pattern = new RegExp(`<promise>\\s*${escapedPromise}\\s*</promise>`, "i");
+  return pattern.test(stripAnsi(output));
 }
 function tasksMarkdownAllComplete(tasksMarkdown) {
   const lines = tasksMarkdown.split(/\r?\n/);
@@ -166,21 +171,33 @@ function selectRotationEntry(rotation, rotationIndex, blacklistedAgents) {
 }
 
 // agent-builders.ts
+var geminiBuilder = (prompt, model, options) => {
+  const cmdArgs = [];
+  if (model?.trim())
+    cmdArgs.push("-m", model);
+  if (options?.allowAllPermissions)
+    cmdArgs.push("-y");
+  if (options?.extraFlags?.length)
+    cmdArgs.push(...options.extraFlags);
+  cmdArgs.push("-p", prompt);
+  return cmdArgs;
+};
+var runBuilder = (prompt, model, options) => {
+  const cmdArgs = ["run"];
+  const hasPassthroughModel = options?.extraFlags?.includes("--model") || options?.skipModelFlag;
+  if (model?.trim() && !hasPassthroughModel)
+    cmdArgs.push("-m", model);
+  if (options?.extraFlags?.length)
+    cmdArgs.push(...options.extraFlags);
+  cmdArgs.push(prompt);
+  return cmdArgs;
+};
 var ARGS_TEMPLATES = {
-  opencode: (prompt, model, options) => {
-    const cmdArgs = ["run"];
-    const hasPassthroughModel = options?.extraFlags?.includes("--model") || options?.skipModelFlag;
-    if (model && !hasPassthroughModel)
-      cmdArgs.push("-m", model);
-    if (options?.extraFlags?.length)
-      cmdArgs.push(...options.extraFlags);
-    cmdArgs.push(prompt);
-    return cmdArgs;
-  },
+  opencode: runBuilder,
   "opencode-raw": (prompt, model, options) => {
     const cmdArgs = [];
     const hasPassthroughModel = options?.extraFlags?.includes("--model") || options?.skipModelFlag;
-    if (model && !hasPassthroughModel)
+    if (model?.trim() && !hasPassthroughModel)
       cmdArgs.push("-m", model);
     if (options?.extraFlags?.length)
       cmdArgs.push(...options.extraFlags);
@@ -191,7 +208,7 @@ var ARGS_TEMPLATES = {
     const cmdArgs = ["-p", prompt];
     if (options?.streamOutput)
       cmdArgs.push("--output-format", "stream-json", "--include-partial-messages", "--verbose");
-    if (model)
+    if (model?.trim())
       cmdArgs.push("--model", model);
     if (options?.allowAllPermissions)
       cmdArgs.push("--dangerously-skip-permissions");
@@ -201,7 +218,7 @@ var ARGS_TEMPLATES = {
   },
   codex: (prompt, model, options) => {
     const cmdArgs = ["exec"];
-    if (model)
+    if (model?.trim())
       cmdArgs.push("--model", model);
     if (options?.allowAllPermissions)
       cmdArgs.push("--full-auto");
@@ -212,7 +229,7 @@ var ARGS_TEMPLATES = {
   },
   copilot: (prompt, model, options) => {
     const cmdArgs = ["-p", prompt];
-    if (model)
+    if (model?.trim())
       cmdArgs.push("--model", model);
     if (options?.allowAllPermissions)
       cmdArgs.push("--allow-all", "--no-ask-user");
@@ -222,7 +239,7 @@ var ARGS_TEMPLATES = {
   },
   default: (prompt, model, options) => {
     const cmdArgs = [];
-    if (model)
+    if (model?.trim())
       cmdArgs.push("--model", model);
     if (options?.allowAllPermissions)
       cmdArgs.push("--full-auto");
@@ -230,7 +247,10 @@ var ARGS_TEMPLATES = {
       cmdArgs.push(...options.extraFlags);
     cmdArgs.push(prompt);
     return cmdArgs;
-  }
+  },
+  gemy: geminiBuilder,
+  gemini: geminiBuilder,
+  omox: runBuilder
 };
 
 // template-utils.ts
@@ -247,7 +267,7 @@ function stripFrontmatter(content) {
 }
 
 // ralph.ts
-var VERSION = "1.2.2";
+var VERSION = "1.3.0";
 var IS_WINDOWS = process.platform === "win32";
 var stateDir = join(process.cwd(), ".ralph");
 var statePath = join(stateDir, "ralph-loop.state.json");
@@ -306,6 +326,17 @@ var defaultParseToolOutput = (line) => {
 };
 PARSE_PATTERNS["codex"] = defaultParseToolOutput;
 PARSE_PATTERNS["copilot"] = defaultParseToolOutput;
+PARSE_PATTERNS["pi"] = (line) => {
+  try {
+    const evt = JSON.parse(line);
+    if (evt.type === "turn_end" && evt.toolResults?.length > 0) {
+      return evt.toolResults[0].toolName || null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
 function loadPluginsFromConfig(configPath) {
   if (!existsSync(configPath)) {
     return [];
@@ -327,7 +358,7 @@ function ensureRalphConfig(options) {
   }
   const configPath = join(stateDir, "ralph-opencode.config.json");
   const userConfigPath = join(process.env.XDG_CONFIG_HOME ?? join(process.env.HOME ?? "", ".config"), "opencode", "opencode.json");
-  const projectConfigPath = join(stateDir, "opencode.json");
+  const projectConfigPath = join(process.cwd(), ".ralph", "opencode.json");
   const legacyProjectConfigPath = join(process.cwd(), ".opencode", "opencode.json");
   const config = {
     $schema: "https://opencode.ai/config.json"
@@ -370,7 +401,6 @@ var ENV_TEMPLATES = {
         allowAllPermissions: options.allowAllPermissions
       });
     }
-    env.OPENCODE_CONFIG_DIR = stateDir;
     return env;
   },
   default: () => ({ ...process.env })
@@ -695,14 +725,10 @@ function loadRuntimeTomlConfig(configPath, explicit) {
 function resolveCommand(cmd, envOverride, basePath) {
   if (envOverride)
     return envOverride;
-  if (IS_WINDOWS) {
-    const cmdPath = Bun.which(cmd);
-    if (!cmdPath) {
-      const cmdWithExt = `${cmd}.cmd`;
-      const cmdExtPath = Bun.which(cmdWithExt);
-      if (cmdExtPath)
-        return cmdWithExt;
-    }
+  if (IS_WINDOWS && !/[\\/]/.test(cmd) && !/\.(cmd|exe|bat)$/i.test(cmd)) {
+    const cmdWithExt = `${cmd}.cmd`;
+    if (Bun.which(cmdWithExt))
+      return cmdWithExt;
   }
   if (!isAbsolute(cmd)) {
     const ralphDir = import.meta.dirname;
@@ -1190,12 +1216,16 @@ ${taskInstructions}
 Unable to read ${currentTasksFileLabel()}
 `;
     }
-  }, checkCompletion = function(output, promise) {
-    return checkTerminalPromise(output, promise);
+  }, checkCompletion = function(output, promise, rawOutput) {
+    if (checkTerminalPromise(output, promise))
+      return true;
+    if (rawOutput && containsPromiseTag(rawOutput, promise))
+      return true;
+    return false;
   }, detectPlaceholderPluginError = function(output) {
     return output.includes("ralph-wiggum is not yet ready for use. This is a placeholder package.");
   }, detectModelNotFoundError = function(output) {
-    return output.includes("ProviderModelNotFoundError") || output.includes("Provider returned error") || output.includes("model not found") || output.includes("No model configured");
+    return output.includes("ProviderModelNotFoundError") || output.includes("Provider returned error") || output.includes("model not found") || output.includes("No model configured") || output.includes(".split is not a function");
   }, extractClaudeStreamDisplayLines = function(rawLine) {
     const cleanLine = stripAnsi(rawLine).trim();
     if (!cleanLine.startsWith("{")) {
@@ -1409,7 +1439,7 @@ Arguments:
   prompt              Task description for the AI to work on
 
 Options:
-  --agent AGENT       AI agent to use: opencode (default), claude-code, codex, copilot
+  --agent AGENT       AI agent to use: opencode (default), claude-code, codex, copilot, cursor-agent
   --min-iterations N  Minimum iterations before completion allowed (default: 1)
   --max-iterations N  Maximum iterations before stopping (default: unlimited)
   --completion-promise TEXT  Phrase that signals completion (default: COMPLETE)
@@ -1419,7 +1449,7 @@ Options:
   --model MODEL       Model to use (agent-specific, e.g., anthropic/claude-sonnet)
   --rotation LIST     Agent/model rotation for each iteration (comma-separated)
                       Each entry must be "agent:model" format
-                      Valid agents: opencode, claude-code, codex
+                      Valid agents: opencode, claude-code, codex, copilot, cursor-agent
                       Example: --rotation "opencode:claude-sonnet-4,claude-code:gpt-4o"
                       When used, --agent and --model are ignored
   --stalling-timeout DURATION  Time without activity before considering agent stalled (default: 2h)
@@ -2307,7 +2337,7 @@ Your answer: `, (answer) => {
       });
     });
   }
-  async function streamProcessOutput(proc, options) {
+  async function streamProcessOutput(proc, procPid, options) {
     const toolCounts = new Map;
     let stdoutText = "";
     let stderrText = "";
@@ -2317,6 +2347,9 @@ Your answer: `, (answer) => {
     let stalled = false;
     let stalledForMs = null;
     let firstOutputReceived = false;
+    let terminatedAfterPromise = false;
+    const stopController = new AbortController;
+    const promisePattern = options.stopOnPromise ? new RegExp(`^<promise>\\s*${escapeRegex(options.stopOnPromise)}\\s*</promise>$`, "i") : null;
     const compactTools = options.compactTools;
     const parseToolOutput = options.agent.parseToolOutput;
     const maybePrintToolSummary = (force = false) => {
@@ -2337,6 +2370,10 @@ Your answer: `, (answer) => {
       activityTracker.markLine();
       const tool = parseToolOutput(line);
       const outputLines = options.agent.type === "claude-code" ? extractClaudeStreamDisplayLines(line) : [line];
+      let completionPromiseSeen = false;
+      if (!isError && promisePattern) {
+        completionPromiseSeen = outputLines.some((outputLine) => promisePattern.test(outputLine.trim()));
+      }
       if (tool) {
         toolCounts.set(tool, (toolCounts.get(tool) ?? 0) + 1);
         if (compactTools && outputLines.length === 0) {
@@ -2361,6 +2398,18 @@ Your answer: `, (answer) => {
         }
         lastPrintedAt = Date.now();
       }
+      if (completionPromiseSeen && proc.exitCode === null && !terminatedAfterPromise) {
+        terminatedAfterPromise = true;
+        clearInterval(heartbeatTimer);
+        stopController.abort();
+        try {
+          process.kill(-procPid, "SIGKILL");
+        } catch {
+          try {
+            proc.kill("SIGKILL");
+          } catch {}
+        }
+      }
     };
     const streamText = async (stream, onText, isError) => {
       if (!stream)
@@ -2368,16 +2417,32 @@ Your answer: `, (answer) => {
       const reader = stream.getReader();
       const decoder = new TextDecoder;
       let buffer = "";
-      const abortPromise2 = options.abortSignal ? new Promise((resolve2) => {
-        const signal = options.abortSignal;
-        const handler = () => {
-          signal.removeEventListener("abort", handler);
+      const abortSignals = [stopController.signal, options.abortSignal].filter(Boolean);
+      const abortPromise2 = abortSignals.length > 0 ? new Promise((resolve2) => {
+        const handlers = new Map;
+        const cleanup = () => {
+          for (const [signal, handler] of handlers) {
+            signal.removeEventListener("abort", handler);
+          }
+        };
+        const resolveAbort = () => {
+          cleanup();
           resolve2({ value: undefined, done: true });
         };
-        signal.addEventListener("abort", handler);
+        for (const signal of abortSignals) {
+          if (signal.aborted) {
+            resolveAbort();
+            return;
+          }
+          const handler = () => {
+            resolveAbort();
+          };
+          handlers.set(signal, handler);
+          signal.addEventListener("abort", handler);
+        }
       }) : new Promise(() => {});
       while (true) {
-        const result = options.abortSignal ? await Promise.race([reader.read(), abortPromise2]) : await reader.read();
+        const result = abortSignals.length > 0 ? await Promise.race([reader.read(), abortPromise2]) : await reader.read();
         const { value, done } = result;
         if (done)
           break;
@@ -2413,7 +2478,12 @@ Your answer: `, (answer) => {
           if (options.onStallingDetected) {
             options.onStallingDetected();
           }
-          proc.kill();
+          stopController.abort();
+          try {
+            process.kill(-procPid, "SIGKILL");
+          } catch {
+            proc.kill("SIGKILL");
+          }
         }
         return;
       }
@@ -2433,7 +2503,12 @@ Your answer: `, (answer) => {
           if (options.onStallingDetected) {
             options.onStallingDetected();
           }
-          proc.kill();
+          stopController.abort();
+          try {
+            process.kill(-procPid, "SIGKILL");
+          } catch {
+            proc.kill("SIGKILL");
+          }
         }
       }
     }, options.heartbeatIntervalMs);
@@ -2452,7 +2527,12 @@ Your answer: `, (answer) => {
           const elapsed = formatDuration(stalledForMs);
           console.log(`\u26A0\uFE0F  Pre-start stalling detected: no output for ${effectivePreStartTimeout}ms (elapsed: ${elapsed})`);
           console.log(`   The agent may be hanging before producing output...`);
-          proc.kill();
+          stopController.abort();
+          try {
+            process.kill(-procPid, "SIGKILL");
+          } catch {
+            proc.kill("SIGKILL");
+          }
         }
       }, effectivePreStartTimeout);
     }
@@ -2474,13 +2554,17 @@ Your answer: `, (answer) => {
     if (compactTools) {
       maybePrintToolSummary(true);
     }
-    return { stdoutText, stderrText, toolCounts, stalled, stalledForMs, preStartStalled: stalled && !firstOutputReceived };
+    return { stdoutText, stderrText, toolCounts, stalled, stalledForMs, preStartStalled: stalled && !firstOutputReceived, terminatedAfterPromise };
   }
   async function captureFileSnapshot() {
     const files = new Map;
     const cwd = process.cwd();
     try {
-      const status = await $`git status --porcelain`.cwd(cwd).text();
+      const insideWorkTree = await $`git rev-parse --is-inside-work-tree`.cwd(cwd).quiet().text().catch(() => "");
+      if (insideWorkTree.trim() !== "true") {
+        return { files };
+      }
+      const status = await $`git -c status.showUntrackedFiles=no status --porcelain`.cwd(cwd).text();
       const trackedFiles = await $`git ls-files`.cwd(cwd).text();
       const allFiles = new Set;
       for (const line of status.split(`
@@ -2743,8 +2827,12 @@ Gracefully stopping Ralph loop...`);
       }
       if (currentProc) {
         try {
-          currentProc.kill();
-        } catch {}
+          process.kill(-currentProc.pid, "SIGKILL");
+        } catch {
+          try {
+            currentProc.kill("SIGKILL");
+          } catch {}
+        }
       }
       clearState();
       clearPendingQuestions();
@@ -2825,23 +2913,24 @@ Gracefully stopping Ralph loop...`);
         });
         console.log(`DEBUG: Agent Command: ${agentConfig2.command}`);
         console.log(`DEBUG: Agent Args: ${JSON.stringify(cmdArgs)}`);
-        console.error(`DEBUG: Agent Env (OPENCODE_CONFIG_DIR): ${env.OPENCODE_CONFIG_DIR}`);
         currentProc = Bun.spawn([agentConfig2.command, ...cmdArgs], {
           cwd: process.cwd(),
           env,
-          stdin: "inherit",
+          stdin: "ignore",
           stdout: "pipe",
-          stderr: "pipe"
+          stderr: "pipe",
+          detached: true
         });
         const proc = currentProc;
         const exitCodePromise = proc.exited;
         let result = "";
         let stderr = "";
         let toolCounts = new Map;
+        let terminatedAfterPromise = false;
         if (streamOutput) {
           const abortController = new AbortController;
           currentAbortController = abortController;
-          const streamed = await streamProcessOutput(proc, {
+          const streamed = await streamProcessOutput(proc, proc.pid, {
             compactTools: !verboseTools,
             toolSummaryIntervalMs: 3000,
             heartbeatIntervalMs,
@@ -2850,6 +2939,7 @@ Gracefully stopping Ralph loop...`);
             abortSignal: abortController.signal,
             stallingTimeoutMs: state.stallingTimeoutMs,
             preStartTimeoutMs,
+            stopOnPromise: completionPromise,
             onHeartbeatTimer: (timer) => {
               currentHeartbeatTimer = timer;
             }
@@ -2859,6 +2949,7 @@ Gracefully stopping Ralph loop...`);
           result = streamed.stdoutText;
           stderr = streamed.stderrText;
           toolCounts = streamed.toolCounts;
+          terminatedAfterPromise = streamed.terminatedAfterPromise;
           const isPreStartStalled = streamed.preStartStalled;
           if (streamed.stalled || isPreStartStalled) {
             const stallType = isPreStartStalled ? "Pre-start" : "";
@@ -2878,8 +2969,12 @@ Gracefully stopping Ralph loop...`);
             history.stallingEvents.push(stallingEvent);
             if (isPreStartStalled && currentProc) {
               try {
-                currentProc.kill();
-              } catch {}
+                process.kill(-currentProc.pid, "SIGKILL");
+              } catch {
+                try {
+                  currentProc.kill("SIGKILL");
+                } catch {}
+              }
             }
             const stalledExitCode = await exitCodePromise;
             currentProc = null;
@@ -2927,7 +3022,7 @@ Gracefully stopping Ralph loop...`);
             }
           }
         } else {
-          const buffered = await streamProcessOutput(proc, {
+          const buffered = await streamProcessOutput(proc, proc.pid, {
             compactTools: !verboseTools,
             toolSummaryIntervalMs: 3000,
             heartbeatIntervalMs,
@@ -3004,7 +3099,12 @@ Gracefully stopping Ralph loop...`);
             }
           }
         }
-        const exitCode = await exitCodePromise;
+        const exitCode = terminatedAfterPromise ? 0 : await exitCodePromise;
+        if (terminatedAfterPromise && currentProc) {
+          try {
+            currentProc.kill("SIGKILL");
+          } catch {}
+        }
         currentProc = null;
         if (!streamOutput) {
           if (stderr) {
@@ -3014,9 +3114,9 @@ Gracefully stopping Ralph loop...`);
         }
         const combinedOutput = `${result}
 ${stderr}`;
-        const completionSignalDetected = checkCompletion(result, completionPromise);
-        const abortDetected = abortPromise ? checkCompletion(result, abortPromise) : false;
-        const taskCompletionDetected = tasksMode ? checkCompletion(result, taskPromise) : false;
+        const completionSignalDetected = checkCompletion(result, completionPromise, result);
+        const abortDetected = abortPromise ? checkCompletion(result, abortPromise, result) : false;
+        const taskCompletionDetected = tasksMode ? checkCompletion(result, taskPromise, result) : false;
         let completionDetected = completionSignalDetected;
         if (tasksMode && completionSignalDetected) {
           let tasksGatePassed = false;
@@ -3094,7 +3194,7 @@ ${stderr}`;
           clearState();
           process.exit(1);
         }
-        if (exitCode !== 0) {
+        if (exitCode !== 0 && !(streamOutput && terminatedAfterPromise)) {
           console.warn(`
 \u26A0\uFE0F  ${agentConfig2.configName} exited with code ${exitCode}. Continuing to next iteration.`);
         }
@@ -3236,8 +3336,12 @@ ${answerContext}`);
         }
         if (currentProc) {
           try {
-            currentProc.kill();
-          } catch {}
+            process.kill(-currentProc.pid, "SIGKILL");
+          } catch {
+            try {
+              currentProc.kill("SIGKILL");
+            } catch {}
+          }
           currentProc = null;
         }
         console.error(`

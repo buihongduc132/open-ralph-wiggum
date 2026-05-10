@@ -157,6 +157,17 @@ const defaultParseToolOutput = (line: string): string | null => {
 
 PARSE_PATTERNS["codex"] = defaultParseToolOutput;
 PARSE_PATTERNS["copilot"] = defaultParseToolOutput;
+PARSE_PATTERNS["pi"] = (line) => {
+   try {
+      const evt = JSON.parse(line);
+      if (evt.type === "turn_end" && evt.toolResults?.length > 0) {
+         return evt.toolResults[0].toolName || null;
+      }
+      return null;
+   } catch {
+      return null;
+   }
+};
 
 
 
