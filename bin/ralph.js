@@ -2310,6 +2310,11 @@ ${newEntry}`);
     console.error(`Error: --stall-retry-minutes (${stallRetryMinutes}) cannot be negative`);
     process.exit(1);
   }
+  if (!streamOutput && !allowAllPermissions) {
+    console.error("Error: --no-stream cannot be used when interactive permission prompts are enabled.");
+    console.error("Use --stream, or re-enable auto-approval with --allow-all.");
+    process.exit(1);
+  }
   async function sleepForStallRetry(minutes) {
     const delayMs = getStallRetryDelayMs(minutes);
     if (delayMs === 0)
@@ -2366,7 +2371,16 @@ Your answer: `, (answer) => {
         lastToolSummaryAt = Date.now();
       }
     };
-    const handleLine = (line, isError) => {
+    const writeOutput = (text, isError) => {
+      if (options.suppressOutput || text.length === 0)
+        return;
+      if (isError) {
+        process.stderr.write(text);
+      } else {
+        process.stdout.write(text);
+      }
+    };
+    const handleLine = (line, isError, displayedPrefixLength = 0) => {
       activityTracker.markLine();
       const tool = parseToolOutput(line);
       const outputLines = options.agent.type === "claude-code" ? extractClaudeStreamDisplayLines(line) : [line];
@@ -2383,19 +2397,15 @@ Your answer: `, (answer) => {
       }
       for (const outputLine of outputLines) {
         if (outputLine.length === 0) {
-          if (!options.suppressOutput) {
-            console.log("");
-          }
+          writeOutput(`
+`, isError);
           lastPrintedAt = Date.now();
           continue;
         }
-        if (!options.suppressOutput) {
-          if (isError) {
-            console.error(outputLine);
-          } else {
-            console.log(outputLine);
-          }
-        }
+        const alreadyDisplayed = displayedPrefixLength > 0 && outputLines.length === 1 ? Math.min(displayedPrefixLength, outputLine.length) : 0;
+        writeOutput(outputLine.slice(alreadyDisplayed), isError);
+        writeOutput(`
+`, isError);
         lastPrintedAt = Date.now();
       }
       if (completionPromiseSeen && proc.exitCode === null && !terminatedAfterPromise) {
@@ -2417,6 +2427,7 @@ Your answer: `, (answer) => {
       const reader = stream.getReader();
       const decoder = new TextDecoder;
       let buffer = "";
+      let partialCharsDisplayed = 0;
       const abortSignals = [stopController.signal, options.abortSignal].filter(Boolean);
       const abortPromise2 = abortSignals.length > 0 ? new Promise((resolve2) => {
         const handlers = new Map;
@@ -2455,7 +2466,13 @@ Your answer: `, (answer) => {
           const lines = buffer.split(/\r?\n/);
           buffer = lines.pop() ?? "";
           for (const line of lines) {
-            handleLine(line, isError);
+            handleLine(line, isError, partialCharsDisplayed);
+            partialCharsDisplayed = 0;
+          }
+          if (options.flushPartialLines && !options.suppressOutput && options.agent.type !== "claude-code" && buffer.length > partialCharsDisplayed) {
+            writeOutput(buffer.slice(partialCharsDisplayed), isError);
+            partialCharsDisplayed = buffer.length;
+            lastPrintedAt = Date.now();
           }
         }
       }
@@ -2465,7 +2482,7 @@ Your answer: `, (answer) => {
         buffer += flushed;
       }
       if (buffer.length > 0) {
-        handleLine(buffer, isError);
+        handleLine(buffer, isError, partialCharsDisplayed);
       }
     };
     const heartbeatTimer = setInterval(() => {
@@ -2916,7 +2933,7 @@ Gracefully stopping Ralph loop...`);
         currentProc = Bun.spawn([agentConfig2.command, ...cmdArgs], {
           cwd: process.cwd(),
           env,
-          stdin: "ignore",
+          stdin: allowAllPermissions ? "ignore" : "inherit",
           stdout: "pipe",
           stderr: "pipe",
           detached: true
@@ -2942,7 +2959,8 @@ Gracefully stopping Ralph loop...`);
             stopOnPromise: completionPromise,
             onHeartbeatTimer: (timer) => {
               currentHeartbeatTimer = timer;
-            }
+            },
+            flushPartialLines: !allowAllPermissions
           });
           currentHeartbeatTimer = null;
           currentAbortController = null;
