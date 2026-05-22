@@ -127,3 +127,5 @@ build/
 *.log
 .gitnexus
 .pi-lens/
+.fusion
+.pi

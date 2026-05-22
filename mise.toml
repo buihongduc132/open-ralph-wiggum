@@ -87,3 +87,12 @@ bun build ralph.ts --outfile bin/ralph.js --target bun
 cp bin/ralph.js ~/.local/bin/ralph-dev.js
 echo "Deployed: ~/.local/bin/ralph-dev.js"
 '''
+
+[tasks."build:prod"]
+description = "Build JS bundle and deploy as ralph (prod)"
+dir = "/home/bhd/Documents/Projects/bhd/open-ralph-wiggum"
+run = '''
+bun build ralph.ts --outfile bin/ralph.js --target bun
+cp bin/ralph.js ~/.local/bin/ralph-prod.js
+echo "Deployed: ~/.local/bin/ralph-prod.js"
+'''
