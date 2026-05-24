@@ -177,7 +177,7 @@ If you need to check on a running Ralph process, **observe only** (read logs, ch
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **open-ralph-wiggum** (2487 symbols, 3426 relationships, 42 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **open-ralph-wiggum** (2593 symbols, 3577 relationships, 42 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
