@@ -21,7 +21,7 @@ import {
 import { ARGS_TEMPLATES, type AgentBuildArgsOptions } from "./agent-builders";
 import { stripFrontmatter } from "./template-utils";
 
-const VERSION = "1.3.0";
+export const VERSION = "1.3.0";
 
 // Detect Windows platform for command resolution
 const IS_WINDOWS = process.platform === "win32";
@@ -34,7 +34,7 @@ let historyPath = join(stateDir, "ralph-history.json");
 let tasksPath = join(stateDir, "ralph-tasks.md");
 let questionsPath = join(stateDir, "ralph-questions.json");
 
-function setStatePaths(nextStateDir: string): void {
+export function setStatePaths(nextStateDir: string): void {
    stateDir = resolve(nextStateDir);
    statePath = join(stateDir, "ralph-loop.state.json");
    contextPath = join(stateDir, "ralph-context.md");
@@ -43,18 +43,18 @@ function setStatePaths(nextStateDir: string): void {
    questionsPath = join(stateDir, "ralph-questions.json");
 }
 
-function formatStatePath(path: string): string {
+export function formatStatePath(path: string): string {
    const rel = relative(process.cwd(), path);
    if (!rel || rel === "") return ".";
    if (!rel.startsWith("..")) return rel;
    return path;
 }
 
-function currentStateDirLabel(): string {
+export function currentStateDirLabel(): string {
    return formatStatePath(stateDir);
 }
 
-function currentTasksFileLabel(): string {
+export function currentTasksFileLabel(): string {
    return formatStatePath(tasksPath);
 }
 
@@ -63,14 +63,14 @@ let customConfigPath = "";
 let initConfigPath: string | undefined = undefined;
 let initTomlConfigPath = "";
 
-const AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot", "cursor-agent"] as const;
-type AgentType = (typeof AGENT_TYPES)[number];
+export const AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot", "cursor-agent"] as const;
+export type AgentType = (typeof AGENT_TYPES)[number];
 
-type AgentEnvOptions = { filterPlugins?: boolean; allowAllPermissions?: boolean };
+export type AgentEnvOptions = { filterPlugins?: boolean; allowAllPermissions?: boolean };
 
 
 
-interface AgentConfig {
+export interface AgentConfig {
    type: AgentType;
    command: string;
    buildArgs: (prompt: string, model: string, options?: AgentBuildArgsOptions) => string[];
@@ -79,7 +79,7 @@ interface AgentConfig {
    configName: string;
 }
 
-interface JsonAgentConfig {
+export interface JsonAgentConfig {
    type: string;
    command: string;
    configName: string;
@@ -92,15 +92,15 @@ interface JsonAgentConfig {
    envBlock?: Record<string, string>;
 }
 
-interface RalphConfig {
+export interface RalphConfig {
    version: string;
    agents: JsonAgentConfig[];
 }
 
-const DEFAULT_CONFIG_PATH = join(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
+export const DEFAULT_CONFIG_PATH = join(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
 let stateDirInput = join(process.cwd(), ".ralph");
 
-interface RalphRuntimeConfig {
+export interface RalphRuntimeConfig {
    prompt?: string;
    agent?: AgentType;
    min_iterations?: number;
@@ -129,7 +129,7 @@ interface RalphRuntimeConfig {
    stall_retry_minutes?: number;
 }
 
-const PARSE_PATTERNS: Record<string, (line: string) => string | null> = {
+export const PARSE_PATTERNS: Record<string, (line: string) => string | null> = {
    "opencode": (line) => {
       const match = stripAnsi(line).match(/^\|\s{2}([A-Za-z0-9_-]+)/);
       return match ? match[1] : null;
@@ -150,7 +150,7 @@ const PARSE_PATTERNS: Record<string, (line: string) => string | null> = {
     },
 };
 
-const defaultParseToolOutput = (line: string): string | null => {
+export const defaultParseToolOutput = (line: string): string | null => {
    const match = stripAnsi(line).match(/(?:Tool:|Using|Calling|Running)\s+([A-Za-z0-9_-]+)/i);
    return match ? match[1] : null;
 };
@@ -171,7 +171,7 @@ PARSE_PATTERNS["pi"] = (line) => {
 
 
 
-function loadPluginsFromConfig(configPath: string): string[] {
+export function loadPluginsFromConfig(configPath: string): string[] {
    if (!existsSync(configPath)) {
       return [];
    }
@@ -187,7 +187,7 @@ function loadPluginsFromConfig(configPath: string): string[] {
       return [];
    }
 }
-function ensureRalphConfig(options: { filterPlugins?: boolean; allowAllPermissions?: boolean }): string {
+export function ensureRalphConfig(options: { filterPlugins?: boolean; allowAllPermissions?: boolean }): string {
    if (!existsSync(stateDir)) {
       mkdirSync(stateDir, { recursive: true });
    }
@@ -232,7 +232,7 @@ function ensureRalphConfig(options: { filterPlugins?: boolean; allowAllPermissio
    return configPath;
 }
 
-const ENV_TEMPLATES: Record<string, (options: AgentEnvOptions) => Record<string, string>> = {
+export const ENV_TEMPLATES: Record<string, (options: AgentEnvOptions) => Record<string, string>> = {
    "opencode": (options) => {
       const env = { ...process.env } as Record<string, string>;
       if (options.filterPlugins || options.allowAllPermissions) {
@@ -326,7 +326,7 @@ export function createAgentConfig(json: JsonAgentConfig, basePath?: string): Age
    };
 }
 
-function getDefaultConfig(): RalphConfig {
+export function getDefaultConfig(): RalphConfig {
    return {
       version: "1.0",
       agents: [
@@ -338,7 +338,7 @@ function getDefaultConfig(): RalphConfig {
    };
 }
 
-function getDefaultTomlConfig(): string {
+export function getDefaultTomlConfig(): string {
    return `# Ralph Wiggum Runtime Configuration
 # This file configures the Ralph loop behavior.
 # CLI flags override these settings.
@@ -481,7 +481,7 @@ function getDefaultTomlConfig(): string {
 `;
 }
 
-function normalizeRuntimeConfigValue(path: string, value: unknown, expected: "string" | "number" | "boolean" | "string[]"): string | number | boolean | string[] | undefined {
+export function normalizeRuntimeConfigValue(path: string, value: unknown, expected: "string" | "number" | "boolean" | "string[]"): string | number | boolean | string[] | undefined {
    if (value === undefined) return undefined;
 
    if (expected === "string") {
@@ -516,12 +516,12 @@ function normalizeRuntimeConfigValue(path: string, value: unknown, expected: "st
    return value as string[];
 }
 
-function resolveConfigRelativePath(baseFilePath: string, targetPath: string): string {
+export function resolveConfigRelativePath(baseFilePath: string, targetPath: string): string {
    if (!targetPath) return targetPath;
    return isAbsolute(targetPath) ? targetPath : resolve(dirname(baseFilePath), targetPath);
 }
 
-function loadRuntimeTomlConfig(configPath: string, explicit: boolean): RalphRuntimeConfig | null {
+export function loadRuntimeTomlConfig(configPath: string, explicit: boolean): RalphRuntimeConfig | null {
    if (!existsSync(configPath)) {
       if (explicit) {
          console.error(`Error: Ralph TOML config not found: ${configPath}`);
@@ -580,7 +580,7 @@ function loadRuntimeTomlConfig(configPath: string, explicit: boolean): RalphRunt
    }
 }
 
-function getAgentBinaryEnvName(agentType: string): string {
+export function getAgentBinaryEnvName(agentType: string): string {
   return `RALPH_${agentType.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_BINARY`;
 }
 
@@ -608,7 +608,7 @@ export function resolveCommand(cmd: string, envOverride?: string, basePath?: str
    return cmd;
 }
 
-const BUILT_IN_AGENTS: Record<AgentType, AgentConfig> = {
+export const BUILT_IN_AGENTS: Record<AgentType, AgentConfig> = {
    opencode: {
       command: resolveCommand("opencode", process.env.RALPH_OPENCODE_BINARY),
       type: "opencode",
