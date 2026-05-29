@@ -62,6 +62,11 @@ describe("isJsonModeAgent", () => {
     expect(isJsonModeAgent("opencode", ["--verbose"])).toBe(false);
   });
 
+  it("returns false when --output-format is paired with non-JSON format", () => {
+    expect(isJsonModeAgent("some-agent", ["--output-format", "text"])).toBe(false);
+    expect(isJsonModeAgent("some-agent", ["--output-format"])).toBe(false);
+  });
+
   it("returns false for empty extraFlags", () => {
     expect(isJsonModeAgent("opencode", [])).toBe(false);
   });
@@ -401,6 +406,33 @@ describe("Claude adapter — auto_retry_start", () => {
     });
     const result = beautifyJsonLine(line, config({ agentType: "claude-code", showRetry: false }));
     expect(result).toEqual([]);
+  });
+
+  it("handles top-level retry fields (no retryInfo wrapper)", () => {
+    const line = JSON.stringify({
+      type: "auto_retry_start",
+      attempt: 3,
+      maxAttempts: 10,
+      delayMs: 480000,
+      errorMessage: "429 rate limit exceeded",
+    });
+    const result = beautifyJsonLine(line, config({ agentType: "claude-code", showRetry: true }));
+    expect(result.length).toBeGreaterThan(0);
+    const joined = result.map(r => stripAnsi(r)).join("\n");
+    expect(joined).toContain("3");
+    expect(joined).toContain("10");
+    expect(joined).toContain("8m"); // 480000ms = 8m
+    expect(joined).toContain("429 rate limit");
+  });
+
+  it("shows seconds when delay < 1 minute", () => {
+    const line = JSON.stringify({
+      type: "auto_retry_start",
+      retryInfo: { attempt: 1, maxAttempts: 3, delayMs: 30000, lastError: "timeout" },
+    });
+    const result = beautifyJsonLine(line, config({ agentType: "claude-code", showRetry: true }));
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.some(r => stripAnsi(r).includes("30s"))).toBe(true);
   });
 });
 

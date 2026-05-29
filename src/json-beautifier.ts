@@ -28,8 +28,6 @@ export interface BeautifierConfig {
 const INTRINSIC_JSON_AGENTS = new Set(["claude-code", "cursor-agent"]);
 
 const JSON_FLAGS = new Set([
-  "--output-format",
-  "stream-json",
   "--json",
 ]);
 
@@ -44,6 +42,8 @@ export function isJsonModeAgent(agentType: string, extraFlags?: string[]): boole
   if (extraFlags && extraFlags.length > 0) {
     for (let i = 0; i < extraFlags.length; i++) {
       if (JSON_FLAGS.has(extraFlags[i])) return true;
+      // Check --output-format stream-json as a pair
+      if (extraFlags[i] === "--output-format" && extraFlags[i + 1] === "stream-json") return true;
     }
   }
   return false;
@@ -280,17 +280,23 @@ function claudeError(p: Record<string, unknown>, cfg: BeautifierConfig): string[
 function claudeRetry(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
   if (!cfg.showRetry) return [];
 
-  const info = p.retryInfo as Record<string, unknown> | undefined;
-  if (!info || typeof info !== "object") return [];
+  // Handle both nested (retryInfo.*) and top-level fields
+  const info = (p.retryInfo && typeof p.retryInfo === "object")
+    ? (p.retryInfo as Record<string, unknown>)
+    : p;
 
   const attempt = typeof info.attempt === "number" ? info.attempt : "?";
   const maxAttempts = typeof info.maxAttempts === "number" ? info.maxAttempts : "?";
   const delayMs = typeof info.delayMs === "number" ? info.delayMs : 0;
-  const delayMin = Math.round(delayMs / 60000);
-  let lastError = typeof info.lastError === "string" ? info.lastError : "";
+  // Handle both errorMessage and lastError field names
+  const rawError = typeof (info as Record<string, unknown>).errorMessage === "string"
+    ? (info as Record<string, unknown>).errorMessage
+    : typeof info.lastError === "string" ? info.lastError : "";
+  let lastError = rawError;
   if (lastError.length > 40) lastError = lastError.slice(0, 40) + "...";
 
-  const parts = [`🔄 Retry ${attempt}/${maxAttempts} in ${delayMin}m`];
+  const delayStr = delayMs < 60000 ? `${Math.round(delayMs / 1000)}s` : `${Math.round(delayMs / 60000)}m`;
+  const parts = [`🔄 Retry ${attempt}/${maxAttempts} in ${delayStr}`];
   if (lastError) parts.push(`(${lastError})`);
 
   return [chalk.yellow(parts.join(" "))];
