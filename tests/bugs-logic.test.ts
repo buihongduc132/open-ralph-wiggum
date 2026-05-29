@@ -182,9 +182,9 @@ describe("BUG: stripFrontmatter misidentifies horizontal rule (---) as YAML fron
     // as if it were YAML frontmatter.
     const content = "---\nThis is not YAML frontmatter.\nIt's a horizontal rule followed by text.\n---\nActual content here.";
     const result = stripFrontmatter(content);
-    // Expected: original content preserved (not valid YAML frontmatter)
-    // Actual: "Actual content here." — everything between --- pairs is stripped
-    expect(result.trim()).toBe("This is not YAML frontmatter.\nIt's a horizontal rule followed by text.");
+    // After fix: non-YAML --- blocks are left entirely unchanged
+    // (the --- markers are just horizontal rules in markdown)
+    expect(result).toBe(content);
   });
 });
 

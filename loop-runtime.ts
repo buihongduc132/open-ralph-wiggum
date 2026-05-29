@@ -27,7 +27,7 @@ export class StreamActivityTracker {
   }
 
   markChunk(chunk: string): void {
-    if (chunk.length > 0) {
+    if (chunk.length > 0 && chunk.trim().length > 0) {
       this.activityAt = this.now();
     }
   }
@@ -117,14 +117,30 @@ export function pruneExpiredBlacklistedAgents(
 ): { active: BlacklistedAgent[]; expiredAgents: string[] } {
   const active: BlacklistedAgent[] = [];
   const expiredAgents: string[] = [];
+  const seen = new Set<string>();
 
   for (const entry of entries) {
     const blacklistedTime = new Date(entry.blacklistedAt).getTime();
-    const expiryTime = blacklistedTime + entry.durationMs;
+    const durationMs = Number(entry.durationMs);
+    // Treat NaN dates/durations as expired; negative durations treated as active (invalid but just created)
+    if (Number.isNaN(blacklistedTime) || Number.isNaN(durationMs)) {
+      expiredAgents.push(entry.agent);
+      continue;
+    }
+    if (durationMs <= 0) {
+      // Negative/zero duration: keep as active (entry was just created with invalid duration)
+      if (seen.has(entry.agent)) continue;
+      seen.add(entry.agent);
+      active.push(entry);
+      continue;
+    }
+    const expiryTime = blacklistedTime + durationMs;
     if (nowMs >= expiryTime) {
       expiredAgents.push(entry.agent);
       continue;
     }
+    if (seen.has(entry.agent)) continue;
+    seen.add(entry.agent);
     active.push(entry);
   }
 
@@ -141,6 +157,15 @@ export function selectRotationEntry(
   skippedAgents: string[];
   clearedBlacklist: boolean;
 } {
+  if (rotation.length === 0) {
+    return {
+      entry: "",
+      rotationIndex: 0,
+      skippedAgents: [],
+      clearedBlacklist: false,
+    };
+  }
+
   const normalizedIndex = ((rotationIndex % rotation.length) + rotation.length) % rotation.length;
   const blacklisted = new Set(blacklistedAgents.map((entry) => entry.agent));
   const skippedAgents: string[] = [];
@@ -148,6 +173,7 @@ export function selectRotationEntry(
   for (let attempts = 0; attempts < rotation.length; attempts++) {
     const currentIndex = (normalizedIndex + attempts) % rotation.length;
     const entry = rotation[currentIndex];
+    if (!entry.includes(":")) continue;
     const [agent] = entry.split(":");
     if (!blacklisted.has(agent)) {
       return {
@@ -160,8 +186,10 @@ export function selectRotationEntry(
     skippedAgents.push(agent);
   }
 
+  // Fallback: all entries blacklisted or invalid — validate fallback entry has colon
+  const fallbackEntry = rotation[normalizedIndex];
   return {
-    entry: rotation[normalizedIndex],
+    entry: fallbackEntry.includes(":") ? fallbackEntry : ":",
     rotationIndex: normalizedIndex,
     skippedAgents,
     clearedBlacklist: true,

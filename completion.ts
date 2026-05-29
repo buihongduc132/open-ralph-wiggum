@@ -2,14 +2,14 @@
  * Completion detection helpers used by the Ralph loop.
  */
 
-const ANSI_PATTERN = /\[[0-9;]*m/g;
+const ANSI_PATTERN = /\[[0-9;]*[A-Za-z]/g;
 
 export function stripAnsi(input: string): string {
   return input.replace(ANSI_PATTERN, "");
 }
 
 export function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return str.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 }
 
 /**
@@ -33,7 +33,7 @@ export function checkTerminalPromise(output: string, promise: string): boolean {
   if (!lastLine) return false;
 
   const escapedPromise = escapeRegex(promise);
-  const pattern = new RegExp(`^<promise>\\s*${escapedPromise}\\s*</promise>$`, "i");
+  const pattern = new RegExp(`^<promise>\\s*${escapedPromise}\\s*</promise>$`);
   return pattern.test(lastLine);
 }
 
@@ -56,7 +56,7 @@ export function tasksMarkdownAllComplete(tasksMarkdown: string): boolean {
   let sawTask = false;
 
   for (const line of lines) {
-    const match = line.match(/^\s*-\s+\[([ xX\/])\]\s+/);
+    const match = line.match(/^-\s+\[([ xX\/])\]\s+/);
     if (!match) continue;
 
     sawTask = true;
@@ -86,7 +86,7 @@ export function extractClaudeStreamDisplayLines(rawLine: string): string[] {
   try {
     payload = JSON.parse(cleanLine);
   } catch {
-    return [rawLine];
+    return [];
   }
   if (!payload || typeof payload !== "object") {
     return [];
@@ -102,7 +102,10 @@ export function extractClaudeStreamDisplayLines(rawLine: string): string[] {
     for (const block of content) {
       if (!block || typeof block !== "object") continue;
       const blockRecord = block as Record<string, unknown>;
-      if (blockRecord.type === "tool_use") continue;
+      if (blockRecord.type === "tool_use") {
+        addNonEmptyTextLines(lines, blockRecord.text);
+        continue;
+      }
       addNonEmptyTextLines(lines, blockRecord.text);
       addNonEmptyTextLines(lines, blockRecord.thinking);
       if (typeof blockRecord.content === "string") {
@@ -134,6 +137,11 @@ export function extractClaudeStreamDisplayLines(rawLine: string): string[] {
         }
       }
     }
+  } else if (payloadType === "content_block_delta") {
+    if (payloadRecord.delta && typeof payloadRecord.delta === "object") {
+      const delta = payloadRecord.delta as Record<string, unknown>;
+      addNonEmptyTextLines(lines, delta.text);
+    }
   } else if (payloadType === "result") {
     addNonEmptyTextLines(lines, payloadRecord.result);
   } else if (payloadType === "error") {
@@ -158,7 +166,7 @@ export function extractCursorAgentStreamDisplayLines(rawLine: string): string[] 
   try {
     payload = JSON.parse(cleanLine);
   } catch {
-    return [rawLine];
+    return [];
   }
   if (!payload || typeof payload !== "object") {
     return [];
@@ -186,14 +194,21 @@ export function extractCursorAgentStreamDisplayLines(rawLine: string): string[] 
       if (toolKey) {
         const toolName = toolKey.replace("ToolCall", "");
         const toolData = tc[toolKey] as Record<string, unknown> | undefined;
-        if (p.subtype === "started" && toolData?.args && typeof toolData.args === "object") {
+        if (toolData?.args && typeof toolData.args === "object") {
           const args = toolData.args as Record<string, unknown>;
-          if (toolName === "shell" && typeof args.command === "string") {
+          if (toolName.toLowerCase() === "shell" && typeof args.command === "string") {
             lines.push(`[SHELL] ${args.command}`);
           } else if (typeof args.path === "string") {
             lines.push(`[${toolName.toUpperCase()}] ${args.path}`);
           } else if (typeof args.pattern === "string") {
             lines.push(`[${toolName.toUpperCase()}] ${args.pattern}`);
+          } else {
+            lines.push(`[${toolName.toUpperCase()}]`);
+          }
+        } else if (toolData && typeof toolData === "object") {
+          const toolRecord = toolData as Record<string, unknown>;
+          if (typeof toolRecord.command === "string") {
+            lines.push(`[${toolName.toUpperCase()}] ${toolRecord.command}`);
           } else {
             lines.push(`[${toolName.toUpperCase()}]`);
           }
