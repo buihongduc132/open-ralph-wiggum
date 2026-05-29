@@ -8,12 +8,12 @@ import { existsSync, readFileSync as readFileSync2, writeFileSync, mkdirSync, st
 import { dirname, isAbsolute, join, relative, resolve } from "path";
 
 // completion.ts
-var ANSI_PATTERN = /\u001B\[[0-9;]*m/g;
+var ANSI_PATTERN = /\u001B\[[0-9;]*[A-Za-z]/g;
 function stripAnsi(input) {
   return input.replace(ANSI_PATTERN, "");
 }
 function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return str.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 }
 function getLastNonEmptyLine(output) {
   const lines = stripAnsi(output).replace(/\r\n/g, `
@@ -26,7 +26,7 @@ function checkTerminalPromise(output, promise) {
   if (!lastLine)
     return false;
   const escapedPromise = escapeRegex(promise);
-  const pattern = new RegExp(`^<promise>\\s*${escapedPromise}\\s*</promise>$`, "i");
+  const pattern = new RegExp(`^<promise>\\s*${escapedPromise}\\s*</promise>$`);
   return pattern.test(lastLine);
 }
 function containsPromiseTag(output, promise) {
@@ -38,7 +38,7 @@ function tasksMarkdownAllComplete(tasksMarkdown) {
   const lines = tasksMarkdown.split(/\r?\n/);
   let sawTask = false;
   for (const line of lines) {
-    const match = line.match(/^\s*-\s+\[([ xX\/])\]\s+/);
+    const match = line.match(/^-\s+\[([ xX\/])\]\s+/);
     if (!match)
       continue;
     sawTask = true;
@@ -60,7 +60,7 @@ class StreamActivityTracker {
     this.activityAt = this.now();
   }
   markChunk(chunk) {
-    if (chunk.length > 0) {
+    if (chunk.length > 0 && chunk.trim().length > 0) {
       this.activityAt = this.now();
     }
   }
@@ -133,24 +133,50 @@ function decideLoopOwnership(existingState, currentPid = process.pid) {
 function pruneExpiredBlacklistedAgents(entries, nowMs) {
   const active = [];
   const expiredAgents = [];
+  const seen = new Set;
   for (const entry of entries) {
     const blacklistedTime = new Date(entry.blacklistedAt).getTime();
-    const expiryTime = blacklistedTime + entry.durationMs;
+    const durationMs = Number(entry.durationMs);
+    if (Number.isNaN(blacklistedTime) || Number.isNaN(durationMs)) {
+      expiredAgents.push(entry.agent);
+      continue;
+    }
+    if (durationMs <= 0) {
+      if (seen.has(entry.agent))
+        continue;
+      seen.add(entry.agent);
+      active.push(entry);
+      continue;
+    }
+    const expiryTime = blacklistedTime + durationMs;
     if (nowMs >= expiryTime) {
       expiredAgents.push(entry.agent);
       continue;
     }
+    if (seen.has(entry.agent))
+      continue;
+    seen.add(entry.agent);
     active.push(entry);
   }
   return { active, expiredAgents };
 }
 function selectRotationEntry(rotation, rotationIndex, blacklistedAgents) {
+  if (rotation.length === 0) {
+    return {
+      entry: "",
+      rotationIndex: 0,
+      skippedAgents: [],
+      clearedBlacklist: false
+    };
+  }
   const normalizedIndex = (rotationIndex % rotation.length + rotation.length) % rotation.length;
   const blacklisted = new Set(blacklistedAgents.map((entry) => entry.agent));
   const skippedAgents = [];
   for (let attempts = 0;attempts < rotation.length; attempts++) {
     const currentIndex = (normalizedIndex + attempts) % rotation.length;
     const entry = rotation[currentIndex];
+    if (!entry.includes(":"))
+      continue;
     const [agent] = entry.split(":");
     if (!blacklisted.has(agent)) {
       return {
@@ -162,8 +188,9 @@ function selectRotationEntry(rotation, rotationIndex, blacklistedAgents) {
     }
     skippedAgents.push(agent);
   }
+  const fallbackEntry = rotation[normalizedIndex];
   return {
-    entry: rotation[normalizedIndex],
+    entry: fallbackEntry.includes(":") ? fallbackEntry : ":",
     rotationIndex: normalizedIndex,
     skippedAgents,
     clearedBlacklist: true
@@ -253,17 +280,821 @@ var ARGS_TEMPLATES = {
   omox: runBuilder
 };
 
+// node_modules/chalk/source/vendor/ansi-styles/index.js
+var ANSI_BACKGROUND_OFFSET = 10;
+var wrapAnsi16 = (offset = 0) => (code) => `\x1B[${code + offset}m`;
+var wrapAnsi256 = (offset = 0) => (code) => `\x1B[${38 + offset};5;${code}m`;
+var wrapAnsi16m = (offset = 0) => (red, green, blue) => `\x1B[${38 + offset};2;${red};${green};${blue}m`;
+var styles = {
+  modifier: {
+    reset: [0, 0],
+    bold: [1, 22],
+    dim: [2, 22],
+    italic: [3, 23],
+    underline: [4, 24],
+    overline: [53, 55],
+    inverse: [7, 27],
+    hidden: [8, 28],
+    strikethrough: [9, 29]
+  },
+  color: {
+    black: [30, 39],
+    red: [31, 39],
+    green: [32, 39],
+    yellow: [33, 39],
+    blue: [34, 39],
+    magenta: [35, 39],
+    cyan: [36, 39],
+    white: [37, 39],
+    blackBright: [90, 39],
+    gray: [90, 39],
+    grey: [90, 39],
+    redBright: [91, 39],
+    greenBright: [92, 39],
+    yellowBright: [93, 39],
+    blueBright: [94, 39],
+    magentaBright: [95, 39],
+    cyanBright: [96, 39],
+    whiteBright: [97, 39]
+  },
+  bgColor: {
+    bgBlack: [40, 49],
+    bgRed: [41, 49],
+    bgGreen: [42, 49],
+    bgYellow: [43, 49],
+    bgBlue: [44, 49],
+    bgMagenta: [45, 49],
+    bgCyan: [46, 49],
+    bgWhite: [47, 49],
+    bgBlackBright: [100, 49],
+    bgGray: [100, 49],
+    bgGrey: [100, 49],
+    bgRedBright: [101, 49],
+    bgGreenBright: [102, 49],
+    bgYellowBright: [103, 49],
+    bgBlueBright: [104, 49],
+    bgMagentaBright: [105, 49],
+    bgCyanBright: [106, 49],
+    bgWhiteBright: [107, 49]
+  }
+};
+var modifierNames = Object.keys(styles.modifier);
+var foregroundColorNames = Object.keys(styles.color);
+var backgroundColorNames = Object.keys(styles.bgColor);
+var colorNames = [...foregroundColorNames, ...backgroundColorNames];
+function assembleStyles() {
+  const codes = new Map;
+  for (const [groupName, group] of Object.entries(styles)) {
+    for (const [styleName, style] of Object.entries(group)) {
+      styles[styleName] = {
+        open: `\x1B[${style[0]}m`,
+        close: `\x1B[${style[1]}m`
+      };
+      group[styleName] = styles[styleName];
+      codes.set(style[0], style[1]);
+    }
+    Object.defineProperty(styles, groupName, {
+      value: group,
+      enumerable: false
+    });
+  }
+  Object.defineProperty(styles, "codes", {
+    value: codes,
+    enumerable: false
+  });
+  styles.color.close = "\x1B[39m";
+  styles.bgColor.close = "\x1B[49m";
+  styles.color.ansi = wrapAnsi16();
+  styles.color.ansi256 = wrapAnsi256();
+  styles.color.ansi16m = wrapAnsi16m();
+  styles.bgColor.ansi = wrapAnsi16(ANSI_BACKGROUND_OFFSET);
+  styles.bgColor.ansi256 = wrapAnsi256(ANSI_BACKGROUND_OFFSET);
+  styles.bgColor.ansi16m = wrapAnsi16m(ANSI_BACKGROUND_OFFSET);
+  Object.defineProperties(styles, {
+    rgbToAnsi256: {
+      value(red, green, blue) {
+        if (red === green && green === blue) {
+          if (red < 8) {
+            return 16;
+          }
+          if (red > 248) {
+            return 231;
+          }
+          return Math.round((red - 8) / 247 * 24) + 232;
+        }
+        return 16 + 36 * Math.round(red / 255 * 5) + 6 * Math.round(green / 255 * 5) + Math.round(blue / 255 * 5);
+      },
+      enumerable: false
+    },
+    hexToRgb: {
+      value(hex) {
+        const matches = /[a-f\d]{6}|[a-f\d]{3}/i.exec(hex.toString(16));
+        if (!matches) {
+          return [0, 0, 0];
+        }
+        let [colorString] = matches;
+        if (colorString.length === 3) {
+          colorString = [...colorString].map((character) => character + character).join("");
+        }
+        const integer = Number.parseInt(colorString, 16);
+        return [
+          integer >> 16 & 255,
+          integer >> 8 & 255,
+          integer & 255
+        ];
+      },
+      enumerable: false
+    },
+    hexToAnsi256: {
+      value: (hex) => styles.rgbToAnsi256(...styles.hexToRgb(hex)),
+      enumerable: false
+    },
+    ansi256ToAnsi: {
+      value(code) {
+        if (code < 8) {
+          return 30 + code;
+        }
+        if (code < 16) {
+          return 90 + (code - 8);
+        }
+        let red;
+        let green;
+        let blue;
+        if (code >= 232) {
+          red = ((code - 232) * 10 + 8) / 255;
+          green = red;
+          blue = red;
+        } else {
+          code -= 16;
+          const remainder = code % 36;
+          red = Math.floor(code / 36) / 5;
+          green = Math.floor(remainder / 6) / 5;
+          blue = remainder % 6 / 5;
+        }
+        const value = Math.max(red, green, blue) * 2;
+        if (value === 0) {
+          return 30;
+        }
+        let result = 30 + (Math.round(blue) << 2 | Math.round(green) << 1 | Math.round(red));
+        if (value === 2) {
+          result += 60;
+        }
+        return result;
+      },
+      enumerable: false
+    },
+    rgbToAnsi: {
+      value: (red, green, blue) => styles.ansi256ToAnsi(styles.rgbToAnsi256(red, green, blue)),
+      enumerable: false
+    },
+    hexToAnsi: {
+      value: (hex) => styles.ansi256ToAnsi(styles.hexToAnsi256(hex)),
+      enumerable: false
+    }
+  });
+  return styles;
+}
+var ansiStyles = assembleStyles();
+var ansi_styles_default = ansiStyles;
+
+// node_modules/chalk/source/vendor/supports-color/index.js
+import process2 from "process";
+import os from "os";
+import tty from "tty";
+function hasFlag(flag, argv = globalThis.Deno ? globalThis.Deno.args : process2.argv) {
+  const prefix = flag.startsWith("-") ? "" : flag.length === 1 ? "-" : "--";
+  const position = argv.indexOf(prefix + flag);
+  const terminatorPosition = argv.indexOf("--");
+  return position !== -1 && (terminatorPosition === -1 || position < terminatorPosition);
+}
+var { env } = process2;
+var flagForceColor;
+if (hasFlag("no-color") || hasFlag("no-colors") || hasFlag("color=false") || hasFlag("color=never")) {
+  flagForceColor = 0;
+} else if (hasFlag("color") || hasFlag("colors") || hasFlag("color=true") || hasFlag("color=always")) {
+  flagForceColor = 1;
+}
+function envForceColor() {
+  if ("FORCE_COLOR" in env) {
+    if (env.FORCE_COLOR === "true") {
+      return 1;
+    }
+    if (env.FORCE_COLOR === "false") {
+      return 0;
+    }
+    return env.FORCE_COLOR.length === 0 ? 1 : Math.min(Number.parseInt(env.FORCE_COLOR, 10), 3);
+  }
+}
+function translateLevel(level) {
+  if (level === 0) {
+    return false;
+  }
+  return {
+    level,
+    hasBasic: true,
+    has256: level >= 2,
+    has16m: level >= 3
+  };
+}
+function _supportsColor(haveStream, { streamIsTTY, sniffFlags = true } = {}) {
+  const noFlagForceColor = envForceColor();
+  if (noFlagForceColor !== undefined) {
+    flagForceColor = noFlagForceColor;
+  }
+  const forceColor = sniffFlags ? flagForceColor : noFlagForceColor;
+  if (forceColor === 0) {
+    return 0;
+  }
+  if (sniffFlags) {
+    if (hasFlag("color=16m") || hasFlag("color=full") || hasFlag("color=truecolor")) {
+      return 3;
+    }
+    if (hasFlag("color=256")) {
+      return 2;
+    }
+  }
+  if ("TF_BUILD" in env && "AGENT_NAME" in env) {
+    return 1;
+  }
+  if (haveStream && !streamIsTTY && forceColor === undefined) {
+    return 0;
+  }
+  const min = forceColor || 0;
+  if (env.TERM === "dumb") {
+    return min;
+  }
+  if (process2.platform === "win32") {
+    const osRelease = os.release().split(".");
+    if (Number(osRelease[0]) >= 10 && Number(osRelease[2]) >= 10586) {
+      return Number(osRelease[2]) >= 14931 ? 3 : 2;
+    }
+    return 1;
+  }
+  if ("CI" in env) {
+    if (["GITHUB_ACTIONS", "GITEA_ACTIONS", "CIRCLECI"].some((key) => (key in env))) {
+      return 3;
+    }
+    if (["TRAVIS", "APPVEYOR", "GITLAB_CI", "BUILDKITE", "DRONE"].some((sign) => (sign in env)) || env.CI_NAME === "codeship") {
+      return 1;
+    }
+    return min;
+  }
+  if ("TEAMCITY_VERSION" in env) {
+    return /^(9\.(0*[1-9]\d*)\.|\d{2,}\.)/.test(env.TEAMCITY_VERSION) ? 1 : 0;
+  }
+  if (env.COLORTERM === "truecolor") {
+    return 3;
+  }
+  if (env.TERM === "xterm-kitty") {
+    return 3;
+  }
+  if (env.TERM === "xterm-ghostty") {
+    return 3;
+  }
+  if (env.TERM === "wezterm") {
+    return 3;
+  }
+  if ("TERM_PROGRAM" in env) {
+    const version = Number.parseInt((env.TERM_PROGRAM_VERSION || "").split(".")[0], 10);
+    switch (env.TERM_PROGRAM) {
+      case "iTerm.app": {
+        return version >= 3 ? 3 : 2;
+      }
+      case "Apple_Terminal": {
+        return 2;
+      }
+    }
+  }
+  if (/-256(color)?$/i.test(env.TERM)) {
+    return 2;
+  }
+  if (/^screen|^xterm|^vt100|^vt220|^rxvt|color|ansi|cygwin|linux/i.test(env.TERM)) {
+    return 1;
+  }
+  if ("COLORTERM" in env) {
+    return 1;
+  }
+  return min;
+}
+function createSupportsColor(stream, options = {}) {
+  const level = _supportsColor(stream, {
+    streamIsTTY: stream && stream.isTTY,
+    ...options
+  });
+  return translateLevel(level);
+}
+var supportsColor = {
+  stdout: createSupportsColor({ isTTY: tty.isatty(1) }),
+  stderr: createSupportsColor({ isTTY: tty.isatty(2) })
+};
+var supports_color_default = supportsColor;
+
+// node_modules/chalk/source/utilities.js
+function stringReplaceAll(string, substring, replacer) {
+  let index = string.indexOf(substring);
+  if (index === -1) {
+    return string;
+  }
+  const substringLength = substring.length;
+  let endIndex = 0;
+  let returnValue = "";
+  do {
+    returnValue += string.slice(endIndex, index) + substring + replacer;
+    endIndex = index + substringLength;
+    index = string.indexOf(substring, endIndex);
+  } while (index !== -1);
+  returnValue += string.slice(endIndex);
+  return returnValue;
+}
+function stringEncaseCRLFWithFirstIndex(string, prefix, postfix, index) {
+  let endIndex = 0;
+  let returnValue = "";
+  do {
+    const gotCR = string[index - 1] === "\r";
+    returnValue += string.slice(endIndex, gotCR ? index - 1 : index) + prefix + (gotCR ? `\r
+` : `
+`) + postfix;
+    endIndex = index + 1;
+    index = string.indexOf(`
+`, endIndex);
+  } while (index !== -1);
+  returnValue += string.slice(endIndex);
+  return returnValue;
+}
+
+// node_modules/chalk/source/index.js
+var { stdout: stdoutColor, stderr: stderrColor } = supports_color_default;
+var GENERATOR = Symbol("GENERATOR");
+var STYLER = Symbol("STYLER");
+var IS_EMPTY = Symbol("IS_EMPTY");
+var levelMapping = [
+  "ansi",
+  "ansi",
+  "ansi256",
+  "ansi16m"
+];
+var styles2 = Object.create(null);
+var applyOptions = (object, options = {}) => {
+  if (options.level && !(Number.isInteger(options.level) && options.level >= 0 && options.level <= 3)) {
+    throw new Error("The `level` option should be an integer from 0 to 3");
+  }
+  const colorLevel = stdoutColor ? stdoutColor.level : 0;
+  object.level = options.level === undefined ? colorLevel : options.level;
+};
+var chalkFactory = (options) => {
+  const chalk = (...strings) => strings.join(" ");
+  applyOptions(chalk, options);
+  Object.setPrototypeOf(chalk, createChalk.prototype);
+  return chalk;
+};
+function createChalk(options) {
+  return chalkFactory(options);
+}
+Object.setPrototypeOf(createChalk.prototype, Function.prototype);
+for (const [styleName, style] of Object.entries(ansi_styles_default)) {
+  styles2[styleName] = {
+    get() {
+      const builder = createBuilder(this, createStyler(style.open, style.close, this[STYLER]), this[IS_EMPTY]);
+      Object.defineProperty(this, styleName, { value: builder });
+      return builder;
+    }
+  };
+}
+styles2.visible = {
+  get() {
+    const builder = createBuilder(this, this[STYLER], true);
+    Object.defineProperty(this, "visible", { value: builder });
+    return builder;
+  }
+};
+var getModelAnsi = (model, level, type, ...arguments_) => {
+  if (model === "rgb") {
+    if (level === "ansi16m") {
+      return ansi_styles_default[type].ansi16m(...arguments_);
+    }
+    if (level === "ansi256") {
+      return ansi_styles_default[type].ansi256(ansi_styles_default.rgbToAnsi256(...arguments_));
+    }
+    return ansi_styles_default[type].ansi(ansi_styles_default.rgbToAnsi(...arguments_));
+  }
+  if (model === "hex") {
+    return getModelAnsi("rgb", level, type, ...ansi_styles_default.hexToRgb(...arguments_));
+  }
+  return ansi_styles_default[type][model](...arguments_);
+};
+var usedModels = ["rgb", "hex", "ansi256"];
+for (const model of usedModels) {
+  styles2[model] = {
+    get() {
+      const { level } = this;
+      return function(...arguments_) {
+        const styler = createStyler(getModelAnsi(model, levelMapping[level], "color", ...arguments_), ansi_styles_default.color.close, this[STYLER]);
+        return createBuilder(this, styler, this[IS_EMPTY]);
+      };
+    }
+  };
+  const bgModel = "bg" + model[0].toUpperCase() + model.slice(1);
+  styles2[bgModel] = {
+    get() {
+      const { level } = this;
+      return function(...arguments_) {
+        const styler = createStyler(getModelAnsi(model, levelMapping[level], "bgColor", ...arguments_), ansi_styles_default.bgColor.close, this[STYLER]);
+        return createBuilder(this, styler, this[IS_EMPTY]);
+      };
+    }
+  };
+}
+var proto = Object.defineProperties(() => {}, {
+  ...styles2,
+  level: {
+    enumerable: true,
+    get() {
+      return this[GENERATOR].level;
+    },
+    set(level) {
+      this[GENERATOR].level = level;
+    }
+  }
+});
+var createStyler = (open, close, parent) => {
+  let openAll;
+  let closeAll;
+  if (parent === undefined) {
+    openAll = open;
+    closeAll = close;
+  } else {
+    openAll = parent.openAll + open;
+    closeAll = close + parent.closeAll;
+  }
+  return {
+    open,
+    close,
+    openAll,
+    closeAll,
+    parent
+  };
+};
+var createBuilder = (self, _styler, _isEmpty) => {
+  const builder = (...arguments_) => applyStyle(builder, arguments_.length === 1 ? "" + arguments_[0] : arguments_.join(" "));
+  Object.setPrototypeOf(builder, proto);
+  builder[GENERATOR] = self;
+  builder[STYLER] = _styler;
+  builder[IS_EMPTY] = _isEmpty;
+  return builder;
+};
+var applyStyle = (self, string) => {
+  if (self.level <= 0 || !string) {
+    return self[IS_EMPTY] ? "" : string;
+  }
+  let styler = self[STYLER];
+  if (styler === undefined) {
+    return string;
+  }
+  const { openAll, closeAll } = styler;
+  if (string.includes("\x1B")) {
+    while (styler !== undefined) {
+      string = stringReplaceAll(string, styler.close, styler.open);
+      styler = styler.parent;
+    }
+  }
+  const lfIndex = string.indexOf(`
+`);
+  if (lfIndex !== -1) {
+    string = stringEncaseCRLFWithFirstIndex(string, closeAll, openAll, lfIndex);
+  }
+  return openAll + string + closeAll;
+};
+Object.defineProperties(createChalk.prototype, styles2);
+var chalk = createChalk();
+var chalkStderr = createChalk({ level: stderrColor ? stderrColor.level : 0 });
+var source_default = chalk;
+
+// src/json-beautifier.ts
+var INTRINSIC_JSON_AGENTS = new Set(["claude-code", "cursor-agent"]);
+var JSON_FLAGS = new Set([
+  "--json"
+]);
+var ADAPTER_REGISTRY = new Map([
+  ["claude-code", claudeAdapter]
+]);
+function isJsonModeAgent(agentType, extraFlags) {
+  if (INTRINSIC_JSON_AGENTS.has(agentType))
+    return true;
+  if (extraFlags && extraFlags.length > 0) {
+    for (let i = 0;i < extraFlags.length; i++) {
+      if (JSON_FLAGS.has(extraFlags[i]))
+        return true;
+      if (extraFlags[i] === "--output-format" && extraFlags[i + 1] === "stream-json")
+        return true;
+    }
+  }
+  return false;
+}
+function beautifyJsonLine(rawLine, cfg) {
+  if (cfg.mode === "raw")
+    return [rawLine];
+  const firstChar = rawLine.charCodeAt(0);
+  let line = rawLine;
+  if (firstChar === 123) {} else if (firstChar === 27) {
+    const stripped = stripAnsi(rawLine).trim();
+    if (stripped.charCodeAt(0) === 123) {
+      line = stripped;
+    } else {
+      return [rawLine];
+    }
+  } else {
+    return [rawLine];
+  }
+  let payload;
+  try {
+    payload = JSON.parse(line);
+  } catch {
+    return [rawLine];
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return [rawLine];
+  }
+  const record = payload;
+  if (cfg.mode === "text") {
+    return textExtract(record, cfg.agentType);
+  }
+  const adapter = ADAPTER_REGISTRY.get(cfg.agentType);
+  if (adapter) {
+    try {
+      return adapter(record, cfg);
+    } catch {
+      return [rawLine];
+    }
+  }
+  try {
+    return genericAdapter(record);
+  } catch {
+    return [rawLine];
+  }
+}
+function claudeAdapter(p, cfg) {
+  const t = typeof p.type === "string" ? p.type : "";
+  switch (t) {
+    case "assistant":
+      return claudeAssistant(p, cfg);
+    case "content_block_delta":
+      return claudeContentBlockDelta(p, cfg);
+    case "content_block_start":
+      return claudeContentBlockStart(p, cfg);
+    case "result":
+      return claudeResult(p, cfg);
+    case "error":
+      return claudeError(p, cfg);
+    case "auto_retry_start":
+      return claudeRetry(p, cfg);
+    case "tool_result":
+    case "stream_event":
+    case "content_block_stop":
+      return [];
+    default:
+      return [];
+  }
+}
+function claudeAssistant(p, cfg) {
+  const lines = [];
+  const msg = p.message;
+  if (!msg || typeof msg !== "object")
+    return lines;
+  const model = typeof msg.model === "string" ? msg.model : "unknown";
+  lines.push(source_default.cyan(`\uD83E\uDD16 ${model}`));
+  const content = msg.content;
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (!block || typeof block !== "object")
+        continue;
+      const b = block;
+      if (b.type === "tool_use") {
+        if (cfg.verboseTools && typeof b.name === "string") {
+          lines.push(source_default.yellow(`\uD83D\uDD27 ${b.name}`));
+        }
+        continue;
+      }
+      if (b.type === "thinking" && typeof b.thinking === "string") {
+        if (cfg.showThinking) {
+          for (const s of b.thinking.split(/\r?\n/)) {
+            const trimmed = s.trim();
+            if (trimmed)
+              lines.push(source_default.gray(`\uD83D\uDCAD ${trimmed}`));
+          }
+        }
+        continue;
+      }
+      if (typeof b.text === "string") {
+        for (const s of b.text.split(/\r?\n/)) {
+          const trimmed = s.trim();
+          if (trimmed)
+            lines.push(trimmed);
+        }
+      }
+    }
+  }
+  if (p.delta && typeof p.delta === "object") {
+    const delta = p.delta;
+    if (typeof delta.text === "string") {
+      for (const s of delta.text.split(/\r?\n/)) {
+        const trimmed = s.trim();
+        if (trimmed)
+          lines.push(trimmed);
+      }
+    }
+    if (typeof delta.thinking === "string" && cfg.showThinking) {
+      for (const s of delta.thinking.split(/\r?\n/)) {
+        const trimmed = s.trim();
+        if (trimmed)
+          lines.push(source_default.gray(`\uD83D\uDCAD ${trimmed}`));
+      }
+    }
+  }
+  return lines;
+}
+function claudeContentBlockDelta(p, cfg) {
+  const delta = p.delta;
+  if (!delta || typeof delta !== "object")
+    return [];
+  const lines = [];
+  const deltaType = typeof delta.type === "string" ? delta.type : "";
+  if (deltaType === "thinking_delta") {
+    if (!cfg.showThinking)
+      return [];
+    if (typeof delta.thinking === "string") {
+      for (const s of delta.thinking.split(/\r?\n/)) {
+        const trimmed = s.trim();
+        if (trimmed)
+          lines.push(source_default.gray(`\uD83D\uDCAD ${trimmed}`));
+      }
+    }
+    return lines;
+  }
+  if (typeof delta.text === "string") {
+    for (const s of delta.text.split(/\r?\n/)) {
+      const trimmed = s.trim();
+      if (trimmed)
+        lines.push(trimmed);
+    }
+  }
+  return lines;
+}
+function claudeContentBlockStart(p, cfg) {
+  const cb = p.content_block;
+  if (!cb || typeof cb !== "object")
+    return [];
+  const cbType = typeof cb.type === "string" ? cb.type : "";
+  if (cbType === "tool_use") {
+    if (!cfg.verboseTools)
+      return [];
+    const name = typeof cb.name === "string" ? cb.name : "unknown";
+    return [source_default.yellow(`\uD83D\uDD27 ${name}`)];
+  }
+  return [];
+}
+function claudeResult(p, cfg) {
+  const result = typeof p.result === "string" ? p.result : "";
+  if (cfg.showCost) {
+    const durationMs = typeof p.duration_ms === "number" ? p.duration_ms : 0;
+    const costUsd = typeof p.cost_usd === "number" ? p.cost_usd : 0;
+    const seconds = (durationMs / 1000).toFixed(1);
+    const costStr = costUsd < 0.01 ? `$${costUsd.toFixed(4)}` : `$${costUsd.toFixed(2)}`;
+    const lines = [];
+    lines.push(source_default.green(`\u2705 ${result} (${seconds}s, ${costStr})`));
+    return lines;
+  }
+  return [source_default.green(`\u2705 ${result}`)];
+}
+function claudeError(p, cfg) {
+  let message;
+  if (p.error && typeof p.error === "object") {
+    const err = p.error;
+    message = typeof err.message === "string" ? err.message : String(p.error);
+  } else {
+    message = String(p.error ?? "Unknown error");
+  }
+  if (message.length > cfg.maxErrorLength) {
+    message = message.slice(0, cfg.maxErrorLength) + "...";
+  }
+  return [source_default.red(`\u274C ${message}`)];
+}
+function claudeRetry(p, cfg) {
+  if (!cfg.showRetry)
+    return [];
+  const info = p.retryInfo && typeof p.retryInfo === "object" ? p.retryInfo : p;
+  const attempt = typeof info.attempt === "number" ? info.attempt : "?";
+  const maxAttempts = typeof info.maxAttempts === "number" ? info.maxAttempts : "?";
+  const delayMs = typeof info.delayMs === "number" ? info.delayMs : 0;
+  const rawError = typeof info.errorMessage === "string" ? info.errorMessage : typeof info.lastError === "string" ? info.lastError : "";
+  let lastError = rawError;
+  if (lastError.length > 40)
+    lastError = lastError.slice(0, 40) + "...";
+  const delayStr = delayMs < 60000 ? `${Math.round(delayMs / 1000)}s` : `${Math.round(delayMs / 60000)}m`;
+  const parts = [`\uD83D\uDD04 Retry ${attempt}/${maxAttempts} in ${delayStr}`];
+  if (lastError)
+    parts.push(`(${lastError})`);
+  return [source_default.yellow(parts.join(" "))];
+}
+function genericAdapter(p) {
+  if (p.error && typeof p.error === "object") {
+    const err = p.error;
+    if (typeof err.message === "string") {
+      return [source_default.red(`\u274C ${err.message}`)];
+    }
+  }
+  if (typeof p.message === "string") {
+    return [p.message];
+  }
+  if (typeof p.error === "string") {
+    return [source_default.red(`\u274C ${p.error}`)];
+  }
+  return [JSON.stringify(p)];
+}
+function textExtract(p, agentType) {
+  const lines = [];
+  const addText = (value) => {
+    if (typeof value !== "string")
+      return;
+    for (const s of value.split(/\r?\n/)) {
+      const trimmed = s.trim();
+      if (trimmed)
+        lines.push(trimmed);
+    }
+  };
+  const addContent = (content) => {
+    if (typeof content === "string") {
+      addText(content);
+      return;
+    }
+    if (!Array.isArray(content))
+      return;
+    for (const block of content) {
+      if (!block || typeof block !== "object")
+        continue;
+      const b = block;
+      if (b.type === "tool_use")
+        continue;
+      addText(b.text);
+      addText(b.thinking);
+      if (typeof b.content === "string")
+        addText(b.content);
+    }
+  };
+  const t = typeof p.type === "string" ? p.type : "";
+  if (t === "assistant") {
+    if (p.message && typeof p.message === "object") {
+      addContent(p.message.content);
+    }
+    if (p.delta && typeof p.delta === "object") {
+      const delta = p.delta;
+      addText(delta.text);
+      addText(delta.thinking);
+      addText(delta.content);
+    }
+  } else if (t === "content_block_delta") {
+    if (p.delta && typeof p.delta === "object") {
+      addText(p.delta.text);
+    }
+  } else if (t === "result") {
+    addText(p.result);
+  } else if (t === "error") {
+    if (p.error && typeof p.error === "object") {
+      addText(p.error.message);
+    } else {
+      addText(p.error);
+    }
+  }
+  return lines;
+}
+
 // template-utils.ts
 function stripFrontmatter(content) {
-  const fmMatch = content.match(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---\r?\n/);
+  const fmMatch = content.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n---\r?\n/);
   if (fmMatch) {
-    return content.slice(fmMatch[0].length);
+    if (isYamlFrontmatter(fmMatch[1])) {
+      return content.slice(fmMatch[0].length);
+    }
+    return content;
   }
-  const eofMatch = content.match(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---$/);
+  const eofMatch = content.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n---$/);
   if (eofMatch) {
-    return content.slice(eofMatch[0].length);
+    if (isYamlFrontmatter(eofMatch[1])) {
+      return content.slice(eofMatch[0].length);
+    }
+    return content;
   }
   return content;
+}
+function isYamlFrontmatter(body) {
+  const lines = body.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (lines.length === 0)
+    return true;
+  return lines.every((line) => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("#"))
+      return true;
+    return /^[a-zA-Z_][a-zA-Z0-9_-]*\s*:/.test(trimmed);
+  });
 }
 
 // ralph.ts
@@ -283,6 +1114,29 @@ function setStatePaths(nextStateDir) {
   tasksPath = join(stateDir, "ralph-tasks.md");
   questionsPath = join(stateDir, "ralph-questions.json");
 }
+function ensureStateDir() {
+  if (existsSync(stateDir)) {
+    try {
+      const stats = statSync(stateDir);
+      if (!stats.isDirectory()) {
+        const linkStats = lstatSync(stateDir);
+        console.error(`
+\u274C Ralph Initialization Failed`);
+        console.error(`   ${stateDir} exists but is not a directory!`);
+        console.error(`   Type: ${linkStats?.isSymbolicLink() ? "symlink" : "file"}`);
+        console.error(`
+Fix: rm ${stateDir}  # remove the file/symlink`);
+        console.error(`     mkdir ${stateDir}  # then recreate as a directory`);
+        process.exit(1);
+      }
+    } catch (err) {
+      console.error(`
+\u274C Ralph Initialization Failed`);
+      console.error(`   Cannot access ${stateDir}: ${err}`);
+      process.exit(1);
+    }
+  }
+}
 function formatStatePath(path) {
   const rel = relative(process.cwd(), path);
   if (!rel || rel === "")
@@ -291,11 +1145,15 @@ function formatStatePath(path) {
     return rel;
   return path;
 }
+function currentStateDirLabel() {
+  return formatStatePath(stateDir);
+}
 function currentTasksFileLabel() {
   return formatStatePath(tasksPath);
 }
 var customConfigPath = "";
 var initConfigPath = undefined;
+var AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot", "cursor-agent"];
 var DEFAULT_CONFIG_PATH = join(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
 var stateDirInput = join(process.cwd(), ".ralph");
 var PARSE_PATTERNS = {
@@ -394,14 +1252,14 @@ function ensureRalphConfig(options) {
 }
 var ENV_TEMPLATES = {
   opencode: (options) => {
-    const env = { ...process.env };
+    const env2 = { ...process.env };
     if (options.filterPlugins || options.allowAllPermissions) {
-      env.OPENCODE_CONFIG = ensureRalphConfig({
+      env2.OPENCODE_CONFIG = ensureRalphConfig({
         filterPlugins: options.filterPlugins,
         allowAllPermissions: options.allowAllPermissions
       });
     }
-    return env;
+    return env2;
   },
   default: () => ({ ...process.env })
 };
@@ -453,11 +1311,11 @@ function createAgentConfig(json, basePath) {
         return cmdArgs;
       },
       buildEnv: (opts) => {
-        const env = { ...process.env };
+        const env2 = { ...process.env };
         if (json.envBlock) {
-          Object.assign(env, json.envBlock);
+          Object.assign(env2, json.envBlock);
         }
-        return env;
+        return env2;
       },
       parseToolOutput: (line) => {
         if (!toolRegex)
@@ -721,6 +1579,9 @@ function loadRuntimeTomlConfig(configPath, explicit) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
+}
+function getAgentBinaryEnvName(agentType) {
+  return `RALPH_${agentType.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_BINARY`;
 }
 function resolveCommand(cmd, envOverride, basePath) {
   if (envOverride)
@@ -1404,6 +2265,7 @@ Iteration Summary`);
     }
   }
   setStatePaths(stateDirInput);
+  ensureStateDir();
   if (!tomlConfigPath) {
     tomlConfigPath = join(stateDir, "config.toml");
   }
@@ -2263,6 +3125,7 @@ ${newEntry}`);
       i++;
     }
   }
+  ensureStateDir();
   const usingCustomStateDir = stateDir !== resolve(process.cwd(), ".ralph");
   if (usingCustomStateDir && autoCommit) {
     console.error("Error: --state-dir currently requires --no-commit.");
@@ -2383,7 +3246,23 @@ Your answer: `, (answer) => {
     const handleLine = (line, isError, displayedPrefixLength = 0) => {
       activityTracker.markLine();
       const tool = parseToolOutput(line);
-      const outputLines = options.agent.type === "claude-code" ? extractClaudeStreamDisplayLines(line) : [line];
+      let outputLines;
+      const extraFlags = options.agent.extraFlags;
+      if (isJsonModeAgent(options.agent.type, extraFlags)) {
+        const cfg = {
+          mode: "beautify",
+          agentType: options.agent.type,
+          verboseTools: !!verboseTools,
+          showThinking: true,
+          showRetry: true,
+          showError: true,
+          showCost: true,
+          maxErrorLength: 120
+        };
+        outputLines = beautifyJsonLine(line, cfg);
+      } else {
+        outputLines = options.agent.type === "claude-code" ? extractClaudeStreamDisplayLines(line) : [line];
+      }
       let completionPromiseSeen = false;
       if (!isError && promisePattern) {
         completionPromiseSeen = outputLines.some((outputLine) => promisePattern.test(outputLine.trim()));
@@ -2924,7 +3803,7 @@ Gracefully stopping Ralph loop...`);
           extraFlags: extraAgentFlags,
           streamOutput
         });
-        const env = agentConfig2.buildEnv({
+        const env2 = agentConfig2.buildEnv({
           filterPlugins: disablePlugins,
           allowAllPermissions
         });
@@ -2932,7 +3811,7 @@ Gracefully stopping Ralph loop...`);
         console.log(`DEBUG: Agent Args: ${JSON.stringify(cmdArgs)}`);
         currentProc = Bun.spawn([agentConfig2.command, ...cmdArgs], {
           cwd: process.cwd(),
-          env,
+          env: env2,
           stdin: allowAllPermissions ? "ignore" : "inherit",
           stdout: "pipe",
           stderr: "pipe",
@@ -3403,7 +4282,26 @@ ${answerContext}`);
   });
 }
 export {
+  setStatePaths,
+  resolveConfigRelativePath,
   resolveCommand,
+  normalizeRuntimeConfigValue,
+  loadRuntimeTomlConfig,
+  loadPluginsFromConfig,
   loadAgentConfig,
-  createAgentConfig
+  getDefaultTomlConfig,
+  getDefaultConfig,
+  getAgentBinaryEnvName,
+  formatStatePath,
+  ensureRalphConfig,
+  defaultParseToolOutput,
+  currentTasksFileLabel,
+  currentStateDirLabel,
+  createAgentConfig,
+  VERSION,
+  PARSE_PATTERNS,
+  ENV_TEMPLATES,
+  DEFAULT_CONFIG_PATH,
+  BUILT_IN_AGENTS,
+  AGENT_TYPES
 };
