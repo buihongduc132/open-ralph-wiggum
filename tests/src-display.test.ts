@@ -269,8 +269,8 @@ describe("extractClaudeStreamDisplayLines", () => {
       expect(extractClaudeStreamDisplayLines("hello world")).toEqual(["hello world"]);
    });
 
-   it("returns raw line for invalid JSON", () => {
-      expect(extractClaudeStreamDisplayLines("{bad json")).toEqual(["{bad json"]);
+   it("returns empty array for invalid JSON", () => {
+      expect(extractClaudeStreamDisplayLines("{bad json")).toEqual([]);
    });
 
    it("extracts text from assistant message content", () => {

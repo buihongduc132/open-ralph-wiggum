@@ -43,6 +43,30 @@ export function setStatePaths(nextStateDir: string): void {
    questionsPath = join(stateDir, "ralph-questions.json");
 }
 
+/**
+ * Validate that stateDir is a directory (not a file or symlink-to-file).
+ * Must be called after setStatePaths(). Exits with clear error if invalid.
+ */
+function ensureStateDir(): void {
+   if (existsSync(stateDir)) {
+      try {
+         const stats = lstatSync(stateDir);
+         if (!stats.isDirectory()) {
+            console.error(`\n❌ Ralph Initialization Failed`);
+            console.error(`   ${stateDir} exists but is not a directory!`);
+            console.error(`   Type: ${stats.isSymbolicLink() ? "symlink" : "file"}`);
+            console.error(`\nFix: rm ${stateDir}  # remove the file/symlink`);
+            console.error(`     mkdir ${stateDir}  # then recreate as a directory`);
+            process.exit(1);
+         }
+      } catch (err) {
+         console.error(`\n❌ Ralph Initialization Failed`);
+         console.error(`   Cannot access ${stateDir}: ${err}`);
+         process.exit(1);
+      }
+   }
+}
+
 export function formatStatePath(path: string): string {
    const rel = relative(process.cwd(), path);
    if (!rel || rel === "") return ".";
@@ -685,6 +709,10 @@ if (import.meta.main) {
    }
 
    setStatePaths(stateDirInput);
+
+   // Early validation: catch non-directory stateDir before any file operations
+   ensureStateDir();
+
    if (!tomlConfigPath) {
       tomlConfigPath = join(stateDir, "config.toml");
    }
@@ -1851,6 +1879,9 @@ Learn more: https://ghuntley.com/ralph/
           i++;
        }
     }
+
+    // Re-validate state dir after passthrough may have changed it
+    ensureStateDir();
 
     const usingCustomStateDir = stateDir !== resolve(process.cwd(), ".ralph");
     if (usingCustomStateDir && autoCommit) {

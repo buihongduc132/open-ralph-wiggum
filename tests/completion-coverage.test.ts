@@ -233,7 +233,9 @@ describe("tasksMarkdownAllComplete — full branch coverage", () => {
   });
 
   it("handles tasks with leading whitespace", () => {
-    expect(tasksMarkdownAllComplete("  - [x] indented task")).toBe(true);
+    // After fix: indented checkboxes are NOT counted as top-level tasks.
+    // A string with only indented (subtask) checkboxes has no top-level tasks → false
+    expect(tasksMarkdownAllComplete("  - [x] indented task")).toBe(false);
   });
 
   it("handles tasks with CRLF line endings", () => {
@@ -249,8 +251,8 @@ describe("extractClaudeStreamDisplayLines — full branch coverage", () => {
     expect(extractClaudeStreamDisplayLines("plain text line")).toEqual(["plain text line"]);
   });
 
-  it("returns [rawLine] for malformed JSON", () => {
-    expect(extractClaudeStreamDisplayLines("{bad json")).toEqual(["{bad json"]);
+  it("returns [] for malformed JSON", () => {
+    expect(extractClaudeStreamDisplayLines("{bad json")).toEqual([]);
   });
 
   it("returns [rawLine] for 'null' string (not JSON object)", () => {
@@ -387,8 +389,8 @@ describe("extractCursorAgentStreamDisplayLines — full branch coverage", () => 
     expect(extractCursorAgentStreamDisplayLines("plain text")).toEqual(["plain text"]);
   });
 
-  it("returns [rawLine] for malformed JSON", () => {
-    expect(extractCursorAgentStreamDisplayLines("{not valid")).toEqual(["{not valid"]);
+  it("returns [] for malformed JSON", () => {
+    expect(extractCursorAgentStreamDisplayLines("{not valid")).toEqual([]);
   });
 
   it("returns [rawLine] for 'null' string (not JSON object)", () => {
@@ -459,7 +461,7 @@ describe("extractCursorAgentStreamDisplayLines — full branch coverage", () => 
     expect(extractCursorAgentStreamDisplayLines(line)).toEqual(["[CUSTOM]"]);
   });
 
-  it("skips tool_call when subtype is not 'started'", () => {
+  it("extracts tool_call when subtype is 'completed'", () => {
     const line = JSON.stringify({
       type: "tool_call",
       subtype: "completed",
@@ -467,7 +469,7 @@ describe("extractCursorAgentStreamDisplayLines — full branch coverage", () => 
         ShellToolCall: { args: { command: "echo done" } },
       },
     });
-    expect(extractCursorAgentStreamDisplayLines(line)).toEqual([]);
+    expect(extractCursorAgentStreamDisplayLines(line)).toEqual(["[SHELL] echo done"]);
   });
 
   it("skips tool_call when tool_call field is missing", () => {

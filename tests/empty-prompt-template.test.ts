@@ -44,10 +44,12 @@ const TEST_MODEL = "echo"; // echo mode → prints every received arg as "ARG:$a
 
 let workDir = "";
 let agentConfigPath = "";
+let stateDir = "";
 
 function assignPaths(nextWorkDir: string) {
    workDir = nextWorkDir;
    agentConfigPath = join(workDir, "test-agents.json");
+   stateDir = join(workDir, ".ralph");
 }
 
 function cleanup() {
@@ -112,6 +114,7 @@ describe("BUG: --prompt-template with empty file sends empty message to sub-agen
             bunPath, "run", ralphPath,
             "--no-commit",
             "--config", agentConfigPath,
+            "--state-dir", stateDir,
             "--max-iterations", "1",
             "--prompt-template", emptyTemplatePath,
             // CLI prompt: Ralph captures this via promptParts; goes into state.prompt.
@@ -163,6 +166,7 @@ describe("BUG: --prompt-template with empty file sends empty message to sub-agen
             bunPath, "run", ralphPath,
             "--no-commit",
             "--config", agentConfigPath,
+            "--state-dir", stateDir,
             "--max-iterations", "1",
             "--prompt-template", templatePath,
             cliPrompt,

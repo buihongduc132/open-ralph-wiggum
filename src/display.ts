@@ -189,7 +189,7 @@ export function extractClaudeStreamDisplayLines(rawLine: string): string[] {
    try {
       payload = JSON.parse(cleanLine);
    } catch {
-      return [rawLine];
+      return [];
    }
    if (!payload || typeof payload !== "object") {
       return [];
@@ -212,7 +212,10 @@ export function extractClaudeStreamDisplayLines(rawLine: string): string[] {
       for (const block of content) {
          if (!block || typeof block !== "object") continue;
          const blockRecord = block as Record<string, unknown>;
-         if (blockRecord.type === "tool_use") continue;
+         if (blockRecord.type === "tool_use") {
+            addText(blockRecord.text);
+            continue;
+         }
          addText(blockRecord.text);
          addText(blockRecord.thinking);
          if (typeof blockRecord.content === "string") {
@@ -233,6 +236,11 @@ export function extractClaudeStreamDisplayLines(rawLine: string): string[] {
          addText(delta.text);
          addText(delta.thinking);
          addText(delta.content);
+      }
+   } else if (payloadType === "content_block_delta") {
+      if (payloadRecord.delta && typeof payloadRecord.delta === "object") {
+         const delta = payloadRecord.delta as Record<string, unknown>;
+         addText(delta.text);
       }
    } else if (payloadType === "result") {
       addText(payloadRecord.result);
