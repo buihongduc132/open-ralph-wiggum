@@ -19,6 +19,7 @@ import {
    type BlacklistedAgent,
 } from "./loop-runtime";
 import { ARGS_TEMPLATES, type AgentBuildArgsOptions } from "./agent-builders";
+import { beautifyJsonLine, isJsonModeAgent, type BeautifierConfig } from "./src/json-beautifier";
 import { stripFrontmatter } from "./template-utils";
 
 export const VERSION = "1.3.0";
@@ -2614,7 +2615,25 @@ Unable to read ${currentTasksFileLabel()}
       const handleLine = (line: string, isError: boolean, displayedPrefixLength = 0) => {
          activityTracker.markLine();
          const tool = parseToolOutput(line);
-         const outputLines = options.agent.type === "claude-code" ? extractClaudeStreamDisplayLines(line) : [line];
+
+         // JSON beautifier: use for JSON-mode agents
+         let outputLines: string[];
+         const extraFlags = options.agent.extraFlags;
+         if (isJsonModeAgent(options.agent.type, extraFlags)) {
+            const cfg: BeautifierConfig = {
+               mode: "beautify",
+               agentType: options.agent.type,
+               verboseTools: !!verboseTools,
+               showThinking: true,
+               showRetry: true,
+               showError: true,
+               showCost: true,
+               maxErrorLength: 120,
+            };
+            outputLines = beautifyJsonLine(line, cfg);
+         } else {
+            outputLines = options.agent.type === "claude-code" ? extractClaudeStreamDisplayLines(line) : [line];
+         }
          let completionPromiseSeen = false;
          if (!isError && promisePattern) {
             completionPromiseSeen = outputLines.some(outputLine => promisePattern.test(outputLine.trim()));
