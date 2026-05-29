@@ -23,8 +23,8 @@ export function stripFrontmatter(content: string): string {
       // Valid YAML frontmatter — strip the whole block
       return content.slice(fmMatch[0].length);
     }
-    // Not valid YAML — content between --- is actual content, return it
-    return fmMatch[1] + "\n";
+    // Not valid YAML — the --- markers are just horizontal rules, return original content unchanged
+    return content;
   }
   // Handle edge case: --- at EOF with no trailing newline (content ends with \n---)
   const eofMatch = content.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n---$/);
@@ -32,7 +32,8 @@ export function stripFrontmatter(content: string): string {
     if (isYamlFrontmatter(eofMatch[1])) {
       return content.slice(eofMatch[0].length);
     }
-    return eofMatch[1];
+    // Not valid YAML — return original content unchanged
+    return content;
   }
   return content;
 }

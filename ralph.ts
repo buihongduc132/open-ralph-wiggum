@@ -50,11 +50,13 @@ export function setStatePaths(nextStateDir: string): void {
 function ensureStateDir(): void {
    if (existsSync(stateDir)) {
       try {
-         const stats = lstatSync(stateDir);
+         const stats = statSync(stateDir);
          if (!stats.isDirectory()) {
+            // Use lstatSync only for the error message to detect symlink-to-file
+            const linkStats = lstatSync(stateDir);
             console.error(`\n❌ Ralph Initialization Failed`);
             console.error(`   ${stateDir} exists but is not a directory!`);
-            console.error(`   Type: ${stats.isSymbolicLink() ? "symlink" : "file"}`);
+            console.error(`   Type: ${linkStats?.isSymbolicLink() ? "symlink" : "file"}`);
             console.error(`\nFix: rm ${stateDir}  # remove the file/symlink`);
             console.error(`     mkdir ${stateDir}  # then recreate as a directory`);
             process.exit(1);
