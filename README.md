@@ -13,9 +13,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Th0rgal/open-ralph-wiggum/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
-  <a href="https://github.com/Th0rgal/open-ralph-wiggum"><img src="https://img.shields.io/badge/built%20with-Bun%20%2B%20TypeScript-f472b6.svg" alt="Built with Bun + TypeScript"></a>
-  <a href="https://github.com/Th0rgal/open-ralph-wiggum/releases"><img src="https://img.shields.io/github/v/release/Th0rgal/ralph-wiggum?include_prereleases" alt="Release"></a>
+  <a href="https://github.com/buihongduc132/open-ralph-wiggum/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
+  <a href="https://github.com/buihongduc132/open-ralph-wiggum"><img src="https://img.shields.io/badge/built%20with-Bun%20%2B%20TypeScript-f472b6.svg" alt="Built with Bun + TypeScript"></a>
+  <a href="https://github.com/buihongduc132/open-ralph-wiggum/releases"><img src="https://img.shields.io/github/v/release/buihongduc132/open-ralph-wiggum?include_prereleases" alt="Release"></a>
   <img src=".github/badges/unit-coverage.svg" alt="Unit coverage badge">
 </p>
 
@@ -180,6 +180,9 @@ Switch between built-in agents or wire in your own sub-agent wrapper without cha
 
 ## Installation
 
+> **Fork of [Th0rgal/open-ralph-wiggum](https://github.com/Th0rgal/open-ralph-wiggum)** — all credit for the original Ralph Wiggum technique and CLI goes to [Th0rgal](https://github.com/Th0rgal).
+> This fork includes additional bug fixes, features, and improvements not yet in upstream.
+
 **Prerequisites:**
 - [Bun](https://bun.sh) runtime
 - At least one AI coding agent CLI:
@@ -189,28 +192,16 @@ Switch between built-in agents or wire in your own sub-agent wrapper without cha
   - [Cursor Agent](https://cursor.com/cli/) — Cursor's headless Agent CLI
   - [OpenCode](https://opencode.ai) — Open-source AI coding assistant
 
-### npm (recommended)
+### From source (recommended)
 
 ```bash
-npm install -g @th0rgal/ralph-wiggum
-```
-
-### Bun
-
-```bash
-bun add -g @th0rgal/ralph-wiggum
-```
-
-### From source
-
-```bash
-git clone https://github.com/Th0rgal/open-ralph-wiggum
+git clone https://github.com/buihongduc132/open-ralph-wiggum
 cd open-ralph-wiggum
 ./install.sh
 ```
 
 ```powershell
-git clone https://github.com/Th0rgal/open-ralph-wiggum
+git clone https://github.com/buihongduc132/open-ralph-wiggum
 cd open-ralph-wiggum
 .\install.ps1
 ```
@@ -821,11 +812,11 @@ Multiple `--state-dir` commands targeting **different directories** can safely r
 ## Uninstall
 
 ```bash
-npm uninstall -g @th0rgal/ralph-wiggum
+./uninstall.sh
 ```
 
 ```powershell
-npm uninstall -g @th0rgal/ralph-wiggum
+.\uninstall.ps1
 ```
 
 ## Agent-Specific Notes
@@ -1019,6 +1010,12 @@ The `--status` command shows which agent and model was used for each iteration:
 ## See Also
 
 Check out 🏝️ [sandboxed.sh](https://github.com/Th0rgal/sandboxed.sh) — a dashboard for orchestrating AI agents with workspace management, real-time monitoring, and multi-agent workflows.
+
+## Credits
+
+- **Original author**: [Th0rgal](https://github.com/Th0rgal) — [Th0rgal/open-ralph-wiggum](https://github.com/Th0rgal/open-ralph-wiggum)
+- **Ralph Wiggum technique**: [Geoffrey Huntley](https://ghuntley.com/ralph/)
+- **Fork maintained by**: [buihongduc132](https://github.com/buihongduc132)
 
 ## License
 
