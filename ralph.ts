@@ -21,6 +21,10 @@ import {
 import { ARGS_TEMPLATES, type AgentBuildArgsOptions } from "./agent-builders";
 import { beautifyJsonLine, isJsonModeAgent, type BeautifierConfig } from "./src/json-beautifier";
 import { stripFrontmatter } from "./template-utils";
+import { parseGoalMd, writeGoalMd } from "./src/goal-parser";
+import { createInitialState as createGoalState, loadGoalState, saveGoalState, transitionPhase, markFactVerified, updatePlanStep, isGoalComplete, getNextPhase } from "./src/goal-state";
+import { buildInventory, findNextActionableGoal, filterByPhase } from "./src/goal-inventory";
+import { buildGoalPromptSection, formatGoalInventory, formatGoalStatus, scaffoldGoalMd, titleToSlug } from "./src/goal-prompt";
 
 export const VERSION = "1.3.0";
 
@@ -885,6 +889,43 @@ Learn more: https://ghuntley.com/ralph/
       process.exit(0);
    }
 
+   // Goal mode early-exit handlers
+   if (args.includes("--list-goals")) {
+      const dir = args[args.indexOf("--list-goals") + 1] || process.cwd() + "/goals";
+      const inv = buildInventory(dir);
+      console.log(formatGoalInventory(inv.goals));
+      process.exit(0);
+   }
+
+   // --init-goal handler: create scaffold
+   if (args.includes("--init-goal")) {
+      const title = args[args.indexOf("--init-goal") + 1];
+      if (!title) {
+         console.error("Error: --init-goal requires a title");
+         process.exit(1);
+      }
+      const slug = titleToSlug(title);
+      if (!slug) {
+         console.error("Error: --init-goal title produces empty slug");
+         process.exit(1);
+      }
+      const goalDir = join(process.cwd(), "goals", slug);
+      mkdirSync(goalDir, { recursive: true });
+      const goalMdPath = join(goalDir, "goal.md");
+      if (existsSync(goalMdPath)) {
+         console.error(`Error: goal already exists at ${goalMdPath}`);
+         process.exit(1);
+      }
+      writeFileSync(goalMdPath, scaffoldGoalMd(title), "utf-8");
+      const goalStatePath = join(goalDir, "goal.state.json");
+      if (!existsSync(goalStatePath)) {
+         const initState = createGoalState(slug);
+         writeFileSync(goalStatePath, JSON.stringify(initState, null, 2), "utf-8");
+      }
+      console.log(`✅ Created goal scaffold: ${goalDir}/`);
+      process.exit(0);
+   }
+
    const runtimeTomlConfig = loadRuntimeTomlConfig(tomlConfigPath, explicitTomlConfigPath);
 
    if (!customConfigPath && runtimeTomlConfig?.agent_config) {
@@ -1589,6 +1630,13 @@ Learn more: https://ghuntley.com/ralph/
    let stallingActionProvided = false;
    let stallRetries = false;
    let stallRetryMinutes = 15;
+
+   // Goal mode (opt-in)
+   let goalPath = "";
+   let goalDir = "";
+   let goalInitTitle = "";
+   let goalListFlag = false;
+   let goalStatusFlag = false;
    let stallRetriesProvided = false;
    let stallRetryMinutesProvided = false;
    let maxIterationsProvided = false;
@@ -1736,6 +1784,10 @@ Learn more: https://ghuntley.com/ralph/
       if (runtimeTomlConfig.reuse_skip_rotation !== undefined) reuseSkipRotation = runtimeTomlConfig.reuse_skip_rotation;
       if (runtimeTomlConfig.reuse_skip_min_iterations !== undefined) reuseSkipMinIterations = runtimeTomlConfig.reuse_skip_min_iterations;
       if (runtimeTomlConfig.reuse_skip_max_iterations !== undefined) reuseSkipMaxIterations = runtimeTomlConfig.reuse_skip_max_iterations;
+      // Goal mode (opt-in)
+      if (runtimeTomlConfig.goal) goalPath = runtimeTomlConfig.goal;
+      if (runtimeTomlConfig.goal_dir) goalDir = runtimeTomlConfig.goal_dir;
+      if (runtimeTomlConfig.goal_promise) completionPromise = runtimeTomlConfig.goal_promise;
    }
 
    // Env var fallback for reuse_check (if TOML didn't set it)
@@ -1799,6 +1851,31 @@ Learn more: https://ghuntley.com/ralph/
             process.exit(1);
          }
          taskPromise = val;
+      } else if (arg === "--goal") {
+         const val = args[++i];
+         if (!val) {
+            console.error("Error: --goal requires a path to goal.md");
+            process.exit(1);
+         }
+         goalPath = val;
+      } else if (arg === "--goal-dir") {
+         const val = args[++i];
+         if (!val) {
+            console.error("Error: --goal-dir requires a directory path");
+            process.exit(1);
+         }
+         goalDir = val;
+      } else if (arg === "--init-goal") {
+         const val = args[++i];
+         if (!val) {
+            console.error("Error: --init-goal requires a title");
+            process.exit(1);
+         }
+         goalInitTitle = val;
+      } else if (arg === "--list-goals") {
+         goalListFlag = true;
+      } else if (arg === "--goal-status") {
+         goalStatusFlag = true;
       } else if (arg === "--rotation") {
          const val = args[++i];
          if (!val) {
@@ -2077,6 +2154,9 @@ Learn more: https://ghuntley.com/ralph/
       stallRetries?: boolean;
       stallRetryMinutes?: number;
       fallbackBlacklist?: string[];
+      // Goal mode (opt-in, optional fields only)
+      goalSlug?: string;
+      goalPhase?: string;
    }
 
    function getFallbackKey(agent: AgentType, modelName: string): string {
@@ -2367,6 +2447,43 @@ Tasks Mode: ENABLED - Work on one task at a time from ${currentTasksFileLabel()}
 
 Now, work on the current task. Good luck!
 `.trim();
+      }
+
+      // Goal mode: goal-aware prompt with facts + plan
+      if (state.goalSlug && goalPath) {
+         try {
+            const goal = parseGoalMd(goalPath, state.goalSlug);
+            const goalStatePath = join(dirname(goalPath), "goal.state.json");
+            const goalState = loadGoalState(goalStatePath) ?? createGoalState(state.goalSlug, state.completionPromise);
+            const goalSection = buildGoalPromptSection(goal, goalState, state.iteration);
+
+            return `
+# Ralph Wiggum Loop - Iteration ${state.iteration}
+
+You are in a goal-driven development loop.
+${contextSection}
+${goalSection}
+
+## Your Task
+
+${state.prompt}
+
+## Critical Rules
+
+- ONLY output <promise>${state.completionPromise}</promise> when ALL facts are verified
+- Output promise tags DIRECTLY - do not quote them, explain them, or say you "will" output them
+- Do NOT lie or output false promises to exit the loop
+- If stuck, try a different approach
+- Check your work before claiming completion
+
+## Current Iteration: ${state.iteration}${state.maxIterations > 0 ? ` / ${state.maxIterations}` : " (unlimited)"} (min: ${state.minIterations ?? 1})
+
+Now, work on the goal. Good luck!
+`.trim();
+         } catch (err) {
+            // Goal parse failed — fall through to default mode
+            console.error(`Warning: Goal mode parse error: ${err}`);
+         }
       }
 
       // Default mode: simple instructions without tool-specific mentions
@@ -3233,6 +3350,9 @@ Unable to read ${currentTasksFileLabel()}
 ╚══════════════════════════════════════════════════════════════════╝
 `);
 
+      // Compute goal slug from path (for goal mode)
+      const goalSlug = goalPath ? basename(dirname(goalPath)) : "";
+
       // Initialize state
       const state: RalphState = resuming && existingState ? existingState : {
          active: true,
@@ -3260,6 +3380,19 @@ Unable to read ${currentTasksFileLabel()}
          stallRetryMinutes,
          fallbackBlacklist: [],
       };
+
+      // Goal mode: set optional goal fields in state
+      if (goalPath) {
+         state.goalSlug = goalSlug;
+         state.goalPhase = "planning";
+
+         // Try to load existing goal state and use its phase
+         const goalStateFilePath = join(dirname(goalPath), "goal.state.json");
+         const existingGoalState = loadGoalState(goalStateFilePath);
+         if (existingGoalState) {
+            state.goalPhase = existingGoalState.phase;
+         }
+      }
 
       // Ensure blacklistedAgents array exists (for backward compatibility)
       if (!state.blacklistedAgents) {
