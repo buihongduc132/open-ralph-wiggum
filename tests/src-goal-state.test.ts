@@ -58,6 +58,32 @@ describe("createInitialState", () => {
    });
 });
 
+describe("loadGoalState — malformed inputs", () => {
+   it("returns null for malformed JSON", () => {
+      const path = statePath("malformed");
+      require("fs").writeFileSync(path, "{malformed", "utf-8");
+      expect(loadGoalState(path)).toBeNull();
+   });
+
+   it("returns null for valid JSON missing phase field", () => {
+      const path = statePath("no-phase");
+      require("fs").writeFileSync(path, JSON.stringify({ slug: "test" }), "utf-8");
+      expect(loadGoalState(path)).toBeNull();
+   });
+
+   it("returns null for valid JSON with invalid phase", () => {
+      const path = statePath("bad-phase");
+      require("fs").writeFileSync(path, JSON.stringify({ slug: "test", phase: "unknown" }), "utf-8");
+      expect(loadGoalState(path)).toBeNull();
+   });
+
+   it("returns null for empty JSON object", () => {
+      const path = statePath("empty");
+      require("fs").writeFileSync(path, "{}", "utf-8");
+      expect(loadGoalState(path)).toBeNull();
+   });
+});
+
 describe("loadGoalState / saveGoalState", () => {
    it("round-trips state to disk correctly", () => {
       const path = statePath("roundtrip");

@@ -198,6 +198,20 @@ Done.
    });
 });
 
+describe("writeGoalMd — edge cases", () => {
+   it("throws when filePath is undefined", () => {
+      const goal: Goal = {
+         slug: "test",
+         title: "Test",
+         objective: "",
+         facts: [],
+         planSteps: [],
+         doneCondition: "",
+      };
+      expect(() => writeGoalMd(goal)).toThrow(/no filePath/);
+   });
+});
+
 describe("writeGoalMd — no corruption with sections before Facts", () => {
    it("does not duplicate Objective/Facts sections on write-back", () => {
       const path = writeFixture("no-corruption.md", `# Goal: Corruption Test
@@ -236,6 +250,27 @@ All facts verified.
       expect(reparsed.facts[0].verified).toBe(true);
       expect(reparsed.planSteps).toHaveLength(1);
       expect(reparsed.doneCondition).toBe("All facts verified.");
+   });
+
+   it("handles goal.md without ## Facts header (returns unchanged)", () => {
+      const path = writeFixture("no-facts-section.md", `# Goal: No Facts
+
+## Objective
+Just objective.
+
+## Plan
+1. Do something
+
+## Done Condition
+Done.
+`);
+      const goal = parseGoalMd(path, "no-facts");
+      // Write back should not corrupt
+      writeGoalMd(goal);
+      const reparsed = parseGoalMd(path, "no-facts");
+      expect(reparsed.title).toBe("No Facts");
+      expect(reparsed.objective).toBe("Just objective.");
+      expect(reparsed.facts).toHaveLength(0);
    });
 });
 

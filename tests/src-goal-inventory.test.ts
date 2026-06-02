@@ -133,6 +133,23 @@ describe("buildInventory", () => {
       const inv = buildInventory(TEMP_DIR);
       expect(inv.goals).toHaveLength(0);
    });
+
+   it("uses max of goal.md and state verified counts", () => {
+      // goal.md has 2 verified, state has 1 verified — should take max = 2
+      createGoalDir("max-verified", GOAL_TEMPLATE("Max Verified", 3, 2), {
+         slug: "max-verified", phase: "executing", startedAt: "2026-01-01T00:00:00Z",
+         lastIterationAt: "2026-01-01T00:00:00Z", iterations: 1,
+         facts: {
+            "1": { status: "verified", verifiedAt: "2026-01-01", verifiedBy: "test" },
+         },
+         planSteps: {}, completionPromise: "COMPLETE",
+      });
+
+      const inv = buildInventory(TEMP_DIR);
+      const goal = inv.goals.find(g => g.slug === "max-verified");
+      expect(goal).toBeDefined();
+      expect(goal!.factsVerified).toBe(2); // max(goal.md=2, state=1) = 2
+   });
 });
 
 describe("findNextActionableGoal", () => {

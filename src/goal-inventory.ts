@@ -69,13 +69,15 @@ export function buildInventory(goalsDir: string): GoalInventory {
                phase = VALID_PHASES.includes(state.phase) ? state.phase : "planning";
                lastIterationAt = state.lastIterationAt ?? "";
 
-               // Override verified count from state if available
+               // Take the max of goal.md verified and state verified.
+               // State is authoritative for facts explicitly verified via markFactVerified,
+               // but goal.md may have additional checkboxes checked manually.
                const stateVerified = Object.values(
                   state.facts ?? {}
                ).filter(
                   (f: any) => f.status === "verified"
                ).length as number;
-               if (stateVerified > 0) factsVerified = stateVerified;
+               factsVerified = Math.max(factsVerified, stateVerified);
             } catch {
                // Malformed state — use defaults
             }
