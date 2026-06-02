@@ -1,50 +1,56 @@
-# Iteration 4 Continuation Progress
+# Iteration 5 Progress (SYNC checkpoint)
+
+## Modulo Checkpoint: I % 5 == 0 → SYNC — Lateral Alignment
+- ✅ Git pull --rebase (already up to date)
+- ✅ Commit current progress
+- ✅ Retain progress into hindsight
+- ✅ Push to origin
 
 ## State Check
 - All 8 tasks (T1-T8) completed in iterations 1-2
 - Iteration 3: 50 tests, 124 expect() calls
 - Iteration 4a: 81 tests, 202 expect() calls, external review 8/10
 - Iteration 4b: 109 tests, 252 expect() calls, external review 7.5/10
+- Iteration 5: 137 tests, 318 expect() calls
 - No demoted tasks, no problem_notes
 
-## Work Done (This Continuation)
+## Work Done (This Iteration)
 
-### Coverage Uplift: 28 new tests (81→109, 252 expect() calls)
-1. **NaN/Infinity/float at values** (5 tests)
-2. **TOML with only state_injection** (1 test)
-3. **State injection non-JSONL content** (2 tests)
-4. **Rule entries with null/undefined fields** (3 tests)
-5. **State injection slicing boundaries** (4 tests)
-6. **max_next=0 with max_prev>0** (1 test)
-7. **Multiple active entries concatenation** (2 tests)
-8. **Backslash path extraction** (1 test)
-9. **Scaffold directory creation** (1 test)
-10. **Iteration 0 edge cases** (2 tests)
-11. **findPlaceholderRules partial match** (2 tests)
-12. **Hyphenated rule names** (3 tests)
-13. **findPlaceholderRules non-array guard** (2 tests)
+### Coverage Uplift: 28 new tests (109→137, 318 expect() calls)
+1. **Corrupt/invalid TOML parsing** (3 tests) — malformed, empty, unclosed brackets
+2. **State injection show_status** (2 tests) — false omits reminder, true shows it
+3. **Multiple {{inject:state}}** (1 test) — replaceAll behavior, both replaced
+4. **Disabled rules** (2 tests) — disabled rule, empty entries array
+5. **Rules-only TOML** (1 test) — no state_injection section
+6. **Sequential scaffoldRulesToml** (1 test) — append two different sections
+7. **Both max_prev=0 and max_next=0** (1 test) — minimal output
+8. **Nonexistent source file** (1 test) — returns empty
+9. **Null TOML** (2 tests) — scaffolds rules, empty state
+10. **Template with no inject** (1 test) — unchanged passthrough
+11. **Negative iteration** (2 tests) — -3%3=0, -1%3≠0
+12. **Very large at values** (2 tests) — 999999
+13. **Empty source string** (1 test) — returns empty
+14. **Mixed inject + non-inject** (1 test) — leaves {{iteration}} etc.
+15. **PLACEHOLDER gate on disabled rules** (2 tests) — fail-close behavior
+16. **CWD fallback priority** (1 test) — stateDir wins
+17. **at=1 matches every iteration** (1 test) — loop 0..9
+18. **Single-line state source** (1 test) — handles correctly
+19. **getDefaultRulesToml round-trip** (1 test) — structure validation
+20. **resolveRulesTomlPath with existing file** (1 test) — returns exact path
 
-### Bug Fixes (from external review 7.5/10)
-1. **entries as non-array crash** — Added `Array.isArray(rule.entries)` guard in `resolveInjectPlaceholders`
-2. **findPlaceholderRules non-array entries** — Added `Array.isArray(section.entries)` guard
-3. **Hyphenated rule names** — Changed regex from `\w+` to `[a-zA-Z0-9_-]+` to support `{{inject:my-rule}}`
-
-### Remaining Review Notes (low priority, design choices)
-- PLACEHOLDER gate is fail-closed (fires even on disabled rules) — documented behavior
-- Float at values silently work — not considered a bug
-- extractStateDirBasename(".") produces ".ralph-..toml" — edge case, not a crash
-- Iteration 0 matches all rules (0%N===0) — mathematically correct
+### Bug Fix
+- Fixed test isolation issue: "no TOML (null)" test was using `/tmp` directly,
+  causing collision with leftover TOML from other tests. Now uses isolated TMP_DIR.
 
 ## Test Results
-- `tests/deterministic-injection.test.ts`: **109 pass, 0 fail, 252 expect() calls**
-- Full suite: **1127 pass, 27 skip, 3 fail** (pre-existing stall-retry), **2131 expect() calls**
+- `tests/deterministic-injection.test.ts`: **137 pass, 0 fail, 318 expect() calls**
+- Full suite: **1155 pass, 27 skip, 3 fail** (pre-existing stall-retry), **2197 expect() calls**
 
 ## Modulo Checkpoints
-- I % 5 = 4: No SYNC
-- I % 7 = 4: No BACKWARD
-- I % 11 = 4: No mutation/CodeQL
+- I % 5 = 0: ✅ SYNC — Lateral Alignment complete
+- I % 7 = 5: No BACKWARD
+- I % 11 = 5: No mutation/CodeQL
 
 ## Commits
-- `c0de006` test: coverage uplift — 23 new tests (81→104), 246 expect() calls
-- `0186563` fix: Array.isArray guard, hyphenated rule names, findPlaceholderRules null safety
+- `f4399dc` test: coverage uplift iteration 5 — 28 new tests (109→137), 318 expect() calls
 - Pushed to origin/feat/deterministic-modulo-injection
