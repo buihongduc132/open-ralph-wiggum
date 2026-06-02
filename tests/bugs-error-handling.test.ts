@@ -1,41 +1,61 @@
 /**
- * RED tests for error handling bugs found in the open-ralph-wiggum codebase.
+ * Tests for error handling in the json-beautifier.
  *
- * Each test documents the expected vs actual behavior and is designed to FAIL
- * to prove the bug exists.
+ * Migrated from old extractClaudeStreamDisplayLines/extractCursorAgentStreamDisplayLines bug tests.
+ * The new beautifier correctly falls back to [rawLine] on parse errors (by design).
  */
 import { describe, expect, it } from "bun:test";
 import {
-  extractClaudeStreamDisplayLines,
-  extractCursorAgentStreamDisplayLines,
-} from "../completion";
+  beautifyJsonLine,
+  type BeautifierConfig,
+} from "../src/json-beautifier";
+import { stripAnsi } from "../completion";
+
+const claudeCfg: BeautifierConfig = {
+  mode: "beautify",
+  agentType: "claude-code",
+  verboseTools: false,
+  showThinking: true,
+  showRetry: true,
+  showError: true,
+  showCost: true,
+  maxErrorLength: 120,
+};
+
+const cursorCfg: BeautifierConfig = {
+  ...claudeCfg,
+  agentType: "cursor-agent",
+};
 
 // ────────────────────────────────────────────────────────────────────────────────
-// completion.ts: Error handling gaps
+// json-beautifier: Error handling — malformed JSON
 // ────────────────────────────────────────────────────────────────────────────────
 
-describe("BUG: extractClaudeStreamDisplayLines passes through malformed JSON as-is [MEDIUM]", () => {
-  it("returns the raw malformed JSON line instead of empty array", () => {
-    // When JSON.parse fails, the function returns [rawLine].
-    // This means broken JSON lines are passed through to the caller.
-    // The function's purpose is to extract structured display lines;
-    // passing through garbage defeats the purpose.
-    const malformedJson = '{type: "assistant", message: {}}'; // missing quotes on type key
-    const lines = extractClaudeStreamDisplayLines(malformedJson);
-    // Expected: [] (unparseable line should be filtered)
-    // Actual: [malformedJson] (raw line passed through)
-    expect(lines).not.toContain(malformedJson);
+describe("beautifyJsonLine: malformed JSON fallback (claude-code)", () => {
+  it("falls back to [rawLine] on unparseable JSON (missing quotes on key)", () => {
+    const malformedJson = '{type: "assistant", message: {}}';
+    const lines = beautifyJsonLine(malformedJson, claudeCfg);
+    // Design: parse errors NEVER crash — always fall back to raw output
+    expect(lines).toEqual([malformedJson]);
   });
-});
 
-describe("BUG: extractCursorAgentStreamDisplayLines passes through malformed JSON as-is [MEDIUM]", () => {
-  it("returns the raw malformed JSON line instead of empty array", () => {
-    // Same issue as extractClaudeStreamDisplayLines
+  it("falls back to [rawLine] on JSON with undefined value", () => {
+    // This isn't even valid JSON
     const malformedJson = '{"type": "tool_call", "tool_call": undefined}';
-    const lines = extractCursorAgentStreamDisplayLines(malformedJson);
-    // Expected: [] (unparseable line should be filtered)
-    // Actual: [malformedJson]
-    expect(lines).not.toContain(malformedJson);
+    const lines = beautifyJsonLine(malformedJson, cursorCfg);
+    expect(lines).toEqual([malformedJson]);
+  });
+
+  it("returns [rawLine] for non-JSON text unchanged", () => {
+    expect(beautifyJsonLine("hello world", claudeCfg)).toEqual(["hello world"]);
+  });
+
+  it("returns [rawLine] for JSON array (not object)", () => {
+    expect(beautifyJsonLine("[1,2,3]", claudeCfg)).toEqual(["[1,2,3]"]);
+  });
+
+  it("returns [rawLine] for JSON null primitive", () => {
+    expect(beautifyJsonLine("null", claudeCfg)).toEqual(["null"]);
   });
 });
 

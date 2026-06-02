@@ -179,9 +179,8 @@ export function detectModelNotFoundError(output: string): boolean {
       output.includes(".split is not a function");
 }
 
-// Re-export for backward compatibility — the canonical implementation
-// is now in completion.ts (extractClaudeStreamDisplayLines)
-export { extractClaudeStreamDisplayLines } from "../completion";
+// extractClaudeStreamDisplayLines has been replaced by the json-beautifier module.
+// See src/json-beautifier.ts and beautifyJsonLine().
 
 export function detectStrugglePatterns(history: {
    struggleIndicators: {

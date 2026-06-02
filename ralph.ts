@@ -20,6 +20,7 @@ import {
 } from "./loop-runtime";
 import { ARGS_TEMPLATES, type AgentBuildArgsOptions } from "./agent-builders";
 import { beautifyJsonLine, isJsonModeAgent, type BeautifierConfig } from "./src/json-beautifier";
+import { StreamAccumulator } from "./src/stream-accumulator";
 import { stripFrontmatter } from "./template-utils";
 
 export const VERSION = "1.3.0";
@@ -160,6 +161,8 @@ export interface RalphRuntimeConfig {
    reuse_skip_rotation?: boolean;
    reuse_skip_min_iterations?: boolean;
    reuse_skip_max_iterations?: boolean;
+   json_display?: "beautify" | "raw" | "text";
+   output_buffer_bytes?: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -563,6 +566,12 @@ export function getDefaultTomlConfig(): string {
 
 # Extra flags to pass to the agent
 # extra_agent_flags = ["--verbose", "--no-git"]
+
+# How to display JSON agent output: "beautify" (default), "raw", or "text"
+# json_display = "beautify"
+
+# Max bytes of agent output to keep per iteration (default: 2MB, 0 = unlimited)
+# output_buffer_bytes = 2097152
 `;
 }
 
@@ -708,6 +717,8 @@ export function loadRuntimeTomlConfig(configPath: string, explicit: boolean): Ra
       config.reuse_skip_rotation = normalizeRuntimeConfigValue("reuse_skip_rotation", parsed.reuse_skip_rotation, "boolean") as boolean | undefined;
       config.reuse_skip_min_iterations = normalizeRuntimeConfigValue("reuse_skip_min_iterations", parsed.reuse_skip_min_iterations, "boolean") as boolean | undefined;
       config.reuse_skip_max_iterations = normalizeRuntimeConfigValue("reuse_skip_max_iterations", parsed.reuse_skip_max_iterations, "boolean") as boolean | undefined;
+      config.json_display = normalizeRuntimeConfigValue("json_display", parsed.json_display, "string") as "beautify" | "raw" | "text" | undefined;
+      config.output_buffer_bytes = normalizeRuntimeConfigValue("output_buffer_bytes", parsed.output_buffer_bytes, "number") as number | undefined;
 
       if (config.prompt_file) {
          config.prompt_file = resolveConfigRelativePath(configPath, config.prompt_file);
@@ -1230,6 +1241,8 @@ Options:
   --prompt-template PATH  Use custom prompt template (supports variables)
   --no-stream         Buffer agent output and print at the end
   --verbose-tools     Print every tool line (disable compact tool summary)
+  --json-display MODE How to display JSON agent output: beautify (default), raw, or text
+  --output-buffer-bytes N  Max bytes of agent output to keep per iteration (default: 2097152, 0=unlimited)
   --questions         Enable interactive question handling (default: enabled)
   --no-questions      Disable interactive question handling (agent will loop on questions)
   --no-plugins        Disable non-auth OpenCode plugins for this run (opencode only)
@@ -1387,11 +1400,12 @@ Learn more: https://ghuntley.com/ralph/
       exitCode: number;
       completionDetected: boolean;
       snapshotBefore: Awaited<ReturnType<typeof captureFileSnapshot>>;
+      preExtractedErrors?: string[];
    }): Promise<void> {
       const iterationDuration = Date.now() - params.iterationStart;
       const snapshotAfter = await captureFileSnapshot();
       const filesModified = getModifiedFilesSinceSnapshot(params.snapshotBefore, snapshotAfter);
-      const errors = extractErrors(`${params.result}\n${params.stderr}`);
+      const errors = params.preExtractedErrors?.length ? params.preExtractedErrors : extractErrors(`${params.result}\n${params.stderr}`);
 
       const iterationRecord: IterationHistory = {
          iteration: params.iteration,
@@ -2005,6 +2019,9 @@ Learn more: https://ghuntley.com/ralph/
     let reuseSkipMinIterations = false;
     let reuseSkipMaxIterations = false;
 
+   let jsonDisplay: "beautify" | "raw" | "text" = "beautify";
+   let outputBufferBytes = 2 * 1024 * 1024;
+
     const promptParts: string[] = [];
    let extraAgentFlags: string[] = [];
    let passthroughAgentFlags: string[] = []; // flags from -- passthrough only (TOP priority)
@@ -2139,6 +2156,22 @@ Learn more: https://ghuntley.com/ralph/
       if (runtimeTomlConfig.reuse_skip_rotation !== undefined) reuseSkipRotation = runtimeTomlConfig.reuse_skip_rotation;
       if (runtimeTomlConfig.reuse_skip_min_iterations !== undefined) reuseSkipMinIterations = runtimeTomlConfig.reuse_skip_min_iterations;
       if (runtimeTomlConfig.reuse_skip_max_iterations !== undefined) reuseSkipMaxIterations = runtimeTomlConfig.reuse_skip_max_iterations;
+
+      if (runtimeTomlConfig.json_display) {
+         const valid = ["beautify", "raw", "text"];
+         if (!valid.includes(runtimeTomlConfig.json_display)) {
+            console.error(`Error: Invalid json_display '${runtimeTomlConfig.json_display}'. Must be one of: ${valid.join(", ")}`);
+            process.exit(1);
+         }
+         jsonDisplay = runtimeTomlConfig.json_display;
+      }
+      if (runtimeTomlConfig.output_buffer_bytes !== undefined) {
+         if (runtimeTomlConfig.output_buffer_bytes < 0) {
+            console.error(`Error: output_buffer_bytes must be non-negative`);
+            process.exit(1);
+         }
+         outputBufferBytes = runtimeTomlConfig.output_buffer_bytes;
+      }
    }
 
    // Env var fallback for reuse_check (if TOML didn't set it)
@@ -2274,6 +2307,20 @@ Learn more: https://ghuntley.com/ralph/
          streamOutput = true;
       } else if (arg === "--verbose-tools") {
          verboseTools = true;
+      } else if (arg === "--json-display") {
+         const val = args[++i];
+         if (val !== "beautify" && val !== "raw" && val !== "text") {
+            console.error("Error: --json-display requires 'beautify', 'raw', or 'text'");
+            process.exit(1);
+         }
+         jsonDisplay = val;
+      } else if (arg === "--output-buffer-bytes") {
+         const val = args[++i];
+         if (!val || Number.isNaN(Number(val)) || Number(val) < 0) {
+            console.error("Error: --output-buffer-bytes requires a non-negative number");
+            process.exit(1);
+         }
+         outputBufferBytes = Number(val);
       } else if (arg === "--no-commit") {
          autoCommit = false;
       } else if (arg === "--no-plugins") {
@@ -2998,11 +3045,17 @@ Unable to read ${currentTasksFileLabel()}
          preStartTimeoutMs?: number; // -1 = auto (1/10 stallingTimeout), 0 = disabled, >0 = custom
          stopOnPromise?: string;
          flushPartialLines?: boolean;
+         outputBufferBytes?: number;
+         jsonDisplay?: "beautify" | "raw" | "text";
+         verboseTools?: boolean;
       },
-   ): Promise<{ stdoutText: string; stderrText: string; toolCounts: Map<string, number>; stalled: boolean; stalledForMs: number | null; preStartStalled: boolean; terminatedAfterPromise: boolean }> {
+   ): Promise<{ stdoutText: string; stderrText: string; toolCounts: Map<string, number>; stalled: boolean; stalledForMs: number | null; preStartStalled: boolean; terminatedAfterPromise: boolean; errors: string[]; totalOutputBytes: number }> {
       const toolCounts = new Map<string, number>();
       let stdoutText = "";
       let stderrText = "";
+      const outputBufferBytes = options.outputBufferBytes ?? (2 * 1024 * 1024);
+      const stdoutAcc = outputBufferBytes > 0 ? new StreamAccumulator({ tailMaxBytes: outputBufferBytes }) : null;
+      const stderrAcc = outputBufferBytes > 0 ? new StreamAccumulator({ tailMaxBytes: Math.min(outputBufferBytes, 512 * 1024) }) : null;
       let lastPrintedAt = Date.now();
       const activityTracker = new StreamActivityTracker();
       let lastToolSummaryAt = 0;
@@ -3051,9 +3104,9 @@ Unable to read ${currentTasksFileLabel()}
          const extraFlags = options.agent.extraFlags;
          if (isJsonModeAgent(options.agent.type, extraFlags)) {
             const cfg: BeautifierConfig = {
-               mode: "beautify",
+               mode: options.jsonDisplay ?? "beautify",
                agentType: options.agent.type,
-               verboseTools: !!verboseTools,
+               verboseTools: !!options.verboseTools,
                showThinking: true,
                showRetry: true,
                showError: true,
@@ -3273,6 +3326,7 @@ Unable to read ${currentTasksFileLabel()}
                proc.stdout as ReadableStream<Uint8Array>,
                chunk => {
                   stdoutText += chunk;
+                  stdoutAcc?.append(chunk, false);
                },
                false,
             ),
@@ -3280,6 +3334,7 @@ Unable to read ${currentTasksFileLabel()}
                proc.stderr as ReadableStream<Uint8Array>,
                chunk => {
                   stderrText += chunk;
+                  stderrAcc?.append(chunk, true);
                },
                true,
             ),
@@ -3295,7 +3350,18 @@ Unable to read ${currentTasksFileLabel()}
          maybePrintToolSummary(true);
       }
 
-      return { stdoutText, stderrText, toolCounts, stalled, stalledForMs, preStartStalled: stalled && !firstOutputReceived, terminatedAfterPromise };
+      const finalStdout = stdoutAcc ? stdoutAcc.tail : stdoutText;
+      const finalStderr = stderrAcc ? stderrAcc.tail : stderrText;
+      const finalErrors = stdoutAcc ? stdoutAcc.errors : [];
+      const finalBytes = stdoutAcc ? stdoutAcc.totalBytes : stdoutText.length;
+
+      return {
+         stdoutText: finalStdout, stderrText: finalStderr,
+         toolCounts, stalled, stalledForMs,
+         preStartStalled: stalled && !firstOutputReceived,
+         terminatedAfterPromise,
+         errors: finalErrors, totalOutputBytes: finalBytes,
+      };
    }
    // Main loop
    // Helper to detect per-iteration file changes using content hashes
@@ -3877,6 +3943,9 @@ Unable to read ${currentTasksFileLabel()}
                      currentHeartbeatTimer = timer;
                   },
                   flushPartialLines: !allowAllPermissions,
+                  outputBufferBytes,
+                  jsonDisplay,
+                  verboseTools,
                });
                currentHeartbeatTimer = null; // Clear after streaming completes
                currentAbortController = null; // Clear after streaming completes
@@ -3933,6 +4002,7 @@ Unable to read ${currentTasksFileLabel()}
                      exitCode: stalledExitCode,
                      completionDetected: false,
                      snapshotBefore,
+                     preExtractedErrors: streamed.errors,
                   });
 
                   // Handle based on action
@@ -3984,6 +4054,9 @@ Unable to read ${currentTasksFileLabel()}
                   onHeartbeatTimer: (timer) => {
                      currentHeartbeatTimer = timer;
                   },
+                  outputBufferBytes,
+                  jsonDisplay,
+                  verboseTools,
                });
                currentHeartbeatTimer = null;
                result = buffered.stdoutText;
@@ -4023,6 +4096,7 @@ Unable to read ${currentTasksFileLabel()}
                      exitCode: stalledExitCode,
                      completionDetected: false,
                      snapshotBefore,
+                     preExtractedErrors: streamed.errors,
                   });
 
                   // Handle based on action

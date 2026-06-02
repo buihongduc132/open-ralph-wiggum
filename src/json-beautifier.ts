@@ -155,43 +155,43 @@ function claudeAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): strin
 function claudeAssistant(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
   const lines: string[] = [];
   const msg = p.message as Record<string, unknown> | undefined;
-  if (!msg || typeof msg !== "object") return lines;
 
-  const model = typeof msg.model === "string" ? msg.model : "unknown";
-  lines.push(ANSI.cyan(`🤖 ${model}`));
+  // Model header (only when message exists)
+  if (msg && typeof msg === "object") {
+    const model = typeof msg.model === "string" ? msg.model : "unknown";
+    lines.push(ANSI.cyan(`🤖 ${model}`));
 
-  const content = msg.content;
-  if (Array.isArray(content)) {
-    for (const block of content) {
-      if (!block || typeof block !== "object") continue;
-      const b = block as Record<string, unknown>;
-      if (b.type === "tool_use") {
-        // tool_use blocks in assistant content — show name only if verboseTools
-        if (cfg.verboseTools && typeof b.name === "string") {
-          lines.push(ANSI.yellow(`🔧 ${b.name}`));
-        }
-        continue;
-      }
-      if (b.type === "thinking" && typeof b.thinking === "string") {
-        if (cfg.showThinking) {
-          for (const s of b.thinking.split(/\r?\n/)) {
-            const trimmed = s.trim();
-            if (trimmed) lines.push(ANSI.gray(`💭 ${trimmed}`));
+    const content = msg.content;
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (!block || typeof block !== "object") continue;
+        const b = block as Record<string, unknown>;
+        if (b.type === "tool_use") {
+          if (cfg.verboseTools && typeof b.name === "string") {
+            lines.push(ANSI.yellow(`🔧 ${b.name}`));
           }
+          continue;
         }
-        continue;
-      }
-      // text block
-      if (typeof b.text === "string") {
-        for (const s of b.text.split(/\r?\n/)) {
-          const trimmed = s.trim();
-          if (trimmed) lines.push(trimmed);
+        if (b.type === "thinking" && typeof b.thinking === "string") {
+          if (cfg.showThinking) {
+            for (const s of b.thinking.split(/\r?\n/)) {
+              const trimmed = s.trim();
+              if (trimmed) lines.push(ANSI.gray(`💭 ${trimmed}`));
+            }
+          }
+          continue;
+        }
+        if (typeof b.text === "string") {
+          for (const s of b.text.split(/\r?\n/)) {
+            const trimmed = s.trim();
+            if (trimmed) lines.push(trimmed);
+          }
         }
       }
     }
   }
 
-  // Also check for delta at top level
+  // Delta at top level (works with or without message)
   if (p.delta && typeof p.delta === "object") {
     const delta = p.delta as Record<string, unknown>;
     if (typeof delta.text === "string") {
@@ -204,6 +204,12 @@ function claudeAssistant(p: Record<string, unknown>, cfg: BeautifierConfig): str
       for (const s of (delta.thinking as string).split(/\r?\n/)) {
         const trimmed = s.trim();
         if (trimmed) lines.push(ANSI.gray(`💭 ${trimmed}`));
+      }
+    }
+    if (typeof delta.content === "string") {
+      for (const s of (delta.content as string).split(/\r?\n/)) {
+        const trimmed = s.trim();
+        if (trimmed) lines.push(trimmed);
       }
     }
   }

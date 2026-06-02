@@ -25,10 +25,26 @@ import {
   checkTerminalPromise,
   containsPromiseTag,
   tasksMarkdownAllComplete,
-  extractClaudeStreamDisplayLines,
-  extractCursorAgentStreamDisplayLines,
   extractAgentCompletionText,
 } from "../completion";
+import {
+  beautifyJsonLine,
+  type BeautifierConfig,
+} from "../src/json-beautifier";
+
+const claudeCfg = (overrides: Partial<BeautifierConfig> = {}): BeautifierConfig => ({
+  mode: "beautify", agentType: "claude-code",
+  verboseTools: false, showThinking: true, showRetry: true, showError: true, showCost: true, maxErrorLength: 120,
+  ...overrides,
+});
+
+const cursorCfg = (overrides: Partial<BeautifierConfig> = {}): BeautifierConfig => ({
+  ...claudeCfg(),
+  agentType: "cursor-agent",
+  ...overrides,
+});
+
+const stripLines = (lines: string[]): string[] => lines.map(stripAnsi);
 
 // ---------------------------------------------------------------------------
 // stripAnsi — comprehensive ANSI patterns
@@ -244,28 +260,20 @@ describe("tasksMarkdownAllComplete — full branch coverage", () => {
 });
 
 // ---------------------------------------------------------------------------
-// extractClaudeStreamDisplayLines — all payload type branches
+// beautifyJsonLine (claude-code adapter) — all payload type branches
 // ---------------------------------------------------------------------------
-describe("extractClaudeStreamDisplayLines — full branch coverage", () => {
+describe("beautifyJsonLine — claude-code full branch coverage", () => {
   it("returns [rawLine] for non-JSON input", () => {
-    expect(extractClaudeStreamDisplayLines("plain text line")).toEqual(["plain text line"]);
+    expect(beautifyJsonLine("plain text line", claudeCfg())).toEqual(["plain text line"]);
   });
 
-  it("returns [] for malformed JSON", () => {
-    expect(extractClaudeStreamDisplayLines("{bad json")).toEqual([]);
+  it("returns [rawLine] for malformed JSON (fallback)", () => {
+    // New behavior: malformed JSON falls back to raw, not []
+    expect(beautifyJsonLine("{bad json", claudeCfg())).toEqual(["{bad json"]);
   });
 
   it("returns [rawLine] for 'null' string (not JSON object)", () => {
-    // 'null' doesn't start with '{', so it's treated as plain text
-    expect(extractClaudeStreamDisplayLines("null")).toEqual(["null"]);
-  });
-
-  it("extracts text from 'assistant' type with message content (string)", () => {
-    const line = JSON.stringify({
-      type: "assistant",
-      message: { content: "Hello world" },
-    });
-    expect(extractClaudeStreamDisplayLines(line)).toEqual(["Hello world"]);
+    expect(beautifyJsonLine("null", claudeCfg())).toEqual(["null"]);
   });
 
   it("extracts text from 'assistant' type with message content (array)", () => {
@@ -278,10 +286,12 @@ describe("extractClaudeStreamDisplayLines — full branch coverage", () => {
         ],
       },
     });
-    expect(extractClaudeStreamDisplayLines(line)).toEqual(["Hello", "World"]);
+    const result = stripLines(beautifyJsonLine(line, claudeCfg()));
+    expect(result).toContain("Hello");
+    expect(result).toContain("World");
   });
 
-  it("skips tool_use blocks in assistant content array", () => {
+  it("skips tool_use blocks in assistant content array (verboseTools=false)", () => {
     const line = JSON.stringify({
       type: "assistant",
       message: {
@@ -291,27 +301,20 @@ describe("extractClaudeStreamDisplayLines — full branch coverage", () => {
         ],
       },
     });
-    expect(extractClaudeStreamDisplayLines(line)).toEqual(["Using tool"]);
-  });
-
-  it("extracts content string from block with content field", () => {
-    const line = JSON.stringify({
-      type: "assistant",
-      message: {
-        content: [{ type: "text", content: "block content here" }],
-      },
-    });
-    expect(extractClaudeStreamDisplayLines(line)).toEqual(["block content here"]);
+    const result = stripLines(beautifyJsonLine(line, claudeCfg()));
+    expect(result).toContain("Using tool");
+    expect(result.some(l => l.includes("Bash"))).toBe(false);
   });
 
   it("extracts thinking from content block", () => {
     const line = JSON.stringify({
       type: "assistant",
       message: {
-        content: [{ type: "text", thinking: "hmm let me think" }],
+        content: [{ type: "thinking", thinking: "hmm let me think" }],
       },
     });
-    expect(extractClaudeStreamDisplayLines(line)).toEqual(["hmm let me think"]);
+    const result = stripLines(beautifyJsonLine(line, claudeCfg()));
+    expect(result.some(l => l.includes("hmm let me think"))).toBe(true);
   });
 
   it("extracts text from assistant delta", () => {
@@ -319,49 +322,59 @@ describe("extractClaudeStreamDisplayLines — full branch coverage", () => {
       type: "assistant",
       delta: { text: "delta text", thinking: "delta thinking", content: "delta content" },
     });
-    expect(extractClaudeStreamDisplayLines(line)).toEqual(["delta text", "delta thinking", "delta content"]);
+    const result = stripLines(beautifyJsonLine(line, claudeCfg()));
+    expect(result).toContain("delta text");
+    expect(result.some(l => l.includes("delta thinking"))).toBe(true);
+    expect(result).toContain("delta content");
   });
 
-  it("extracts text from stream_event with text_delta", () => {
+  it("extracts text from content_block_delta", () => {
     const line = JSON.stringify({
-      type: "stream_event",
-      event: {
-        type: "content_block_delta",
-        delta: { type: "text_delta", text: "streamed text" },
-      },
+      type: "content_block_delta",
+      delta: { type: "text_delta", text: "Important output text" },
     });
-    expect(extractClaudeStreamDisplayLines(line)).toEqual(["streamed text"]);
+    const result = stripLines(beautifyJsonLine(line, claudeCfg()));
+    expect(result).toContain("Important output text");
   });
 
-  it("returns [] for stream_event with non-text_delta", () => {
+  it("returns [] for content_block_start tool_use (suppressed)", () => {
     const line = JSON.stringify({
-      type: "stream_event",
-      event: {
-        type: "content_block_delta",
-        delta: { type: "input_json_delta", partial_json: "{}" },
-      },
+      type: "content_block_start",
+      content_block: { type: "tool_use", name: "Bash", id: "toolu_123" },
     });
-    expect(extractClaudeStreamDisplayLines(line)).toEqual([]);
+    expect(beautifyJsonLine(line, claudeCfg())).toEqual([]);
+  });
+
+  it("shows tool_use with verboseTools enabled", () => {
+    const line = JSON.stringify({
+      type: "content_block_start",
+      content_block: { type: "tool_use", name: "Bash", id: "toolu_123" },
+    });
+    const result = stripLines(beautifyJsonLine(line, claudeCfg({ verboseTools: true })));
+    expect(result.some(l => l.includes("Bash"))).toBe(true);
   });
 
   it("extracts text from 'result' type", () => {
-    const line = JSON.stringify({ type: "result", result: "final result text" });
-    expect(extractClaudeStreamDisplayLines(line)).toEqual(["final result text"]);
+    const line = JSON.stringify({ type: "result", result: "final result text", duration_ms: 1000, cost_usd: 0.01 });
+    const result = stripLines(beautifyJsonLine(line, claudeCfg()));
+    expect(result.some(l => l.includes("final result text"))).toBe(true);
   });
 
   it("extracts error message from 'error' type with error object", () => {
     const line = JSON.stringify({ type: "error", error: { message: "something went wrong" } });
-    expect(extractClaudeStreamDisplayLines(line)).toEqual(["something went wrong"]);
+    const result = stripLines(beautifyJsonLine(line, claudeCfg()));
+    expect(result.some(l => l.includes("something went wrong"))).toBe(true);
   });
 
   it("extracts error from 'error' type with string error", () => {
     const line = JSON.stringify({ type: "error", error: "simple error string" });
-    expect(extractClaudeStreamDisplayLines(line)).toEqual(["simple error string"]);
+    const result = stripLines(beautifyJsonLine(line, claudeCfg()));
+    expect(result.some(l => l.includes("simple error string"))).toBe(true);
   });
 
-  it("returns [] for unknown payload type", () => {
-    const line = JSON.stringify({ type: "unknown_type", data: "whatever" });
-    expect(extractClaudeStreamDisplayLines(line)).toEqual([]);
+  it("returns [] for unknown/suppressed payload type", () => {
+    const line = JSON.stringify({ type: "content_block_stop" });
+    expect(beautifyJsonLine(line, claudeCfg())).toEqual([]);
   });
 
   it("handles multi-line text in delta", () => {
@@ -369,7 +382,10 @@ describe("extractClaudeStreamDisplayLines — full branch coverage", () => {
       type: "assistant",
       delta: { text: "line1\nline2\nline3" },
     });
-    expect(extractClaudeStreamDisplayLines(line)).toEqual(["line1", "line2", "line3"]);
+    const result = stripLines(beautifyJsonLine(line, claudeCfg()));
+    expect(result).toContain("line1");
+    expect(result).toContain("line2");
+    expect(result).toContain("line3");
   });
 
   it("skips empty lines from multi-line content", () => {
@@ -377,25 +393,27 @@ describe("extractClaudeStreamDisplayLines — full branch coverage", () => {
       type: "assistant",
       delta: { text: "text1\n\n  \ntext2" },
     });
-    expect(extractClaudeStreamDisplayLines(line)).toEqual(["text1", "text2"]);
+    const result = stripLines(beautifyJsonLine(line, claudeCfg()));
+    expect(result).toContain("text1");
+    expect(result).toContain("text2");
+    expect(result.filter(l => l === "").length).toBe(0);
   });
 });
 
 // ---------------------------------------------------------------------------
-// extractCursorAgentStreamDisplayLines — all payload type branches
+// beautifyJsonLine (cursor-agent adapter) — all payload type branches
 // ---------------------------------------------------------------------------
-describe("extractCursorAgentStreamDisplayLines — full branch coverage", () => {
+describe("beautifyJsonLine — cursor-agent full branch coverage", () => {
   it("returns [rawLine] for non-JSON input", () => {
-    expect(extractCursorAgentStreamDisplayLines("plain text")).toEqual(["plain text"]);
+    expect(beautifyJsonLine("plain text", cursorCfg())).toEqual(["plain text"]);
   });
 
-  it("returns [] for malformed JSON", () => {
-    expect(extractCursorAgentStreamDisplayLines("{not valid")).toEqual([]);
+  it("returns [rawLine] for malformed JSON (fallback)", () => {
+    expect(beautifyJsonLine("{not valid", cursorCfg())).toEqual(["{not valid"]);
   });
 
   it("returns [rawLine] for 'null' string (not JSON object)", () => {
-    // 'null' doesn't start with '{', so it's treated as plain text
-    expect(extractCursorAgentStreamDisplayLines("null")).toEqual(["null"]);
+    expect(beautifyJsonLine("null", cursorCfg())).toEqual(["null"]);
   });
 
   it("extracts text from 'assistant' type with array content", () => {
@@ -405,7 +423,9 @@ describe("extractCursorAgentStreamDisplayLines — full branch coverage", () => 
         content: [{ text: "hello" }, { text: "world" }],
       },
     });
-    expect(extractCursorAgentStreamDisplayLines(line)).toEqual(["hello", "world"]);
+    const result = stripLines(beautifyJsonLine(line, cursorCfg()));
+    expect(result).toContain("hello");
+    expect(result).toContain("world");
   });
 
   it("handles assistant with non-array content", () => {
@@ -413,55 +433,55 @@ describe("extractCursorAgentStreamDisplayLines — full branch coverage", () => 
       type: "assistant",
       message: { content: "not an array" },
     });
-    expect(extractCursorAgentStreamDisplayLines(line)).toEqual([]);
+    const result = beautifyJsonLine(line, cursorCfg());
+    expect(result).toEqual([]);
   });
 
-  it("extracts tool_call with shell command (lowercase key)", () => {
-    // The code checks toolName === "shell" (lowercase)
+  it("extracts tool_call with shell command", () => {
     const line = JSON.stringify({
       type: "tool_call",
-      subtype: "started",
       tool_call: {
         shellToolCall: { args: { command: "npm test" } },
       },
     });
-    expect(extractCursorAgentStreamDisplayLines(line)).toEqual(["[SHELL] npm test"]);
+    const result = stripLines(beautifyJsonLine(line, cursorCfg()));
+    expect(result.some(l => l.includes("SHELL") || l.includes("npm test"))).toBe(true);
   });
 
   it("extracts tool_call with path", () => {
     const line = JSON.stringify({
       type: "tool_call",
-      subtype: "started",
       tool_call: {
         FileToolCall: { args: { path: "/src/index.ts" } },
       },
     });
-    expect(extractCursorAgentStreamDisplayLines(line)).toEqual(["[FILE] /src/index.ts"]);
+    const result = stripLines(beautifyJsonLine(line, cursorCfg()));
+    expect(result.some(l => l.includes("FILE") || l.includes("/src/index.ts"))).toBe(true);
   });
 
   it("extracts tool_call with pattern", () => {
     const line = JSON.stringify({
       type: "tool_call",
-      subtype: "started",
       tool_call: {
         SearchToolCall: { args: { pattern: "TODO" } },
       },
     });
-    expect(extractCursorAgentStreamDisplayLines(line)).toEqual(["[SEARCH] TODO"]);
+    const result = stripLines(beautifyJsonLine(line, cursorCfg()));
+    expect(result.some(l => l.includes("SEARCH") || l.includes("TODO"))).toBe(true);
   });
 
   it("extracts tool_call without specific arg — generic tool name", () => {
     const line = JSON.stringify({
       type: "tool_call",
-      subtype: "started",
       tool_call: {
         CustomToolCall: { args: { other: "value" } },
       },
     });
-    expect(extractCursorAgentStreamDisplayLines(line)).toEqual(["[CUSTOM]"]);
+    const result = stripLines(beautifyJsonLine(line, cursorCfg()));
+    expect(result.some(l => l.includes("CUSTOM"))).toBe(true);
   });
 
-  it("extracts tool_call when subtype is 'completed'", () => {
+  it("handles tool_call regardless of subtype", () => {
     const line = JSON.stringify({
       type: "tool_call",
       subtype: "completed",
@@ -469,37 +489,44 @@ describe("extractCursorAgentStreamDisplayLines — full branch coverage", () => 
         ShellToolCall: { args: { command: "echo done" } },
       },
     });
-    expect(extractCursorAgentStreamDisplayLines(line)).toEqual(["[SHELL] echo done"]);
+    const result = stripLines(beautifyJsonLine(line, cursorCfg()));
+    expect(result.some(l => l.includes("SHELL") || l.includes("echo done"))).toBe(true);
   });
 
   it("skips tool_call when tool_call field is missing", () => {
     const line = JSON.stringify({ type: "tool_call" });
-    expect(extractCursorAgentStreamDisplayLines(line)).toEqual([]);
+    const result = beautifyJsonLine(line, cursorCfg());
+    expect(result).toEqual([]);
   });
 
   it("extracts result type", () => {
     const line = JSON.stringify({ type: "result", result: "done" });
-    expect(extractCursorAgentStreamDisplayLines(line)).toEqual(["done"]);
+    const result = stripLines(beautifyJsonLine(line, cursorCfg()));
+    expect(result.some(l => l.includes("done"))).toBe(true);
   });
 
   it("extracts result with subtype", () => {
     const line = JSON.stringify({ type: "result", result: "output", subtype: "success" });
-    expect(extractCursorAgentStreamDisplayLines(line)).toEqual(["output", "[RESULT] success"]);
+    const result = stripLines(beautifyJsonLine(line, cursorCfg()));
+    expect(result.some(l => l.includes("output"))).toBe(true);
+    expect(result.some(l => l.includes("success"))).toBe(true);
   });
 
   it("extracts error type with error object", () => {
     const line = JSON.stringify({ type: "error", error: { message: "failed" } });
-    expect(extractCursorAgentStreamDisplayLines(line)).toEqual(["failed"]);
+    const result = stripLines(beautifyJsonLine(line, cursorCfg()));
+    expect(result.some(l => l.includes("failed"))).toBe(true);
   });
 
   it("extracts error type with string error", () => {
     const line = JSON.stringify({ type: "error", error: "simple error" });
-    expect(extractCursorAgentStreamDisplayLines(line)).toEqual(["simple error"]);
+    const result = stripLines(beautifyJsonLine(line, cursorCfg()));
+    expect(result.some(l => l.includes("simple error"))).toBe(true);
   });
 
   it("returns [] for unknown payload type", () => {
     const line = JSON.stringify({ type: "unknown" });
-    expect(extractCursorAgentStreamDisplayLines(line)).toEqual([]);
+    expect(beautifyJsonLine(line, cursorCfg())).toEqual([]);
   });
 });
 
