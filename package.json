@@ -63,5 +63,8 @@
   "lint-staged": {
     "*.ts": ["bun build --dry-run", "tsc --noEmit --pretty false"],
     "*.{json,md}": []
+  },
+  "dependencies": {
+    "chalk": "^5.6.2"
   }
 }

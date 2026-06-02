@@ -129,3 +129,4 @@ build/
 .pi-lens/
 .fusion
 .pi
+tests/fixtures/goal-parser/
