@@ -3236,7 +3236,7 @@ Unable to read ${currentTasksFileLabel()}
                if (
                   options.flushPartialLines &&
                   !options.suppressOutput &&
-                  options.agent.type !== "claude-code" &&
+                  !isJsonModeAgent(options.agent.type, options.agent.extraFlags) &&
                   buffer.length > partialCharsDisplayed
                ) {
                   writeOutput(buffer.slice(partialCharsDisplayed), isError);

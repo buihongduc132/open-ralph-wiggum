@@ -81,11 +81,13 @@ describe("isJsonModeAgent", () => {
 describe("hasJsonAdapter", () => {
   it("returns true for agents with adapters", () => {
     expect(hasJsonAdapter("claude-code")).toBe(true);
+    expect(hasJsonAdapter("cursor-agent")).toBe(true);
+    expect(hasJsonAdapter("codex")).toBe(true);
+    expect(hasJsonAdapter("gemini")).toBe(true);
   });
 
   it("returns false for agents without adapters", () => {
     expect(hasJsonAdapter("opencode")).toBe(false);
-    expect(hasJsonAdapter("codex")).toBe(false);
     expect(hasJsonAdapter("unknown-agent")).toBe(false);
   });
 });

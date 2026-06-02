@@ -42,6 +42,9 @@ const JSON_FLAGS = new Set([
 
 const ADAPTER_REGISTRY = new Map<string, (payload: Record<string, unknown>, cfg: BeautifierConfig) => string[]>([
   ["claude-code", claudeAdapter],
+  ["cursor-agent", cursorAgentAdapter],
+  ["codex", codexAdapter],
+  ["gemini", geminiAdapter],
 ]);
 
 // ─── isJsonModeAgent ────────────────────────────────────────────────────────
@@ -309,6 +312,165 @@ function claudeRetry(p: Record<string, unknown>, cfg: BeautifierConfig): string[
   if (lastError) parts.push(`(${lastError})`);
 
   return [ANSI.yellow(parts.join(" "))];
+}
+
+// ─── Cursor-Agent Adapter ────────────────────────────────────────────────────
+
+function cursorAgentAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
+  const lines: string[] = [];
+  const t = typeof p.type === "string" ? p.type : "";
+
+  if (t === "assistant") {
+    if (p.message && typeof p.message === "object") {
+      const msg = p.message as Record<string, unknown>;
+      if (Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (!block || typeof block !== "object") continue;
+          const b = block as Record<string, unknown>;
+          if (typeof b.text === "string") {
+            for (const s of (b.text as string).split(/\r?\n/)) {
+              const trimmed = s.trim();
+              if (trimmed) lines.push(trimmed);
+            }
+          }
+        }
+      }
+    }
+  } else if (t === "tool_call") {
+    const tc = p.tool_call as Record<string, unknown> | undefined;
+    if (tc && typeof tc === "object") {
+      const toolKey = Object.keys(tc).find((k: string) => k.endsWith("ToolCall"));
+      if (toolKey) {
+        const toolName = toolKey.replace("ToolCall", "");
+        const toolData = tc[toolKey] as Record<string, unknown> | undefined;
+        if (toolData?.args && typeof toolData.args === "object") {
+          const args = toolData.args as Record<string, unknown>;
+          if (toolName.toLowerCase() === "shell" && typeof args.command === "string") {
+            lines.push(ANSI.yellow(`🔧 SHELL ${args.command}`));
+          } else if (typeof args.path === "string") {
+            lines.push(ANSI.yellow(`🔧 ${toolName.toUpperCase()} ${args.path}`));
+          } else {
+            lines.push(ANSI.yellow(`🔧 ${toolName.toUpperCase()}`));
+          }
+        } else {
+          lines.push(ANSI.yellow(`🔧 ${toolName.toUpperCase()}`));
+        }
+      }
+    }
+  } else if (t === "result") {
+    if (typeof p.result === "string" && p.result.trim()) {
+      const subtype = typeof p.subtype === "string" ? ` (${p.subtype})` : "";
+      lines.push(ANSI.green(`✅ ${p.result.trim()}${subtype}`));
+    }
+  } else if (t === "error") {
+    let msg: string;
+    if (p.error && typeof p.error === "object") {
+      msg = typeof (p.error as Record<string, unknown>).message === "string"
+        ? (p.error as Record<string, unknown>).message as string
+        : String(p.error);
+    } else {
+      msg = String(p.error ?? "Unknown error");
+    }
+    if (msg.length > cfg.maxErrorLength) msg = msg.slice(0, cfg.maxErrorLength) + "...";
+    lines.push(ANSI.red(`❌ ${msg}`));
+  }
+
+  return lines;
+}
+
+// ─── Codex Adapter ───────────────────────────────────────────────────────────
+
+function codexAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
+  const t = typeof p.type === "string" ? p.type : "";
+
+  if (t === "message") {
+    // Codex message events with role=assistant contain text content
+    if (p.content && typeof p.content === "string") {
+      const lines: string[] = [];
+      for (const s of (p.content as string).split(/\r?\n/)) {
+        const trimmed = s.trim();
+        if (trimmed) lines.push(trimmed);
+      }
+      return lines;
+    }
+    // Array content
+    if (Array.isArray(p.content)) {
+      const lines: string[] = [];
+      for (const block of p.content) {
+        if (!block || typeof block !== "object") continue;
+        const b = block as Record<string, unknown>;
+        if (typeof b.text === "string") {
+          for (const s of (b.text as string).split(/\r?\n/)) {
+            const trimmed = s.trim();
+            if (trimmed) lines.push(trimmed);
+          }
+        }
+      }
+      return lines;
+    }
+    return [];
+  }
+
+  if (t === "tool_call") {
+    const name = typeof p.name === "string" ? p.name : "unknown";
+    return [ANSI.yellow(`🔧 ${name}`)];
+  }
+
+  if (t === "complete") {
+    const output = typeof p.output === "string" ? p.output : "";
+    return [ANSI.green(`✅ ${output || "Done"}`)];
+  }
+
+  if (t === "error") {
+    let msg = typeof p.message === "string" ? p.message : String(p.error ?? "Unknown error");
+    if (msg.length > cfg.maxErrorLength) msg = msg.slice(0, cfg.maxErrorLength) + "...";
+    return [ANSI.red(`❌ ${msg}`)];
+  }
+
+  return [];
+}
+
+// ─── Gemini Adapter ──────────────────────────────────────────────────────────
+
+function geminiAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
+  // Gemini stream-json uses different event shapes
+  // text delta events have a text or content field
+  if (typeof p.text === "string" && p.text.trim()) {
+    const lines: string[] = [];
+    for (const s of (p.text as string).split(/\r?\n/)) {
+      const trimmed = s.trim();
+      if (trimmed) lines.push(trimmed);
+    }
+    return lines;
+  }
+
+  // Tool call events
+  if (p.toolCall || p.tool_call) {
+    const tc = (p.toolCall || p.tool_call) as Record<string, unknown>;
+    const name = typeof tc.name === "string" ? tc.name : "unknown";
+    return [ANSI.yellow(`🔧 ${name}`)];
+  }
+
+  // Error events
+  if (p.error) {
+    let msg: string;
+    if (typeof p.error === "object") {
+      msg = typeof (p.error as Record<string, unknown>).message === "string"
+        ? (p.error as Record<string, unknown>).message as string
+        : String(p.error);
+    } else {
+      msg = String(p.error);
+    }
+    if (msg.length > cfg.maxErrorLength) msg = msg.slice(0, cfg.maxErrorLength) + "...";
+    return [ANSI.red(`❌ ${msg}`)];
+  }
+
+  // Content field (some gemini versions)
+  if (typeof p.content === "string" && p.content.trim()) {
+    return [p.content.trim()];
+  }
+
+  return [];
 }
 
 // ─── Generic Adapter ────────────────────────────────────────────────────────
