@@ -3,8 +3,8 @@
  */
 
 import { extractJsonCompletionText, hasJsonAdapter, isJsonModeAgent } from "./src/json-beautifier";
-export { stripAnsi } from "./src/strip-ansi";
 import { stripAnsi } from "./src/strip-ansi";
+export { stripAnsi };
 
 export function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
