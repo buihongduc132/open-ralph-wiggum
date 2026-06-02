@@ -3048,6 +3048,7 @@ Unable to read ${currentTasksFileLabel()}
          outputBufferBytes?: number;
          jsonDisplay?: "beautify" | "raw" | "text";
          verboseTools?: boolean;
+         extraFlags?: string[];
       },
    ): Promise<{ stdoutText: string; stderrText: string; toolCounts: Map<string, number>; stalled: boolean; stalledForMs: number | null; preStartStalled: boolean; terminatedAfterPromise: boolean; errors: string[]; totalOutputBytes: number }> {
       const toolCounts = new Map<string, number>();
@@ -3101,8 +3102,7 @@ Unable to read ${currentTasksFileLabel()}
 
          // JSON beautifier: use for JSON-mode agents
          let outputLines: string[];
-         const extraFlags = options.agent.extraFlags;
-         if (isJsonModeAgent(options.agent.type, extraFlags)) {
+         if (isJsonModeAgent(options.agent.type, options.extraFlags)) {
             const cfg: BeautifierConfig = {
                mode: options.jsonDisplay ?? "beautify",
                agentType: options.agent.type,
@@ -3221,7 +3221,7 @@ Unable to read ${currentTasksFileLabel()}
                if (
                   options.flushPartialLines &&
                   !options.suppressOutput &&
-                  !isJsonModeAgent(options.agent.type, options.agent.extraFlags) &&
+                  !isJsonModeAgent(options.agent.type, options.extraFlags) &&
                   buffer.length > partialCharsDisplayed
                ) {
                   writeOutput(buffer.slice(partialCharsDisplayed), isError);
@@ -3952,6 +3952,7 @@ Unable to read ${currentTasksFileLabel()}
                   outputBufferBytes,
                   jsonDisplay,
                   verboseTools,
+                  extraFlags: extraAgentFlags,
                });
                currentHeartbeatTimer = null; // Clear after streaming completes
                currentAbortController = null; // Clear after streaming completes
@@ -4063,6 +4064,7 @@ Unable to read ${currentTasksFileLabel()}
                   outputBufferBytes,
                   jsonDisplay,
                   verboseTools,
+                  extraFlags: extraAgentFlags,
                });
                currentHeartbeatTimer = null;
                result = buffered.stdoutText;
