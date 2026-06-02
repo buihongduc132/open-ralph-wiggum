@@ -154,6 +154,12 @@ export interface RalphRuntimeConfig {
    extra_agent_flags?: string[];
    stall_retries?: boolean;
    stall_retry_minutes?: number;
+   reuse_check?: "strict" | "relaxed" | "off";
+   reuse_skip_model?: boolean;
+   reuse_skip_agent?: boolean;
+   reuse_skip_rotation?: boolean;
+   reuse_skip_min_iterations?: boolean;
+   reuse_skip_max_iterations?: boolean;
 }
 
 export const PARSE_PATTERNS: Record<string, (line: string) => string | null> = {
@@ -403,6 +409,26 @@ export function getDefaultTomlConfig(): string {
 # model = ""
 
 # =============================================================================
+# STATE REUSE
+# =============================================================================
+
+# How to handle config drift when resuming an existing loop:
+# "strict"  = error on any mismatch (backward compat default)
+# "relaxed" = warn on mismatches, skip most fields (recommended)
+# "off"     = skip all drift checks (except hard-block fields)
+# reuse_check = "strict"
+
+# Per-field overrides (only effective in strict/relaxed mode):
+# reuse_skip_model = false
+# reuse_skip_agent = false
+# reuse_skip_rotation = false
+# reuse_skip_min_iterations = false
+# reuse_skip_max_iterations = false
+
+# NOTE: completion_promise and tasks_mode CANNOT be skipped.
+# Changing these silently corrupts the loop lifecycle.
+
+# =============================================================================
 # AGENT ROTATION
 # =============================================================================
 
@@ -588,6 +614,12 @@ export function loadRuntimeTomlConfig(configPath: string, explicit: boolean): Ra
       config.extra_agent_flags = normalizeRuntimeConfigValue("extra_agent_flags", parsed.extra_agent_flags, "string[]") as string[] | undefined;
       config.stall_retries = normalizeRuntimeConfigValue("stall_retries", parsed.stall_retries, "boolean") as boolean | undefined;
       config.stall_retry_minutes = normalizeRuntimeConfigValue("stall_retry_minutes", parsed.stall_retry_minutes, "number") as number | undefined;
+      config.reuse_check = normalizeRuntimeConfigValue("reuse_check", parsed.reuse_check, "string") as "strict" | "relaxed" | "off" | undefined;
+      config.reuse_skip_model = normalizeRuntimeConfigValue("reuse_skip_model", parsed.reuse_skip_model, "boolean") as boolean | undefined;
+      config.reuse_skip_agent = normalizeRuntimeConfigValue("reuse_skip_agent", parsed.reuse_skip_agent, "boolean") as boolean | undefined;
+      config.reuse_skip_rotation = normalizeRuntimeConfigValue("reuse_skip_rotation", parsed.reuse_skip_rotation, "boolean") as boolean | undefined;
+      config.reuse_skip_min_iterations = normalizeRuntimeConfigValue("reuse_skip_min_iterations", parsed.reuse_skip_min_iterations, "boolean") as boolean | undefined;
+      config.reuse_skip_max_iterations = normalizeRuntimeConfigValue("reuse_skip_max_iterations", parsed.reuse_skip_max_iterations, "boolean") as boolean | undefined;
 
       if (config.prompt_file) {
          config.prompt_file = resolveConfigRelativePath(configPath, config.prompt_file);
@@ -1553,9 +1585,16 @@ Learn more: https://ghuntley.com/ralph/
    let stallRetryMinutesProvided = false;
    let maxIterationsProvided = false;
    let minIterationsProvided = false;
-   let reuseState = false;
+    let reuseState = false;
 
-   const promptParts: string[] = [];
+    let reuseCheck: "strict" | "relaxed" | "off" = "strict";
+    let reuseSkipModel = false;
+    let reuseSkipAgent = false;
+    let reuseSkipRotation = false;
+    let reuseSkipMinIterations = false;
+    let reuseSkipMaxIterations = false;
+
+    const promptParts: string[] = [];
    let extraAgentFlags: string[] = [];
    let passthroughAgentFlags: string[] = []; // flags from -- passthrough only (TOP priority)
    const doubleDashIndex = args.indexOf("--");
@@ -1673,6 +1712,33 @@ Learn more: https://ghuntley.com/ralph/
       if (runtimeTomlConfig.stall_retry_minutes !== undefined) {
          stallRetryMinutes = runtimeTomlConfig.stall_retry_minutes;
          stallRetryMinutesProvided = true;
+      }
+
+      // Apply reuse config from TOML
+      if (runtimeTomlConfig.reuse_check) {
+         const validModes = ["strict", "relaxed", "off"];
+         if (!validModes.includes(runtimeTomlConfig.reuse_check)) {
+            console.error(`Error: Invalid reuse_check '${runtimeTomlConfig.reuse_check}'. Must be one of: ${validModes.join(", ")}`);
+            process.exit(1);
+         }
+         reuseCheck = runtimeTomlConfig.reuse_check;
+      }
+      if (runtimeTomlConfig.reuse_skip_model !== undefined) reuseSkipModel = runtimeTomlConfig.reuse_skip_model;
+      if (runtimeTomlConfig.reuse_skip_agent !== undefined) reuseSkipAgent = runtimeTomlConfig.reuse_skip_agent;
+      if (runtimeTomlConfig.reuse_skip_rotation !== undefined) reuseSkipRotation = runtimeTomlConfig.reuse_skip_rotation;
+      if (runtimeTomlConfig.reuse_skip_min_iterations !== undefined) reuseSkipMinIterations = runtimeTomlConfig.reuse_skip_min_iterations;
+      if (runtimeTomlConfig.reuse_skip_max_iterations !== undefined) reuseSkipMaxIterations = runtimeTomlConfig.reuse_skip_max_iterations;
+   }
+
+   // Env var fallback for reuse_check (if TOML didn't set it)
+   if (!runtimeTomlConfig?.reuse_check && process.env.RALPH_REUSE_CHECK) {
+      const envVal = process.env.RALPH_REUSE_CHECK;
+      const validModes = ["strict", "relaxed", "off"];
+      if (validModes.includes(envVal)) {
+         reuseCheck = envVal as "strict" | "relaxed" | "off";
+      } else {
+         console.error(`Error: Invalid RALPH_REUSE_CHECK '${envVal}'. Must be one of: ${validModes.join(", ")}`);
+         process.exit(1);
       }
    }
 
@@ -2979,44 +3045,104 @@ Unable to read ${currentTasksFileLabel()}
 
        const resuming = ownership.status === "resume";
 
-       // ── Config mismatch check: run BEFORE decideLoopOwnership exit path.
-       // This ensures we detect config drift before being blocked by the
-       // "already-running" guard, giving a more informative error.
-       if (existingState?.active && !reuseState) {
-          const mismatches: string[] = [];
-          if (existingState.agent !== agentType) {
-             mismatches.push(`agent (stored: ${existingState.agent}, current: ${agentType})`);
-          }
-          if (existingState.model && existingState.model !== model && model !== "") {
-             mismatches.push(`model (stored: ${existingState.model}, current: ${model})`);
-          }
-          if (existingState.minIterations !== minIterations && minIterationsProvided) {
-             mismatches.push(`min-iterations (stored: ${existingState.minIterations}, current: ${minIterations})`);
-          }
-          if (existingState.maxIterations !== maxIterations && maxIterationsProvided) {
-             mismatches.push(`max-iterations (stored: ${existingState.maxIterations}, current: ${maxIterations})`);
-          }
-          if (existingState.completionPromise !== completionPromise) {
-             mismatches.push(`completion-promise (stored: ${existingState.completionPromise}, current: ${completionPromise})`);
-          }
-          if (!!existingState.rotation !== (!!rotation) ||
-             (existingState.rotation && rotation &&
-              JSON.stringify(existingState.rotation.sort()) !== JSON.stringify([...rotation].sort()))) {
-             mismatches.push("rotation");
-          }
-          if (existingState.tasksMode !== tasksMode) {
-             mismatches.push(`tasks mode (stored: ${existingState.tasksMode}, current: ${tasksMode})`);
-          }
-          if (mismatches.length > 0) {
-             console.error(`\n❌ Config Mismatch: stored state was created with different arguments.`);
-             console.error(`   Detected difference(s): ${mismatches.join("; ")}`);
-             console.error(`\nTo reuse the existing state, pass --reuse-state:`);
-             console.error(`   ralph --reuse-state [your args...]`);
-             console.error(`\nTo start fresh, clear the state file:`);
-             console.error(`   rm ${statePath}`);
-             process.exit(1);
-          }
-       }
+        // ── Config mismatch check: run BEFORE decideLoopOwnership exit path.
+        // This ensures we detect config drift before being blocked by the
+        // "already-running" guard, giving a more informative error.
+        // Uses configurable drift tolerance via TOML [reuse] section and env var RALPH_REUSE_CHECK.
+        if (existingState?.active && !reuseState) {
+           const mismatches: string[] = [];
+           const warnings: string[] = [];
+
+           // Hard-block fields: ALWAYS checked regardless of config
+           if (existingState.completionPromise !== completionPromise) {
+              mismatches.push(`completion-promise (stored: ${existingState.completionPromise}, current: ${completionPromise})`);
+           }
+           if (existingState.tasksMode !== tasksMode) {
+              mismatches.push(`tasks mode (stored: ${existingState.tasksMode}, current: ${tasksMode})`);
+           }
+
+           // Helper: should a field be skipped (tolerated)?
+           function isFieldSkipped(field: string): boolean {
+              if (reuseCheck === "off") return true;
+              if (reuseCheck === "relaxed") {
+                 switch (field) {
+                    case "model": return true;
+                    case "rotation": return true;
+                    case "minIterations": return true;
+                    case "maxIterations": return true;
+                    case "agent": return true; // warn-only in relaxed
+                    default: return false;
+                 }
+              }
+              // strict mode — per-field overrides
+              switch (field) {
+                 case "model": return reuseSkipModel;
+                 case "agent": return reuseSkipAgent;
+                 case "rotation": return reuseSkipRotation;
+                 case "minIterations": return reuseSkipMinIterations;
+                 case "maxIterations": return reuseSkipMaxIterations;
+                 default: return false;
+              }
+           }
+
+           // Check agent
+           if (existingState.agent !== agentType) {
+              if (isFieldSkipped("agent")) {
+                 warnings.push(`⚠️  agent drift tolerated: ${existingState.agent} → ${agentType}`);
+              } else {
+                 mismatches.push(`agent (stored: ${existingState.agent}, current: ${agentType})`);
+              }
+           }
+           // Check model
+           if (existingState.model && existingState.model !== model && model !== "") {
+              if (isFieldSkipped("model")) {
+                 warnings.push(`⚠️  model drift tolerated: ${existingState.model} → ${model}`);
+              } else {
+                 mismatches.push(`model (stored: ${existingState.model}, current: ${model})`);
+              }
+           }
+           // Check minIterations
+           if (existingState.minIterations !== minIterations && minIterationsProvided) {
+              if (isFieldSkipped("minIterations")) {
+                 warnings.push(`⚠️  min-iterations drift tolerated: ${existingState.minIterations} → ${minIterations}`);
+              } else {
+                 mismatches.push(`min-iterations (stored: ${existingState.minIterations}, current: ${minIterations})`);
+              }
+           }
+           // Check maxIterations
+           if (existingState.maxIterations !== maxIterations && maxIterationsProvided) {
+              if (isFieldSkipped("maxIterations")) {
+                 warnings.push(`⚠️  max-iterations drift tolerated: ${existingState.maxIterations} → ${maxIterations}`);
+              } else {
+                 mismatches.push(`max-iterations (stored: ${existingState.maxIterations}, current: ${maxIterations})`);
+              }
+           }
+           // Check rotation
+           if (!!existingState.rotation !== (!!rotation) ||
+              (existingState.rotation && rotation &&
+               JSON.stringify(existingState.rotation.sort()) !== JSON.stringify([...rotation].sort()))) {
+              if (isFieldSkipped("rotation")) {
+                 warnings.push("⚠️  rotation drift tolerated: stored → current");
+              } else {
+                 mismatches.push("rotation");
+              }
+           }
+
+           if (mismatches.length > 0) {
+              console.error(`\n❌ Config Mismatch: stored state was created with different arguments.`);
+              console.error(`   Detected difference(s): ${mismatches.join("; ")}`);
+              console.error(`\nTo reuse the existing state, pass --reuse-state:`);
+              console.error(`   ralph --reuse-state [your args...]`);
+              console.error(`\nTo start fresh, clear the state file:`);
+              console.error(`   rm ${statePath}`);
+              process.exit(1);
+           }
+
+           // Print warnings for tolerated drift
+           for (const w of warnings) {
+              console.error(w);
+           }
+        }
 
        if (ownership.status === "already-running") {
           console.error(`Error: Ralph loop is already running with PID ${ownership.ownerPid}.`);
