@@ -3325,16 +3325,22 @@ Unable to read ${currentTasksFileLabel()}
             streamText(
                proc.stdout as ReadableStream<Uint8Array>,
                chunk => {
-                  stdoutText += chunk;
-                  stdoutAcc?.append(chunk, false);
+                  if (stdoutAcc) {
+                     stdoutAcc.append(chunk, false);
+                  } else {
+                     stdoutText += chunk;
+                  }
                },
                false,
             ),
             streamText(
                proc.stderr as ReadableStream<Uint8Array>,
                chunk => {
-                  stderrText += chunk;
-                  stderrAcc?.append(chunk, true);
+                  if (stderrAcc) {
+                     stderrAcc.append(chunk, true);
+                  } else {
+                     stderrText += chunk;
+                  }
                },
                true,
             ),

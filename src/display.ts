@@ -179,8 +179,6 @@ export function detectModelNotFoundError(output: string): boolean {
       output.includes(".split is not a function");
 }
 
-// extractClaudeStreamDisplayLines has been replaced by the json-beautifier module.
-// See src/json-beautifier.ts and beautifyJsonLine().
 
 export function detectStrugglePatterns(history: {
    struggleIndicators: {
