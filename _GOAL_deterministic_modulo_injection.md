@@ -2,8 +2,9 @@
 
 Iteration {{iteration}}
 
-You are working in `/home/bhd/Documents/Projects/bhd/open-ralph-wiggum`.
-Branch: `feat/deterministic-modulo-injection`
+You are working in `/home/bhd/Documents/Projects/bhd/open-ralph-wiggum-wt-modulo-injection`.
+Branch: `feat/deterministic-modulo-injection` (worktree: `../open-ralph-wiggum-wt-modulo-injection`)
+State dir: `./.ralph-modulo-injection`
 
 ## Goal
 
