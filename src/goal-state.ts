@@ -42,19 +42,64 @@ export function createInitialState(slug: string, completionPromise = "COMPLETE")
  * Returns null if the file does not exist.
  * Returns null if the JSON is not a valid GoalState object.
  */
+const VALID_FACT_STATUSES = new Set(["pending", "verified"]);
+const VALID_PLAN_STEP_STATUSES = new Set(["pending", "in-progress", "done"]);
+
+/**
+ * Validate nested facts and planSteps entries.
+ * Returns true if all entries are valid, false otherwise.
+ */
+function validateNestedFields(parsed: Record<string, unknown>): boolean {
+   // Validate facts entries
+   if (parsed.facts && typeof parsed.facts === "object" && !Array.isArray(parsed.facts)) {
+      for (const val of Object.values(parsed.facts as Record<string, unknown>)) {
+         if (typeof val !== "object" || val === null) return false;
+         const fact = val as Record<string, unknown>;
+         if (typeof fact.status !== "string" || !VALID_FACT_STATUSES.has(fact.status)) return false;
+      }
+   }
+
+   // Validate planSteps entries
+   if (parsed.planSteps && typeof parsed.planSteps === "object" && !Array.isArray(parsed.planSteps)) {
+      for (const val of Object.values(parsed.planSteps as Record<string, unknown>)) {
+         if (typeof val !== "object" || val === null) return false;
+         const step = val as Record<string, unknown>;
+         if (typeof step.status !== "string" || !VALID_PLAN_STEP_STATUSES.has(step.status)) return false;
+      }
+   }
+
+   return true;
+}
+
 export function loadGoalState(filePath: string): GoalState | null {
    if (!existsSync(filePath)) return null;
    try {
       const raw = readFileSync(filePath, "utf-8");
       const parsed = JSON.parse(raw);
-      // Basic schema validation: must have required string fields
+      // Required top-level string fields
       if (
          typeof parsed?.slug !== "string" ||
          typeof parsed?.phase !== "string" ||
-         !VALID_PHASE_SET.has(parsed.phase)
+         !VALID_PHASE_SET.has(parsed.phase) ||
+         typeof parsed?.startedAt !== "string" ||
+         typeof parsed?.completionPromise !== "string"
       ) {
          return null;
       }
+      // Required top-level typed fields
+      if (
+         typeof parsed.iterations !== "number" ||
+         typeof parsed.facts !== "object" ||
+         Array.isArray(parsed.facts) ||
+         parsed.facts === null ||
+         typeof parsed.planSteps !== "object" ||
+         Array.isArray(parsed.planSteps) ||
+         parsed.planSteps === null
+      ) {
+         return null;
+      }
+      // Validate nested entries
+      if (!validateNestedFields(parsed)) return null;
       return parsed as GoalState;
    } catch {
       return null;

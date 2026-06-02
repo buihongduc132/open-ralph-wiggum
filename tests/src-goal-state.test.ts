@@ -266,6 +266,135 @@ describe("isGoalComplete", () => {
    });
 });
 
+describe("loadGoalState — deeper schema validation", () => {
+   it("returns null when facts is not an object", () => {
+      const path = statePath("bad-facts");
+      require("fs").writeFileSync(path, JSON.stringify({
+         slug: "test",
+         phase: "planning",
+         startedAt: "2026-01-01",
+         lastIterationAt: "2026-01-01",
+         iterations: 0,
+         facts: "not-an-object",
+         planSteps: {},
+         completionPromise: "COMPLETE",
+      }), "utf-8");
+      expect(loadGoalState(path)).toBeNull();
+   });
+
+   it("returns null when planSteps is not an object", () => {
+      const path = statePath("bad-steps");
+      require("fs").writeFileSync(path, JSON.stringify({
+         slug: "test",
+         phase: "planning",
+         startedAt: "2026-01-01",
+         lastIterationAt: "2026-01-01",
+         iterations: 0,
+         facts: {},
+         planSteps: [1, 2, 3],
+         completionPromise: "COMPLETE",
+      }), "utf-8");
+      expect(loadGoalState(path)).toBeNull();
+   });
+
+   it("returns null when iterations is not a number", () => {
+      const path = statePath("bad-iterations");
+      require("fs").writeFileSync(path, JSON.stringify({
+         slug: "test",
+         phase: "planning",
+         startedAt: "2026-01-01",
+         lastIterationAt: "2026-01-01",
+         iterations: "five",
+         facts: {},
+         planSteps: {},
+         completionPromise: "COMPLETE",
+      }), "utf-8");
+      expect(loadGoalState(path)).toBeNull();
+   });
+
+   it("returns null when startedAt is missing", () => {
+      const path = statePath("no-started");
+      require("fs").writeFileSync(path, JSON.stringify({
+         slug: "test",
+         phase: "planning",
+         lastIterationAt: "2026-01-01",
+         iterations: 0,
+         facts: {},
+         planSteps: {},
+         completionPromise: "COMPLETE",
+      }), "utf-8");
+      expect(loadGoalState(path)).toBeNull();
+   });
+
+   it("returns null when completionPromise is missing", () => {
+      const path = statePath("no-promise");
+      require("fs").writeFileSync(path, JSON.stringify({
+         slug: "test",
+         phase: "planning",
+         startedAt: "2026-01-01",
+         lastIterationAt: "2026-01-01",
+         iterations: 0,
+         facts: {},
+         planSteps: {},
+      }), "utf-8");
+      expect(loadGoalState(path)).toBeNull();
+   });
+
+   it("returns null when a fact entry has invalid status", () => {
+      const path = statePath("bad-fact-status");
+      require("fs").writeFileSync(path, JSON.stringify({
+         slug: "test",
+         phase: "planning",
+         startedAt: "2026-01-01",
+         lastIterationAt: "2026-01-01",
+         iterations: 0,
+         facts: { "1": { status: "unknown" } },
+         planSteps: {},
+         completionPromise: "COMPLETE",
+      }), "utf-8");
+      expect(loadGoalState(path)).toBeNull();
+   });
+
+   it("returns null when a planStep entry has invalid status", () => {
+      const path = statePath("bad-step-status");
+      require("fs").writeFileSync(path, JSON.stringify({
+         slug: "test",
+         phase: "planning",
+         startedAt: "2026-01-01",
+         lastIterationAt: "2026-01-01",
+         iterations: 0,
+         facts: {},
+         planSteps: { "1": { status: "broken", iterations: [1] } },
+         completionPromise: "COMPLETE",
+      }), "utf-8");
+      expect(loadGoalState(path)).toBeNull();
+   });
+
+   it("accepts valid state with all required fields", () => {
+      const path = statePath("valid-full");
+      const valid = {
+         slug: "test",
+         phase: "executing",
+         startedAt: "2026-01-01T00:00:00Z",
+         lastIterationAt: "2026-01-01T01:00:00Z",
+         iterations: 5,
+         facts: {
+            "1": { status: "verified", verifiedAt: "2026-01-01", verifiedBy: "bun test" },
+            "2": { status: "pending" },
+         },
+         planSteps: {
+            "1": { status: "done", iterations: [1, 2] },
+            "2": { status: "in-progress", iterations: [3, 4, 5] },
+         },
+         completionPromise: "COMPLETE",
+      };
+      require("fs").writeFileSync(path, JSON.stringify(valid), "utf-8");
+      const loaded = loadGoalState(path);
+      expect(loaded).not.toBeNull();
+      expect(loaded!.facts["1"].status).toBe("verified");
+   });
+});
+
 describe("getNextPhase", () => {
    it("returns executing after planning", () => {
       expect(getNextPhase("planning")).toBe("executing");

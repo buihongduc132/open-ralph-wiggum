@@ -25,6 +25,7 @@ import { parseGoalMd, writeGoalMd } from "./src/goal-parser";
 import { createInitialState as createGoalState, loadGoalState, saveGoalState, transitionPhase, markFactVerified, updatePlanStep, isGoalComplete, getNextPhase } from "./src/goal-state";
 import { buildInventory, findNextActionableGoal, filterByPhase } from "./src/goal-inventory";
 import { buildGoalPromptSection, formatGoalInventory, formatGoalStatus, scaffoldGoalMd, titleToSlug } from "./src/goal-prompt";
+import type { RalphState } from "./loop-helpers";
 
 export const VERSION = "1.3.0";
 
@@ -2192,35 +2193,7 @@ Learn more: https://ghuntley.com/ralph/
       process.exit(1);
    }
 
-   interface RalphState {
-      active: boolean;
-      iteration: number;
-      minIterations: number;
-      maxIterations: number;
-      completionPromise: string;
-      abortPromise?: string; // Optional abort signal for early exit
-      tasksMode: boolean;
-      taskPromise: string;
-      prompt: string;
-      promptTemplate?: string; // Custom prompt template path
-      startedAt: string;
-      pid?: number;
-      pidStartSignature?: string;
-      model: string;
-      agent: AgentType;
-      rotation?: string[];
-      rotationIndex?: number;
-      stallingTimeoutMs?: number;
-      blacklistDurationMs?: number;
-      stallingAction?: "stop" | "rotate";
-      blacklistedAgents?: BlacklistedAgent[];
-      stallRetries?: boolean;
-      stallRetryMinutes?: number;
-      fallbackBlacklist?: string[];
-      // Goal mode (opt-in, optional fields only)
-      goalSlug?: string;
-      goalPhase?: string;
-   }
+   // RalphState is imported from ./loop-helpers — single source of truth
 
    function getFallbackKey(agent: AgentType, modelName: string): string {
       return `${agent}:${modelName}`;
