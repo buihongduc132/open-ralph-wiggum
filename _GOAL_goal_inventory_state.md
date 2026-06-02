@@ -2,7 +2,8 @@
 
 Iteration {{iteration}}
 
-You are working in `/home/bhd/Documents/Projects/bhd/open-ralph-wiggum`.
+You are working in `/home/bhd/Documents/Projects/bhd/open-ralph-wiggum-wt-goal-inventory`.
+Branch: `feat/goal-inventory-state`
 
 ## Goal
 
