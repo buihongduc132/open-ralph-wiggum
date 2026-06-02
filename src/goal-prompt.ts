@@ -69,8 +69,8 @@ function buildPlanSection(
    }
 
    // Find the first in-progress or pending step
-   const currentStep = goal.planSteps.find((step, idx) => {
-      const stepState = goalState.planSteps[String(idx + 1)];
+   const currentStep = goal.planSteps.find((step) => {
+      const stepState = goalState.planSteps[String(step.id)];
       return !stepState || stepState.status !== "done";
    });
 

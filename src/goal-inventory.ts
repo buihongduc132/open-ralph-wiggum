@@ -10,6 +10,8 @@ import { join, basename } from "path";
 import { parseGoalMd } from "./goal-parser";
 import type { GoalInventory, GoalInventoryEntry, GoalPhase } from "./goal-types";
 
+const VALID_PHASES: GoalPhase[] = ["planning", "executing", "verifying", "done"];
+
 // Phase priority for finding next actionable goal (lower = higher priority)
 const PHASE_PRIORITY: Record<GoalPhase, number> = {
    executing: 0,
@@ -41,7 +43,12 @@ export function buildInventory(goalsDir: string): GoalInventory {
 
    for (const entry of entries) {
       const entryPath = join(goalsDir, entry);
-      const stat = statSync(entryPath);
+      let stat;
+      try {
+         stat = statSync(entryPath);
+      } catch {
+         continue; // broken symlink, permission denied, etc.
+      }
       if (!stat.isDirectory()) continue;
 
       const goalMdPath = join(entryPath, "goal.md");
@@ -58,7 +65,8 @@ export function buildInventory(goalsDir: string): GoalInventory {
          if (existsSync(statePath)) {
             try {
                const state = JSON.parse(readFileSync(statePath, "utf-8"));
-               phase = state.phase ?? "planning";
+               // Validate phase from state
+               phase = VALID_PHASES.includes(state.phase) ? state.phase : "planning";
                lastIterationAt = state.lastIterationAt ?? "";
 
                // Override verified count from state if available

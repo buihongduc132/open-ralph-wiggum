@@ -160,10 +160,12 @@ function rewriteFactsSection(content: string, facts: Fact[]): string {
    const sectionStart = content.search(/^##\s+Facts\s*$/m);
    if (sectionStart === -1) return content;
 
-   // Find the end of the facts section (next ## or EOF)
+   // Find the end of the facts section (next ## after Facts header or EOF)
    const afterHeader = content.indexOf("\n", sectionStart) + 1;
-   const nextSection = content.search(/^##\s+(?!Facts)/m);
-   const sectionEnd = nextSection === -1 ? content.length : nextSection;
+   // Search for the next ## section starting AFTER the Facts header,
+   // not from the beginning (otherwise matches sections before ## Facts)
+   const nextSectionOffset = content.substring(afterHeader).search(/^##\s+(?!Facts)/m);
+   const sectionEnd = nextSectionOffset === -1 ? content.length : afterHeader + nextSectionOffset;
 
    // Build new facts lines
    const newFacts = facts

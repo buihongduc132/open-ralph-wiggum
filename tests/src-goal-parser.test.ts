@@ -198,6 +198,47 @@ Done.
    });
 });
 
+describe("writeGoalMd — no corruption with sections before Facts", () => {
+   it("does not duplicate Objective/Facts sections on write-back", () => {
+      const path = writeFixture("no-corruption.md", `# Goal: Corruption Test
+
+## Objective
+This is the objective section.
+
+## Facts
+- [ ] Fact 1: First fact
+- [ ] Fact 2: Second fact
+
+## Plan
+1. Do something
+
+## Done Condition
+All facts verified.
+`);
+      const goal = parseGoalMd(path, "corruption-test");
+      goal.facts[0].verified = true;
+      writeGoalMd(goal);
+
+      // Read raw content and verify no duplication
+      const raw = require("fs").readFileSync(path, "utf-8");
+      const objectiveCount = (raw.match(/## Objective/g) || []).length;
+      const factsCount = (raw.match(/## Facts/g) || []).length;
+      const planCount = (raw.match(/## Plan/g) || []).length;
+      expect(objectiveCount).toBe(1);
+      expect(factsCount).toBe(1);
+      expect(planCount).toBe(1);
+
+      // Re-parse should still be valid
+      const reparsed = parseGoalMd(path, "corruption-test");
+      expect(reparsed.title).toBe("Corruption Test");
+      expect(reparsed.objective).toBe("This is the objective section.");
+      expect(reparsed.facts).toHaveLength(2);
+      expect(reparsed.facts[0].verified).toBe(true);
+      expect(reparsed.planSteps).toHaveLength(1);
+      expect(reparsed.doneCondition).toBe("All facts verified.");
+   });
+});
+
 describe("writeGoalMd (round-trip)", () => {
    it("writes goal back and re-parses to same structure", () => {
       const path = writeFixture("roundtrip.md", `# Goal: Round Trip Test

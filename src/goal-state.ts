@@ -11,6 +11,7 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 import type { GoalPhase, GoalState } from "./goal-types";
 
 const VALID_PHASES: GoalPhase[] = ["planning", "executing", "verifying", "done"];
+const VALID_PHASE_SET = new Set<string>(VALID_PHASES);
 
 const PHASE_ORDER: Record<GoalPhase, number> = {
    planning: 0,
@@ -39,11 +40,25 @@ export function createInitialState(slug: string, completionPromise = "COMPLETE")
 /**
  * Load goal state from a JSON file.
  * Returns null if the file does not exist.
+ * Returns null if the JSON is not a valid GoalState object.
  */
 export function loadGoalState(filePath: string): GoalState | null {
    if (!existsSync(filePath)) return null;
-   const raw = readFileSync(filePath, "utf-8");
-   return JSON.parse(raw) as GoalState;
+   try {
+      const raw = readFileSync(filePath, "utf-8");
+      const parsed = JSON.parse(raw);
+      // Basic schema validation: must have required string fields
+      if (
+         typeof parsed?.slug !== "string" ||
+         typeof parsed?.phase !== "string" ||
+         !VALID_PHASE_SET.has(parsed.phase)
+      ) {
+         return null;
+      }
+      return parsed as GoalState;
+   } catch {
+      return null;
+   }
 }
 
 /**
