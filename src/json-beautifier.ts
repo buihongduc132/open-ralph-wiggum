@@ -566,8 +566,8 @@ function textExtract(p: Record<string, unknown>, agentType: string): string[] {
     addText(p.result);
   } else if (t === "message") {
     // Codex: type=message with text content
+    // addContent handles both string and array content, no need for separate addText
     addContent(p.content);
-    addText(p.content);
   } else if (t === "complete") {
     // Codex: type=complete with output
     addText(p.output);
