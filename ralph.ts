@@ -539,6 +539,21 @@ export function getDefaultTomlConfig(): string {
 
 # Extra flags to pass to the agent
 # extra_agent_flags = ["--verbose", "--no-git"]
+
+# =============================================================================
+# GOAL MODE (Opt-In)
+# =============================================================================
+# Enable goal-driven loops with facts, plans, and state tracking.
+# All fields are optional — no behavior change without setting goal.
+
+# Path to a goal.md file (enables single-goal mode)
+# goal = "goals/my-goal/goal.md"
+
+# Directory containing multiple goal packages (enables inventory mode)
+# goal_dir = "goals/"
+
+# Custom completion promise for goal mode (default: COMPLETE)
+# goal_promise = "GOAL_DONE"
 `;
 }
 
@@ -842,6 +857,14 @@ Options:
                        (use this when intentionally resuming a loop with different args)
    --allow-all         Auto-approve all tool permissions (default: on)
   --no-allow-all      Require interactive permission prompts
+
+Goal Mode (opt-in, requires --goal or --goal-dir):
+  --goal PATH         Path to goal.md (enables goal-driven loop)
+  --goal-dir DIR      Directory of goal packages (enables inventory)
+  --init-goal TITLE   Create a new goal scaffold at goals/<slug>/
+  --list-goals        Show all goals with status
+  --goal-status       Show current goal progress (facts + plan)
+
   --config PATH       Use custom agent config file
   --init-config       Initialize agent config and runtime config
   --doctor            Diagnose and fix Ralph issues
