@@ -54,6 +54,11 @@ describe("isJsonModeAgent", () => {
     expect(isJsonModeAgent("some-agent", ["--output-format", "stream-json"])).toBe(true);
   });
 
+  it("returns true when extraFlags contain --output-format=stream-json (equals syntax)", () => {
+    expect(isJsonModeAgent("some-agent", ["--output-format=stream-json"])).toBe(true);
+    expect(isJsonModeAgent("gemini", ["--output-format=stream-json", "--verbose"])).toBe(true);
+  });
+
   it("returns true when extraFlags contain --json", () => {
     expect(isJsonModeAgent("codex", ["--json"])).toBe(true);
   });
@@ -121,6 +126,24 @@ describe("beautifyJsonLine — mode=text", () => {
     const joined = result.join("\n");
     expect(stripAnsi(joined)).toBe(joined); // no ANSI in text mode
     expect(joined).toContain("Hello from assistant");
+  });
+
+  it("extracts text from codex message events", () => {
+    const line = JSON.stringify({ type: "message", content: "Codex says hi" });
+    const result = beautifyJsonLine(line, config({ mode: "text", agentType: "codex" }));
+    expect(result.some(r => r.includes("Codex says hi"))).toBe(true);
+  });
+
+  it("extracts text from codex complete events", () => {
+    const line = JSON.stringify({ type: "complete", output: "All done" });
+    const result = beautifyJsonLine(line, config({ mode: "text", agentType: "codex" }));
+    expect(result.some(r => r.includes("All done"))).toBe(true);
+  });
+
+  it("extracts text from gemini top-level text field", () => {
+    const line = JSON.stringify({ type: "unknown", text: "Gemini text here" });
+    const result = beautifyJsonLine(line, config({ mode: "text", agentType: "gemini" }));
+    expect(result.some(r => r.includes("Gemini text here"))).toBe(true);
   });
 });
 

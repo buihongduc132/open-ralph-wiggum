@@ -54,8 +54,9 @@ export function isJsonModeAgent(agentType: string, extraFlags?: string[]): boole
   if (extraFlags && extraFlags.length > 0) {
     for (let i = 0; i < extraFlags.length; i++) {
       if (JSON_FLAGS.has(extraFlags[i])) return true;
-      // Check --output-format stream-json as a pair
+      // Check --output-format stream-json as a pair or --output-format=stream-json (equals syntax)
       if (extraFlags[i] === "--output-format" && extraFlags[i + 1] === "stream-json") return true;
+      if (extraFlags[i] === "--output-format=stream-json") return true;
     }
   }
   return false;
@@ -563,12 +564,25 @@ function textExtract(p: Record<string, unknown>, agentType: string): string[] {
     }
   } else if (t === "result") {
     addText(p.result);
+  } else if (t === "message") {
+    // Codex: type=message with text content
+    addContent(p.content);
+    addText(p.content);
+  } else if (t === "complete") {
+    // Codex: type=complete with output
+    addText(p.output);
   } else if (t === "error") {
     if (p.error && typeof p.error === "object") {
       addText((p.error as Record<string, unknown>).message);
     } else {
       addText(p.error);
     }
+  }
+
+  // Gemini: top-level text or content fields (any event type)
+  if (t !== "assistant" && t !== "content_block_delta" && t !== "stream_event" && t !== "result" && t !== "message" && t !== "complete" && t !== "error") {
+    addText(p.text);
+    if (typeof p.content === "string") addText(p.content);
   }
 
   return lines;
