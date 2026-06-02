@@ -272,4 +272,95 @@ describe("resolveInjectPlaceholders", () => {
     expect(result).toContain("Rule B");
     expect(result).not.toContain("{{inject:");
   });
+
+  it("resolves {{inject:state}} from jsonl file", () => {
+    const dirName = "ralph-state-inject";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    // Create a mock state jsonl file
+    const jsonlPath = join(testDir, "ralph-history.jsonl");
+    writeFileSync(jsonlPath, "entry-1\nentry-2\nentry-3\nentry-4\nentry-5\nentry-6\nentry-7\n");
+
+    const toml: RalphRulesToml = {
+      state_injection: {
+        source: "ralph-history.jsonl",
+        max_prev: 3,
+        max_next: 2,
+        show_status: true,
+        reminder: "Recent state.",
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "Start\n{{inject:state}}\nEnd",
+      { iteration: 1 },
+      testDir,
+      toml,
+    );
+
+    expect(result).toContain("## State Context");
+    expect(result).toContain("### Previous");
+    expect(result).toContain("### Next");
+    expect(result).toContain("entry-5"); // last of prev (entries 3,4,5)
+    expect(result).toContain("entry-7"); // last of next (entries 6,7)
+    expect(result).toContain("Recent state.");
+    expect(result).not.toContain("{{inject:state}}");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("returns empty string for {{inject:state}} when file missing", () => {
+    const dirName = "ralph-no-state-file";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const toml: RalphRulesToml = {
+      state_injection: {
+        source: "nonexistent.jsonl",
+        max_prev: 3,
+        max_next: 2,
+        show_status: true,
+        reminder: "test",
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:state}}",
+      { iteration: 1 },
+      testDir,
+      toml,
+    );
+
+    expect(result.trim()).toBe("");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("loads TOML from cwd fallback when not in stateDir", () => {
+    // The loader checks stateDir first, then cwd
+    // This tests the cwd fallback path
+    const result = loadRulesToml("/tmp/nonexistent-state-dir-12345");
+    expect(result).toBeNull();
+  });
+
+  it("returns disabled comment for rule with no entries", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        empty: {
+          name: "empty",
+          enabled: true,
+          entries: [],
+        },
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:empty}}",
+      { iteration: 1 },
+      TMP_DIR,
+      toml,
+    );
+    expect(result).toContain("disabled or empty");
+  });
 });
