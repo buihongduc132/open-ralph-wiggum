@@ -809,7 +809,7 @@ export function scaffoldRulesToml(rulesName: string, currentStateDir: string): s
 export function findPlaceholderRules(toml: RalphRulesToml | null): string | null {
    if (!toml || !toml.rules) return null;
    for (const [sectionName, section] of Object.entries(toml.rules)) {
-      if (section?.entries) {
+      if (section?.entries && Array.isArray(section.entries)) {
          for (const entry of section.entries) {
             if (typeof entry.prompt === "string" && entry.prompt.includes("PLACEHOLDER")) {
                return sectionName;
@@ -858,7 +858,7 @@ export function resolveInjectPlaceholders(
    });
 
    // Resolve {{inject:<name>}} for rule sections
-   const injectRegex = /\{\{inject:(\w+)\}\}/g;
+   const injectRegex = /\{\{inject:([a-zA-Z0-9_-]+)\}\}/g;
    const matches = [...template.matchAll(injectRegex)];
 
    for (const match of matches) {
@@ -875,7 +875,7 @@ export function resolveInjectPlaceholders(
          continue;
       }
 
-      if (!rule.enabled || !rule.entries?.length) {
+      if (!rule.enabled || !Array.isArray(rule.entries) || !rule.entries.length) {
          template = template.replaceAll(full, `<!-- inject:${name} disabled or empty -->`);
          continue;
       }

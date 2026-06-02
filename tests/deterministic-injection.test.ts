@@ -2183,17 +2183,14 @@ describe("resolveInjectPlaceholders — rule entries with null/undefined fields"
         },
       },
     } as unknown as RalphRulesToml;
-    // BUG: string.length is truthy so it passes the guard,
-    // then .filter() crashes with TypeError.
-    // This test documents the known issue.
-    expect(() =>
-      resolveInjectPlaceholders(
-        "{{inject:badentries}}",
-        { iteration: 1 },
-        TMP_DIR,
-        toml,
-      ),
-    ).toThrow(/filter is not a function/);
+    // Fixed: Array.isArray guard now catches non-array entries
+    const result = resolveInjectPlaceholders(
+      "{{inject:badentries}}",
+      { iteration: 1 },
+      TMP_DIR,
+      toml,
+    );
+    expect(result).toContain("disabled or empty");
   });
 });
 
@@ -2499,6 +2496,97 @@ describe("findPlaceholderRules — partial word match", () => {
       },
     };
     // .includes("PLACEHOLDER") is case-sensitive → does NOT match
+    expect(findPlaceholderRules(toml)).toBeNull();
+  });
+});
+
+describe("resolveInjectPlaceholders — hyphenated rule names", () => {
+  it("resolves {{inject:my-rule}} with hyphenated name", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        "my-rule": {
+          name: "my-rule",
+          enabled: true,
+          entries: [
+            { at: 2, prompt: "hyphenated rule fired" },
+          ],
+        },
+      },
+    };
+    const result = resolveInjectPlaceholders(
+      "{{inject:my-rule}}",
+      { iteration: 4 },
+      TMP_DIR,
+      toml,
+    );
+    expect(result).toContain("hyphenated rule fired");
+  });
+
+  it("resolves {{inject:my_name}} with underscored name", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        my_name: {
+          name: "my_name",
+          enabled: true,
+          entries: [
+            { at: 1, prompt: "underscored rule" },
+          ],
+        },
+      },
+    };
+    const result = resolveInjectPlaceholders(
+      "{{inject:my_name}}",
+      { iteration: 1 },
+      TMP_DIR,
+      toml,
+    );
+    expect(result).toContain("underscored rule");
+  });
+
+  it("scaffolds missing hyphenated rule section", () => {
+    const dirName = "hyphen-scaffold";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:new-rule}}",
+      { iteration: 1 },
+      testDir,
+      { rules: {} },
+    );
+    expect(result).toContain("SCAFFOLDED");
+    expect(result).toContain("new-rule");
+
+    // Cleanup
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+describe("findPlaceholderRules — non-array entries guard", () => {
+  it("skips non-array entries gracefully", () => {
+    const toml = {
+      rules: {
+        bad: {
+          name: "bad",
+          enabled: true,
+          entries: "not an array",
+        },
+      },
+    } as unknown as RalphRulesToml;
+    // Should not crash, should return null (no PLACEHOLDER found)
+    expect(findPlaceholderRules(toml)).toBeNull();
+  });
+
+  it("skips null entries gracefully", () => {
+    const toml = {
+      rules: {
+        nullEntries: {
+          name: "nullEntries",
+          enabled: true,
+          entries: null,
+        },
+      },
+    } as unknown as RalphRulesToml;
     expect(findPlaceholderRules(toml)).toBeNull();
   });
 });
