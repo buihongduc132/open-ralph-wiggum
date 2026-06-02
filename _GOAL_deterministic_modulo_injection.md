@@ -21,13 +21,31 @@ Read these files for complete specification:
 
 ## Rules
 
-- _GOAL IMMUTABILITY: NEVER modify this _GOAL file. Once created, it is committed and frozen.
-- ALL work MUST be signed off by verifier loop AND claude -p.
-- Commit after each meaningful change.
+- _GOAL IMMUTABILITY: NEVER modify this _GOAL file. Once created, commit it immediately and never touch it again.
+- ALL work MUST be signed off by verifier loop AND claude -p; DELEGATE to fix if there is ANY problem.
+- Forward-Guard: TDD first, THEN implementation. Never write code before tests.
 - `bun test` must pass with exit code 0 after every change.
 - Do NOT add new dependencies (YAML, etc.). Use existing `Bun.TOML.parse()`.
 - Templating is BLIND: only `{{inject:*}}` anchors are resolved. Everything else in the template is left unchanged.
 - Read TOML every iteration — NO caching.
+
+## Workflow
+
+For each iteration:
+
+1. **CHECK context FIRST**: Read state/inventory for demoted tasks, problem_notes, or failing tests from previous ceremony. Fix these FIRST before any new work.
+2. **PICK 1 with problems**: If any task was demoted or has problem_notes → fix it before starting new work.
+3. **PICK 1 that is TESTED** with no outstanding problems → PROMOTE to fully_works (requires remote CI proof).
+4. **PICK 1 with LEAST progress** (non-blocking group) → implement using TDD approach.
+5. **PICK 1 with LOWEST coverage** → increase coverage (target ceiling: 80-90%).
+
+MUST work on at least one engineering task per iteration. Probes do NOT count.
+
+### Worst-First
+
+- Fix problems first (demoted tasks, failing tests, audit findings, verifier rejections).
+- New features second.
+- Coverage uplift last.
 
 ## Implementation Tasks (from the plan)
 
@@ -108,33 +126,39 @@ interface RalphRulesToml {
 - Git pull --rebase, commit current progress.
 - Retain progress into hindsight.
 
-### I % 7 == 0 (BACKWARD — Verifier Loop, Read-Only)
+### I % 7 == 0 (BACKWARD — Verifier Loop, READ-ONLY)
+**READ-ONLY invariant**: This worktree is READ-ONLY during this audit iteration. No implementation changes. Record and demote only.
+
 1. Run `bun test` — ALL must pass
-2. Run verifier loop against completed work
+2. Run verifier loop (`claude -p` or equivalent) against ALL completed tasks
 3. BACKWARD HUNT:
    - TOML parsing is correct (Bun.TOML.parse handles all edge cases)
-   - {{inject:*}} regex doesn't collide with {{iteration}} etc.
+   - `{{inject:*}}` regex doesn't collide with `{{iteration}}` etc.
    - Append-mode scaffolding doesn't corrupt existing TOML
    - PLACEHOLDER gate fires on every iteration
-4. DEMOTION RULE: any completed task with regression → demote to in_progress immediately
-5. Record findings, DO NOT fix — next forward iteration fixes
-6. Commit
+   - Implementation that DRIFTED from plan: over-engineered or under-engineered
+4. **DEMOTION**: If regression, drift, or bug found → demote the task: `completed` → `in_progress`
+5. **STATE-AS-SIGNAL**: Record findings into state/inventory (problem_notes, demotion status). Forward pick loop reads from same file.
+6. DO NOT fix — next forward iteration picks up the problems
+7. Commit audit findings
 
-### I % 11 == 0 (BACKWARD — Mutation + CodeQL, Consolidated)
+### I % 11 == 0 (BACKWARD — Mutation + CodeQL, READ-ONLY)
+**READ-ONLY invariant**: This worktree is READ-ONLY during this audit iteration. No implementation changes. Record and demote only.
+
 1. Run Stryker, sg-scan-all, CodeQL
-2. Classify survivors
-3. DEMOTION RULE: any completed task killed by mutation → demote to in_progress immediately
-4. Record into inventory
+2. Classify survivors: weak tests, real gaps, equivalents
+3. **DEMOTION**: Any completed task killed by mutation score drop → demote to `in_progress`
+4. **STATE-AS-SIGNAL**: Record findings into inventory (mutator_score, violations). Forward pick loop reads from same file.
 5. DO NOT fix — next forward iteration fixes
-6. Commit
+6. Commit audit findings
 
 ## Mandatories
 
-- Verifier loop before claiming complete.
+- Verifier loop AND claude -p sign-off before claiming complete.
 - `bun test` must pass with exit code 0.
 - All existing tests must still pass (backward compatibility).
 - Commit before claiming complete.
-- Check hindsight for related context.
+- Check hindsight and inventory for context at start of every iteration.
 - External review (claude -p) before completion.
 - NEVER modify this _GOAL file.
 
