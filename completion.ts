@@ -2,12 +2,9 @@
  * Completion detection helpers used by the Ralph loop.
  */
 
-const ANSI_PATTERN = /\[[0-9;]*[A-Za-z]/g;
 import { extractJsonCompletionText, hasJsonAdapter, isJsonModeAgent } from "./src/json-beautifier";
-
-export function stripAnsi(input: string): string {
-  return input.replace(ANSI_PATTERN, "");
-}
+export { stripAnsi } from "./src/strip-ansi";
+import { stripAnsi } from "./src/strip-ansi";
 
 export function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");

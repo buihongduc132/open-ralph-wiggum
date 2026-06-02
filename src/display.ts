@@ -5,7 +5,7 @@
  */
 
 import type { AgentConfig, AgentType } from "./types";
-import { stripAnsi } from "../completion";
+import { stripAnsi } from "./strip-ansi";
 
 export interface Task {
    text: string;

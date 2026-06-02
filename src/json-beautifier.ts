@@ -5,7 +5,7 @@
  * produced by agents running in JSON mode (claude --output-format stream-json, etc.).
  */
 
-import { stripAnsi } from "../completion";
+import { stripAnsi } from "./strip-ansi";
 
 // ─── ANSI Colors (zero deps — chalk not available) ─────────────────────────────
 
