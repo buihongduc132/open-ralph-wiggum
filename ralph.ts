@@ -1023,16 +1023,18 @@ if (import.meta.main) {
    // Deterministic Modulo Injection — `--init-rules` subcommand
    // Scaffolds .ralph-<name>.toml with commented sections and PLACEHOLDER prompts.
    // No-op if file already exists.
+   // Always writes to stateDir (not cwd).
    // ────────────────────────────────────────────────────────────────────
    if (args.includes("--init-rules")) {
-      const tomlPath = resolveRulesTomlPath(stateDir);
+      const stateDirName = stateDir.replace(/.*[\/\\]/, "") || stateDir;
+      const tomlName = `.ralph-${stateDirName}.toml`;
+      const tomlPath = join(stateDir, tomlName);
       if (existsSync(tomlPath)) {
          console.log(`Rules TOML already exists: ${tomlPath}`);
          console.log("Remove it first if you want to re-scaffold.");
          process.exit(0);
       }
-      const dir = dirname(tomlPath);
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      if (!existsSync(stateDir)) mkdirSync(stateDir, { recursive: true });
       writeFileSync(tomlPath, getDefaultRulesToml());
       console.log(`Created rules TOML at: ${tomlPath}`);
       console.log("Edit this file to configure deterministic rule injections.");
