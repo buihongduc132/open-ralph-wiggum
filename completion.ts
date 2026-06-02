@@ -3,6 +3,7 @@
  */
 
 const ANSI_PATTERN = /\[[0-9;]*[A-Za-z]/g;
+import { extractJsonCompletionText, hasJsonAdapter } from "./src/json-beautifier";
 
 export function stripAnsi(input: string): string {
   return input.replace(ANSI_PATTERN, "");
@@ -232,17 +233,12 @@ export function extractCursorAgentStreamDisplayLines(rawLine: string): string[] 
 }
 
 export function extractAgentCompletionText(output: string, agentType: string): string {
-  const extractStreamLines = agentType === "claude-code"
-    ? extractClaudeStreamDisplayLines
-    : agentType === "cursor-agent"
-    ? extractCursorAgentStreamDisplayLines
-    : null;
-
-  if (!extractStreamLines) return output;
+  // Non-JSON agents: return raw output unchanged
+  if (!hasJsonAdapter(agentType)) return output;
 
   const displayLines: string[] = [];
   for (const rawLine of output.split(/\r?\n/)) {
-    for (const line of extractStreamLines(rawLine)) {
+    for (const line of extractJsonCompletionText(rawLine, agentType)) {
       if (line.trim()) displayLines.push(line.trim());
     }
   }

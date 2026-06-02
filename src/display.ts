@@ -179,82 +179,9 @@ export function detectModelNotFoundError(output: string): boolean {
       output.includes(".split is not a function");
 }
 
-export function extractClaudeStreamDisplayLines(rawLine: string): string[] {
-   const cleanLine = stripAnsi(rawLine).trim();
-   if (!cleanLine.startsWith("{")) {
-      return [rawLine];
-   }
-
-   let payload: unknown;
-   try {
-      payload = JSON.parse(cleanLine);
-   } catch {
-      return [];
-   }
-   if (!payload || typeof payload !== "object") {
-      return [];
-   }
-
-   const lines: string[] = [];
-   const addText = (value: unknown) => {
-      if (typeof value !== "string") return;
-      for (const splitLine of value.split(/\r?\n/)) {
-         const trimmed = splitLine.trim();
-         if (trimmed) lines.push(trimmed);
-      }
-   };
-   const addContentText = (content: unknown) => {
-      if (typeof content === "string") {
-         addText(content);
-         return;
-      }
-      if (!Array.isArray(content)) return;
-      for (const block of content) {
-         if (!block || typeof block !== "object") continue;
-         const blockRecord = block as Record<string, unknown>;
-         if (blockRecord.type === "tool_use") {
-            addText(blockRecord.text);
-            continue;
-         }
-         addText(blockRecord.text);
-         addText(blockRecord.thinking);
-         if (typeof blockRecord.content === "string") {
-            addText(blockRecord.content);
-         }
-      }
-   };
-
-   const payloadRecord = payload as Record<string, unknown>;
-   const payloadType = typeof payloadRecord.type === "string" ? payloadRecord.type : "";
-   if (payloadType === "assistant") {
-      if (payloadRecord.message && typeof payloadRecord.message === "object") {
-         const message = payloadRecord.message as Record<string, unknown>;
-         addContentText(message.content);
-      }
-      if (payloadRecord.delta && typeof payloadRecord.delta === "object") {
-         const delta = payloadRecord.delta as Record<string, unknown>;
-         addText(delta.text);
-         addText(delta.thinking);
-         addText(delta.content);
-      }
-   } else if (payloadType === "content_block_delta") {
-      if (payloadRecord.delta && typeof payloadRecord.delta === "object") {
-         const delta = payloadRecord.delta as Record<string, unknown>;
-         addText(delta.text);
-      }
-   } else if (payloadType === "result") {
-      addText(payloadRecord.result);
-   } else if (payloadType === "error") {
-      if (payloadRecord.error && typeof payloadRecord.error === "object") {
-         const error = payloadRecord.error as Record<string, unknown>;
-         addText(error.message);
-      } else {
-         addText(payloadRecord.error);
-      }
-   }
-
-   return lines;
-}
+// Re-export for backward compatibility — the canonical implementation
+// is now in completion.ts (extractClaudeStreamDisplayLines)
+export { extractClaudeStreamDisplayLines } from "../completion";
 
 export function detectStrugglePatterns(history: {
    struggleIndicators: {

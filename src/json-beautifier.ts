@@ -542,6 +542,17 @@ function textExtract(p: Record<string, unknown>, agentType: string): string[] {
     if (p.delta && typeof p.delta === "object") {
       addText((p.delta as Record<string, unknown>).text);
     }
+  } else if (t === "stream_event") {
+    // Nested event with delta — extract text_delta content
+    if (p.event && typeof p.event === "object") {
+      const event = p.event as Record<string, unknown>;
+      if (event.delta && typeof event.delta === "object") {
+        const delta = event.delta as Record<string, unknown>;
+        if (delta.type === "text_delta" && typeof delta.text === "string") {
+          addText(delta.text);
+        }
+      }
+    }
   } else if (t === "result") {
     addText(p.result);
   } else if (t === "error") {
