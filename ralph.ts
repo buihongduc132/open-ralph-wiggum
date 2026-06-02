@@ -830,7 +830,9 @@ export function resolveInjectPlaceholders(
       try {
          const raw = readFileSync(sourcePath, "utf-8");
          const lines = raw.split("\n").filter(l => l.trim());
-         const prev = cfg.max_prev > 0 ? lines.slice(-cfg.max_prev - cfg.max_next, -cfg.max_next) : [];
+         const prev = cfg.max_prev > 0
+            ? (cfg.max_next > 0 ? lines.slice(-cfg.max_prev - cfg.max_next, -cfg.max_next) : lines.slice(-cfg.max_prev))
+            : [];
          const next = cfg.max_next > 0 ? lines.slice(-cfg.max_next) : [];
          let result = "## State Context\n\n";
          if (prev.length) result += `### Previous (${prev.length} entries)\n\n${prev.join("\n")}\n\n`;

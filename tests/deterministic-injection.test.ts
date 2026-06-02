@@ -363,4 +363,237 @@ describe("resolveInjectPlaceholders", () => {
     );
     expect(result).toContain("disabled or empty");
   });
+
+  it("matches multiple modulo entries at same iteration", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        multi: {
+          name: "multi",
+          enabled: true,
+          entries: [
+            { at: 3, prompt: "Every 3rd" },
+            { at: 5, prompt: "Every 5th" },
+          ],
+        },
+      },
+    };
+
+    // Iteration 15: divisible by both 3 and 5
+    const result15 = resolveInjectPlaceholders(
+      "{{inject:multi}}",
+      { iteration: 15 },
+      TMP_DIR,
+      toml,
+    );
+    expect(result15).toContain("Every 3rd");
+    expect(result15).toContain("Every 5th");
+
+    // Iteration 3: only divisible by 3
+    const result3 = resolveInjectPlaceholders(
+      "{{inject:multi}}",
+      { iteration: 3 },
+      TMP_DIR,
+      toml,
+    );
+    expect(result3).toContain("Every 3rd");
+    expect(result3).not.toContain("Every 5th");
+
+    // Iteration 7: divisible by neither
+    const result7 = resolveInjectPlaceholders(
+      "{{inject:multi}}",
+      { iteration: 7 },
+      TMP_DIR,
+      toml,
+    );
+    expect(result7).toContain("no active entries at iteration 7");
+  });
+
+  it("handles iteration 0 with modulo", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        zero: {
+          name: "zero",
+          enabled: true,
+          entries: [{ at: 1, prompt: "Always active" }],
+        },
+      },
+    };
+
+    // 0 % 1 === 0 → should match
+    const result = resolveInjectPlaceholders(
+      "{{inject:zero}}",
+      { iteration: 0 },
+      TMP_DIR,
+      toml,
+    );
+    expect(result).toContain("Always active");
+  });
+
+  it("handles state injection with max_prev=0 and max_next=0", () => {
+    const dirName = "ralph-state-zero-max";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const jsonlPath = join(testDir, "ralph-history.jsonl");
+    writeFileSync(jsonlPath, "entry-1\nentry-2\nentry-3\n");
+
+    const toml: RalphRulesToml = {
+      state_injection: {
+        source: "ralph-history.jsonl",
+        max_prev: 0,
+        max_next: 0,
+        show_status: false,
+        reminder: "",
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:state}}",
+      { iteration: 1 },
+      testDir,
+      toml,
+    );
+
+    // With both max at 0, should have the header but no sections
+    expect(result).toContain("## State Context");
+    expect(result).not.toContain("### Previous");
+    expect(result).not.toContain("### Next");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("handles state injection with only max_prev", () => {
+    const dirName = "ralph-state-prev-only";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const jsonlPath = join(testDir, "ralph-history.jsonl");
+    writeFileSync(jsonlPath, "entry-1\nentry-2\nentry-3\nentry-4\n");
+
+    const toml: RalphRulesToml = {
+      state_injection: {
+        source: "ralph-history.jsonl",
+        max_prev: 2,
+        max_next: 0,
+        show_status: false,
+        reminder: "",
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:state}}",
+      { iteration: 1 },
+      testDir,
+      toml,
+    );
+
+    expect(result).toContain("### Previous");
+    expect(result).toContain("entry-3");
+    expect(result).not.toContain("### Next");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("handles template with no inject placeholders at all", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        test: {
+          name: "test",
+          enabled: true,
+          entries: [{ at: 1, prompt: "test" }],
+        },
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "No placeholders here, just {{iteration}} and {do_it}.",
+      { iteration: 5 },
+      TMP_DIR,
+      toml,
+    );
+    expect(result).toBe("No placeholders here, just {{iteration}} and {do_it}.");
+  });
+});
+
+describe("resolveRulesTomlPath detailed", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("prefers stateDir TOML over cwd TOML", () => {
+    const dirName = "ralph-prefer-statedir";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    // Write TOML in stateDir
+    const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
+    writeFileSync(tomlPath, `[rules.test]\nname = "test"\nenabled = true\n`);
+
+    const resolved = resolveRulesTomlPath(testDir);
+    expect(resolved).toBe(tomlPath);
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("falls back to cwd when stateDir has no TOML", () => {
+    const dirName = "ralph-cwd-fallback";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const resolved = resolveRulesTomlPath(testDir);
+    // Should return a path that references cwd
+    expect(resolved).toContain(".ralph-ralph-cwd-fallback.toml");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+describe("loadRulesToml detailed", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("loads TOML with state_injection section", () => {
+    const dirName = "ralph-with-state";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
+    writeFileSync(
+      tomlPath,
+      `[state_injection]\nsource = "state.jsonl"\nmax_prev = 5\nmax_next = 3\nshow_status = true\nreminder = "Check state"
+
+[rules.test]\nname = "test"\nenabled = true
+
+[[rules.test.entries]]\nat = 2\nprompt = "Even iteration"
+`,
+    );
+
+    const result = loadRulesToml(testDir);
+    expect(result).not.toBeNull();
+    expect(result?.state_injection?.source).toBe("state.jsonl");
+    expect(result?.state_injection?.max_prev).toBe(5);
+    expect(result?.state_injection?.max_next).toBe(3);
+    expect(result?.state_injection?.show_status).toBe(true);
+    expect(result?.state_injection?.reminder).toBe("Check state");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("loads TOML with multiple rules", () => {
+    const dirName = "ralph-multi-rules";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
+    writeFileSync(
+      tomlPath,
+      `[rules.sync]\nname = "sync"\nenabled = true\n\n[[rules.sync.entries]]\nat = 5\nprompt = "Sync!"\n\n[rules.verify]\nname = "verify"\nenabled = true\n\n[[rules.verify.entries]]\nat = 7\nprompt = "Verify!"\n`,
+    );
+
+    const result = loadRulesToml(testDir);
+    expect(result).not.toBeNull();
+    expect(result?.rules?.sync?.entries?.[0]?.at).toBe(5);
+    expect(result?.rules?.verify?.entries?.[0]?.at).toBe(7);
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
 });
