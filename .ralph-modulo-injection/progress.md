@@ -1,70 +1,54 @@
 # Iteration 4 Progress
 
 ## State Check
-- Previous iterations completed all 8 tasks (T1-T8)
-- Iteration 3: 50 tests, 124 expect() calls, external review 8/10
-- Clean working tree at start, no demoted tasks, no problem_notes
+- All 8 tasks (T1-T8) completed in iterations 1-2
+- Iteration 3: 50 tests, 124 expect() calls
+- Iteration 4a: 72 tests, 189 expect() calls, external review 8/10
+- No demoted tasks, no problem_notes
 
-## Work Done
+## Work Done (This Iteration)
 
-### Coverage Uplift: 22 new tests (50→72, 124→189 expect() calls)
+### Bug Fix: Trailing-slash in stateDir (extractStateDirBasename)
+- `currentStateDir.replace(/.*[\/\\]/, "")` fails when stateDir has trailing slash
+- Extracted `extractStateDirBasename()` helper — strips trailing slashes before basename extraction
+- Fixed all 4 call sites (loadRulesToml, resolveRulesTomlPath, scaffoldRulesToml, --init-rules)
 
-Added 8 new describe blocks targeting untested paths and reviewer findings:
+### Fix: scaffoldRulesToml idempotency
+- `scaffoldRulesToml()` now checks if `[rules.name]` section already exists before appending
+- Prevents TOML corruption from duplicate sections
+- Returns informative message when section already present
 
-1. **loadRulesToml cwd fallback with real files** (2 tests)
-   - Finds TOML in cwd when not in stateDir (real `process.chdir()`)
-   - Prefers stateDir TOML over cwd TOML
+### Fix: replaceAll for literal safety
+- Changed `template.replace(full, ...)` → `template.replaceAll(full, ...)` in resolveInjectPlaceholders
+- Ensures all occurrences of same placeholder are resolved, and no regex-special char issues
 
-2. **resolveRulesTomlPath with real files** (2 tests)
-   - Resolves existing file in stateDir
-   - Returns cwd path when stateDir file missing
+### 9 New Tests (81→81, 189→202 expect() calls)
+1. **state injection — absolute source path** (2 tests)
+   - Uses absolute path as-is (Node resolve behavior)
+   - Resolves relative path against stateDir
 
-3. **State injection with special characters** (3 tests)
-   - Unicode content in JSONL (emoji, Japanese)
-   - TOML-breaking characters (brackets, hashes, quotes)
-   - Empty/whitespace-only line filtering
+2. **state injection — file read failure** (3 tests)
+   - Source points to a directory (EISDIR caught)
+   - Source file does not exist
+   - Source is empty string
 
-4. **scaffoldRulesToml idempotency** (2 tests)
-   - Duplicate section append (TOML parse error documented)
-   - Multi-section append builds valid config
+3. **resolveRulesTomlPath — edge cases** (4 tests)
+   - Handles stateDir with trailing slash
+   - Handles stateDir as '.' (current directory)
+   - Extracts basename correctly for deeply nested path
+   - Falls back to cwd path when no TOML in stateDir
 
-5. **Large iteration and boundary values** (3 tests)
-   - Very large iteration numbers (1000)
-   - Iteration 1 with at=1
-   - Multiple rules with 105=3*5*7
+4. **Updated idempotency test** — now verifies single section, parseable TOML
 
-6. **Mixed with non-inject placeholders** (2 tests)
-   - Preserves {{iteration}}, {{prompt}}, {{max_iterations}} untouched
-   - Inject at start and end of template
-
-7. **Duplicate placeholders in template** (2 tests)
-   - Resolves duplicate {{inject:name}} correctly
-   - Resolves duplicate {{inject:state}} correctly
-
-8. **loadRulesToml wrong shape** (2 tests)
-   - TOML where rules is string instead of object
-   - resolveInjectPlaceholders handles wrong-shape gracefully
-
-9. **findPlaceholderRules comprehensive** (2 tests)
-   - Scans all rules, returns first dirty
-   - Finds PLACEHOLDER even in disabled rules
-
-10. **getDefaultRulesToml structure** (2 tests)
-    - Contains all expected sections
-    - Parsed rules have correct structure
-
-### Reviewer Findings Addressed
-- Duplicate placeholder bug concern → tested, NOT a bug (`.replace()` loop handles it)
-- Wrong-shape TOML → tested, degrades gracefully (scaffolds missing rule)
-- Known limitation: duplicate scaffold sections corrupt TOML (documented in test)
+### Reviewer Findings
+- External review: 7/10 (with previous 8/10)
+- Issue #2 (regex-special chars): FIXED via replaceAll
+- Issue #5 (duplicate scaffolding): FIXED via idempotency check
+- Remaining: defensive checks on entries[].at (low priority)
 
 ## Test Results
-- `tests/deterministic-injection.test.ts`: **72 pass, 0 fail, 189 expect() calls**
-- Full suite: **1090 pass, 3 fail** (pre-existing stall-retry), **2068 expect() calls**
-
-## External Review
-- `claude -p` reviewer: **8/10** coverage quality
-- Remaining minor gaps: state injection absolute path, file read failure, edge cases in resolveRulesTomlPath
+- `tests/deterministic-injection.test.ts`: **81 pass, 0 fail, 202 expect() calls**
+- Full suite: **1099 pass, 27 skip, 3 fail** (pre-existing stall-retry), **2081 expect() calls**
 
 ## Modulo Checkpoints
 - I % 5 = 4: No SYNC
@@ -72,4 +56,4 @@ Added 8 new describe blocks targeting untested paths and reviewer findings:
 - I % 11 = 4: No mutation/CodeQL
 
 ## Commits
-- `c218e03` test: coverage uplift iteration 4 — 22 new tests (50→72), 189 expect() calls
+- `529bd74` fix: trailing-slash bug, idempotent scaffoldRulesToml, replaceAll for literal safety
