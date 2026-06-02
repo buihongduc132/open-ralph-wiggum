@@ -116,15 +116,17 @@ interface RalphRulesToml {
    - {{inject:*}} regex doesn't collide with {{iteration}} etc.
    - Append-mode scaffolding doesn't corrupt existing TOML
    - PLACEHOLDER gate fires on every iteration
-4. Record findings, DO NOT fix — next forward iteration fixes
-5. Commit
+4. DEMOTION RULE: any completed task with regression → demote to in_progress immediately
+5. Record findings, DO NOT fix — next forward iteration fixes
+6. Commit
 
 ### I % 11 == 0 (BACKWARD — Mutation + CodeQL, Consolidated)
 1. Run Stryker, sg-scan-all, CodeQL
 2. Classify survivors
-3. Record into inventory
-4. DO NOT fix — next forward iteration fixes
-5. Commit
+3. DEMOTION RULE: any completed task killed by mutation → demote to in_progress immediately
+4. Record into inventory
+5. DO NOT fix — next forward iteration fixes
+6. Commit
 
 ## Mandatories
 
