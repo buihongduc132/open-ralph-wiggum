@@ -1,32 +1,36 @@
-# Iteration 7 Progress (Fresh Run — Iteration 1)
+# Iteration 2 Progress
 
 ## State Check
-- Previous run (iterations 1-6) completed and verified all 8 tasks
-- All code is committed and pushed to origin
-- Working tree is clean
-- No demoted tasks, no problem_notes, no failing injection tests
+- Previous iterations (1-7 in prior run) completed all 8 tasks
+- Clean working tree at start
+- No demoted tasks, no problem_notes
 
-## Verification (Re-confirmed)
-- `bun test tests/deterministic-injection.test.ts`: **19 pass, 0 fail**
-- Full suite: **1037 pass, 3 fail** (pre-existing stall-retry — unrelated)
-- All 8 tasks (T1-T8) implementation verified against plan
+## Work Done
 
-## Task Status
-| Task | Description | Status |
-|------|-------------|--------|
-| T1 | TOML schema (RulesConfig, StateInjectionConfig, RalphRulesToml) | ✅ Complete |
-| T2 | loadRulesToml() — stateDir→cwd search, Bun.TOML.parse, null on missing | ✅ Complete |
-| T3 | buildPrompt() {{inject:*}} resolution — modulo check, state injection | ✅ Complete |
-| T4 | scaffoldRulesToml() — append mode, PLACEHOLDER prompts | ✅ Complete |
-| T5 | PLACEHOLDER gate — console.error + process.exit(1) every iteration | ✅ Complete |
-| T6 | --init-rules subcommand — writes to stateDir, no-op if exists | ✅ Complete |
-| T7 | ralph-run skill — 10 references to injection/toml | ✅ Complete |
-| T8 | Tests — 19 tests covering all functions | ✅ Complete |
+### Bug Fix: state injection edge case
+- `resolveInjectPlaceholders()` had a bug: when `max_next=0` and `max_prev>0`, `lines.slice(-N, -0)` returned empty because JS treats `-0` as `0` in slice end position
+- Fixed: use `lines.slice(-max_prev)` when `max_next==0`
 
-## Modulo Checkpoints (Iteration 1)
-- I % 5 = 1: No SYNC
-- I % 7 = 1: No BACKWARD
-- I % 11 = 1: No mutation/CodeQL
+### Coverage Uplift: 9 new tests (19→28)
+1. Multiple modulo entries matching at same iteration (e.g., iteration 15 for at=3 and at=5)
+2. Iteration 0 modulo check (0 % 1 == 0)
+3. State injection with max_prev=0 and max_next=0
+4. State injection with only max_prev (max_next=0) — exposed the bug
+5. Template with no inject placeholders at all
+6. resolveRulesTomlPath prefers stateDir over cwd
+7. resolveRulesTomlPath falls back to cwd
+8. loadRulesToml with state_injection section
+9. loadRulesToml with multiple rules
 
-## Conclusion
-All 8 implementation tasks are complete, verified, tested, committed, and pushed. No remaining work items. The goal is achieved.
+## Test Results
+- `tests/deterministic-injection.test.ts`: **28 pass, 0 fail**
+- Full suite: **1046 pass, 3 fail** (pre-existing stall-retry — requires compiled binary)
+- 1948 expect() calls
+
+## Modulo Checkpoints
+- I % 5 = 2: No SYNC
+- I % 7 = 2: No BACKWARD
+- I % 11 = 2: No mutation/CodeQL
+
+## Commits
+- `f0eb4b2` fix: edge-case state injection when max_next=0; add 9 coverage tests
