@@ -160,6 +160,10 @@ export interface RalphRuntimeConfig {
    reuse_skip_rotation?: boolean;
    reuse_skip_min_iterations?: boolean;
    reuse_skip_max_iterations?: boolean;
+   // Goal mode (opt-in)
+   goal?: string;
+   goal_dir?: string;
+   goal_promise?: string;
 }
 
 export const PARSE_PATTERNS: Record<string, (line: string) => string | null> = {
@@ -620,6 +624,10 @@ export function loadRuntimeTomlConfig(configPath: string, explicit: boolean): Ra
       config.reuse_skip_rotation = normalizeRuntimeConfigValue("reuse_skip_rotation", parsed.reuse_skip_rotation, "boolean") as boolean | undefined;
       config.reuse_skip_min_iterations = normalizeRuntimeConfigValue("reuse_skip_min_iterations", parsed.reuse_skip_min_iterations, "boolean") as boolean | undefined;
       config.reuse_skip_max_iterations = normalizeRuntimeConfigValue("reuse_skip_max_iterations", parsed.reuse_skip_max_iterations, "boolean") as boolean | undefined;
+      // Goal mode (opt-in)
+      config.goal = normalizeRuntimeConfigValue("goal", parsed.goal, "string") as string | undefined;
+      config.goal_dir = normalizeRuntimeConfigValue("goal_dir", parsed.goal_dir, "string") as string | undefined;
+      config.goal_promise = normalizeRuntimeConfigValue("goal_promise", parsed.goal_promise, "string") as string | undefined;
 
       if (config.prompt_file) {
          config.prompt_file = resolveConfigRelativePath(configPath, config.prompt_file);

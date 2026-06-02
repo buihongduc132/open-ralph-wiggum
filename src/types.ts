@@ -61,4 +61,8 @@ export interface RalphRuntimeConfig {
    extra_agent_flags?: string[];
    stall_retries?: boolean;
    stall_retry_minutes?: number;
+   // Goal mode (opt-in)
+   goal?: string;
+   goal_dir?: string;
+   goal_promise?: string;
 }
