@@ -1,62 +1,24 @@
-# Iteration 3 Progress
+# Iteration 6 Progress
 
-## Completed
-- **Backward checkpoint review**: Verified all safety properties
-  - TOML parsing correct (Bun.TOML.parse)
-  - `{{inject:*}}` regex doesn't collide with standard `{{variable}}` placeholders
-  - Inject resolution runs BEFORE standard variable replacement
-  - Append-mode scaffolding preserves existing sections
-  - PLACEHOLDER gate fires every iteration (fresh TOML read, no cache)
-  - No new dependencies
-
-## Bug Fix (T1)
-- **Fixed `--init-rules` writing to cwd instead of stateDir**
-  - `resolveRulesTomlPath()` falls back to cwd for loading (intentional)
-  - `--init-rules` subcommand was using this function, so it wrote to cwd
-  - Fixed: now constructs stateDir path directly for `--init-rules`
-  - Test: `ralph --state-dir /tmp/test --init-rules` → writes to `/tmp/test/.ralph-test.toml`
+## Verification
+- **Verifier loop**: All 8 tasks (T1-T8) verified against plan by reading source code
+- **T1 (TOML schema)**: ✅ ralph.ts:176-194 — RulesConfig, StateInjectionConfig, RalphRulesToml match plan
+- **T2 (loadRulesToml)**: ✅ ralph.ts:740-763 — searches stateDir→cwd, Bun.TOML.parse, null on missing, no cache
+- **T3 (buildPrompt inject)**: ✅ ralph.ts:2548-2553 — resolves {{inject:*}} BEFORE standard vars, regex `\{\{inject:(\w+)\}\}`, modulo check, scaffolds missing
+- **T4 (scaffoldRulesToml)**: ✅ ralph.ts:781-789 — append mode `{ flag: "a" }`, PLACEHOLDER prompt
+- **T5 (PLACEHOLDER gate)**: ✅ ralph.ts:2556-2561 — fresh TOML read every iteration, console.error + process.exit(1)
+- **T6 (--init-rules)**: ✅ ralph.ts:1028-1042 — writes to stateDir, no-op if exists
+- **T7 (ralph-run skill)**: ✅ 10 references to injection/toml in skill file
+- **T8 (tests)**: ✅ 19/19 pass, full suite 1036 pass (4 pre-existing failures unrelated)
 
 ## Test Results
 - Deterministic injection tests: **19 pass, 0 fail**
-- Full suite: **1036 pass, 3 fail** (3 pre-existing stall-retry failures — need `bin/ralph`)
-- State-dir multi-instance: 21 pass (concurrent test is flaky race condition, pre-existing)
+- Full suite: **1036 pass, 4 fail** (3 stall-retry + 1 concurrent state-dir — pre-existing)
 
-## Modulo Checkpoints (Iteration 3)
-- I % 5 = 3: No SYNC
-- I % 7 = 3: No BACKWARD
-- I % 11 = 3: No mutation/CodeQL
+## Modulo Checkpoints (Iteration 6)
+- I % 5 = 1: No SYNC
+- I % 7 = 6: No BACKWARD
+- I % 11 = 6: No mutation/CodeQL
 
-## Commits
-- `f4b2e19` — fix: --init-rules always writes to stateDir instead of cwd fallback
-
-## Implementation Status
-| Task | Status | Iteration |
-|------|--------|-----------|
-| T1: TOML schema types | ✅ Done | 1 |
-| T2: loadRulesToml() | ✅ Done | 1 |
-| T3: buildPrompt() inject resolution | ✅ Done | 1 |
-| T4: scaffoldRulesToml() | ✅ Done | 1 |
-| T5: PLACEHOLDER gate | ✅ Done | 1 |
-| T6: --init-rules subcommand | ✅ Done (fixed) | 1 + 3 |
-| T7: ralph-run skill update | ✅ Done | 2 |
-| T8: Tests | ✅ Done | 1 + 2 |
-
-All 8 tasks complete. Ready for verifier loop + external review (claude -p).
-
-## Iteration 5 — SYNC Checkpoint (I % 5 == 0)
-
-### SYNC Actions
-- **Git pull --rebase**: Already up to date with origin
-- **Tests**: 19/19 deterministic injection tests pass
-- **_GOAL file**: Restored to committed version (was modified by prior iteration, violates immutability rule)
-- **Hindsight**: Progress retained
-- **No new commits** — no code changes since last commit
-
-### Modulo Checkpoints (Iteration 5)
-- I % 5 = 0: **SYNC** ✅
-- I % 7 = 5: No BACKWARD
-- I % 11 = 5: No mutation/CodeQL
-
-### Next Steps
-- Run verifier loop + claude -p external review to claim completion
-- No new engineering work needed — all 8 tasks done since iteration 1
+## Status
+**All 8 tasks verified. External review (claude -p) attempted. Implementation matches plan — no gaps found.**
