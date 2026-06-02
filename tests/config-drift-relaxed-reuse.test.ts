@@ -91,12 +91,19 @@ function writeActiveState(overrides: Record<string, unknown> = {}) {
 
 function runRalph(args: string[], extraEnv: Record<string, string> = {}) {
    writeFakeAgentConfig();
+   // Strip RALPH_*_BINARY env vars that would override custom agent commands
+   const cleanEnv: Record<string, string | undefined> = { ...process.env };
+   for (const key of Object.keys(cleanEnv)) {
+      if (key.startsWith("RALPH_") && key.endsWith("_BINARY")) {
+         delete cleanEnv[key];
+      }
+   }
    return Bun.spawn({
       cmd: [bunPath, "run", ralphPath, "--no-commit", "--config", agentConfigPath, ...args],
       cwd: workDir,
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, NODE_ENV: "test", ...extraEnv },
+      env: { ...cleanEnv, NODE_ENV: "test", ...extraEnv },
    });
 }
 
@@ -138,10 +145,10 @@ describe("config-drift-relaxed-reuse", () => {
 
    it("RELAXED: agent drift is tolerated with RALPH_REUSE_CHECK=relaxed", async () => {
       writeFakeAgentConfig();
-      writeActiveState({ agent: "opencode", model: "gpt-4o" });
+      writeActiveState({ agent: "codex", model: "gpt-4o" });
 
       const proc = runRalph(
-         ["relaxed-agent", "--agent", "codex", "--model", "gpt-4o", "--max-iterations", "1"],
+         ["relaxed-agent", "--agent", "opencode", "--model", "gpt-4o", "--max-iterations", "1"],
          { RALPH_REUSE_CHECK: "relaxed" },
       );
       const stderr = await new Response(proc.stderr).text();
@@ -310,10 +317,10 @@ reuse_skip_model = false
 
    it("WARN: drift tolerated messages appear on stderr", async () => {
       writeFakeAgentConfig();
-      writeActiveState({ agent: "opencode", model: "claude-sonnet-4" });
+      writeActiveState({ agent: "codex", model: "claude-sonnet-4" });
 
       const proc = runRalph(
-         ["warn-drift", "--agent", "codex", "--model", "gpt-4o", "--max-iterations", "1"],
+         ["warn-drift", "--agent", "opencode", "--model", "gpt-4o", "--max-iterations", "1"],
          { RALPH_REUSE_CHECK: "relaxed" },
       );
       const stderr = await new Response(proc.stderr).text();
