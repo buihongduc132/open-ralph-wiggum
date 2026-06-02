@@ -102,6 +102,9 @@ export interface RalphState {
    stallRetries?: boolean;
    stallRetryMinutes?: number;
    fallbackBlacklist?: string[];
+   // Goal mode (opt-in, optional fields only)
+   goalSlug?: string;
+   goalPhase?: string;
 }
 
 export function loadState(statePath: string): RalphState | null {

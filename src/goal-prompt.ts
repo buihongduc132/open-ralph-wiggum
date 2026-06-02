@@ -120,9 +120,7 @@ export function formatGoalInventory(
    for (let i = 0; i < goals.length; i++) {
       const g = goals[i];
       const emoji = phaseEmoji(g.phase);
-      const status = g.phase === "done"
-         ? `${g.factsVerified}/${g.factsTotal} facts`
-         : `${g.factsVerified}/${g.factsTotal} facts`;
+      const status = `${g.factsVerified}/${g.factsTotal} facts`;
       lines.push(`  ${i + 1}. ${emoji} ${g.slug} — ${g.title} (${status})`);
    }
 
