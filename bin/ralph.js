@@ -3033,8 +3033,7 @@ Your answer: `, (answer) => {
       activityTracker.markLine();
       const tool = parseToolOutput(line);
       let outputLines;
-      const extraFlags = options.agent.extraFlags;
-      if (isJsonModeAgent(options.agent.type, extraFlags)) {
+      if (isJsonModeAgent(options.agent.type, options.extraFlags)) {
         const cfg = {
           mode: options.jsonDisplay ?? "beautify",
           agentType: options.agent.type,
@@ -3134,7 +3133,7 @@ Your answer: `, (answer) => {
             handleLine(line, isError, partialCharsDisplayed);
             partialCharsDisplayed = 0;
           }
-          if (options.flushPartialLines && !options.suppressOutput && !isJsonModeAgent(options.agent.type, options.agent.extraFlags) && buffer.length > partialCharsDisplayed) {
+          if (options.flushPartialLines && !options.suppressOutput && !isJsonModeAgent(options.agent.type, options.extraFlags) && buffer.length > partialCharsDisplayed) {
             writeOutput(buffer.slice(partialCharsDisplayed), isError);
             partialCharsDisplayed = buffer.length;
             lastPrintedAt = Date.now();
@@ -3708,7 +3707,8 @@ Gracefully stopping Ralph loop...`);
             flushPartialLines: !allowAllPermissions,
             outputBufferBytes,
             jsonDisplay,
-            verboseTools
+            verboseTools,
+            extraFlags: extraAgentFlags
           });
           currentHeartbeatTimer = null;
           currentAbortController = null;
@@ -3803,7 +3803,8 @@ Gracefully stopping Ralph loop...`);
             },
             outputBufferBytes,
             jsonDisplay,
-            verboseTools
+            verboseTools,
+            extraFlags: extraAgentFlags
           });
           currentHeartbeatTimer = null;
           result = buffered.stdoutText;
