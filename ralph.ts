@@ -914,7 +914,8 @@ Learn more: https://ghuntley.com/ralph/
 
    // Goal mode early-exit handlers
    if (args.includes("--list-goals")) {
-      const dir = args[args.indexOf("--list-goals") + 1] || process.cwd() + "/goals";
+      const nextArg = args[args.indexOf("--list-goals") + 1];
+      const dir = nextArg && !nextArg.startsWith("--") ? nextArg : join(process.cwd(), "goals");
       const inv = buildInventory(dir);
       console.log(formatGoalInventory(inv.goals));
       process.exit(0);
@@ -947,6 +948,45 @@ Learn more: https://ghuntley.com/ralph/
       }
       console.log(`✅ Created goal scaffold: ${goalDir}/`);
       process.exit(0);
+   }
+
+   // --goal-status handler: show current goal progress
+   if (args.includes("--goal-status")) {
+      // Find the goal path from --goal flag or --goal-dir flag
+      let statusGoalPath = "";
+      const goalIdx = args.indexOf("--goal");
+      if (goalIdx !== -1 && args[goalIdx + 1] && !args[goalIdx + 1].startsWith("--")) {
+         statusGoalPath = args[goalIdx + 1];
+      } else {
+         const goalDirIdx = args.indexOf("--goal-dir");
+         if (goalDirIdx !== -1 && args[goalDirIdx + 1] && !args[goalDirIdx + 1].startsWith("--")) {
+            const dir = args[goalDirIdx + 1];
+            const inv = buildInventory(dir);
+            const next = findNextActionableGoal(inv);
+            if (!next) {
+               console.error("No active goals found in " + dir);
+               process.exit(1);
+            }
+            statusGoalPath = join(dir, next.slug, "goal.md");
+         }
+      }
+
+      if (!statusGoalPath || !existsSync(statusGoalPath)) {
+         console.error("Error: --goal-status requires --goal <path> or --goal-dir <dir> with an active goal");
+         process.exit(1);
+      }
+
+      try {
+         const slug = basename(dirname(statusGoalPath));
+         const goal = parseGoalMd(statusGoalPath, slug);
+         const goalStatePath = join(dirname(statusGoalPath), "goal.state.json");
+         const goalState = loadGoalState(goalStatePath) ?? createGoalState(slug);
+         console.log(formatGoalStatus(goal, goalState));
+         process.exit(0);
+      } catch (err) {
+         console.error(`Error: Failed to load goal: ${err}`);
+         process.exit(1);
+      }
    }
 
    const runtimeTomlConfig = loadRuntimeTomlConfig(tomlConfigPath, explicitTomlConfigPath);
@@ -3372,6 +3412,18 @@ Unable to read ${currentTasksFileLabel()}
 ║         Iterative AI Development with ${agentConfig.configName.padEnd(20, " ")}        ║
 ╚══════════════════════════════════════════════════════════════════╝
 `);
+
+      // Auto-select next actionable goal from --goal-dir if --goal not specified
+      if (!goalPath && goalDir) {
+         const inv = buildInventory(goalDir);
+         const next = findNextActionableGoal(inv);
+         if (next) {
+            goalPath = join(goalDir, next.slug, "goal.md");
+            console.log(`📋 Auto-selected goal: ${next.slug} (${next.phase})`);
+         } else {
+            console.warn("Warning: No actionable goals found in " + goalDir);
+         }
+      }
 
       // Compute goal slug from path (for goal mode)
       const goalSlug = goalPath ? basename(dirname(goalPath)) : "";
