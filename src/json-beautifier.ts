@@ -280,6 +280,8 @@ function claudeResult(p: Record<string, unknown>, cfg: BeautifierConfig): string
 }
 
 function claudeError(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
+  if (!cfg.showError) return [];
+
   let message: string;
   if (p.error && typeof p.error === "object") {
     const err = p.error as Record<string, unknown>;

@@ -3,7 +3,7 @@
  */
 
 const ANSI_PATTERN = /\[[0-9;]*[A-Za-z]/g;
-import { extractJsonCompletionText, hasJsonAdapter } from "./src/json-beautifier";
+import { extractJsonCompletionText, hasJsonAdapter, isJsonModeAgent } from "./src/json-beautifier";
 
 export function stripAnsi(input: string): string {
   return input.replace(ANSI_PATTERN, "");
@@ -69,9 +69,9 @@ export function tasksMarkdownAllComplete(tasksMarkdown: string): boolean {
   return sawTask;
 }
 
-export function extractAgentCompletionText(output: string, agentType: string): string {
-  // Non-JSON agents: return raw output unchanged
-  if (!hasJsonAdapter(agentType)) return output;
+export function extractAgentCompletionText(output: string, agentType: string, extraFlags?: string[]): string {
+  // Non-JSON agents without JSON flags: return raw output unchanged
+  if (!hasJsonAdapter(agentType) && !isJsonModeAgent(agentType, extraFlags)) return output;
 
   const displayLines: string[] = [];
   for (const rawLine of output.split(/\r?\n/)) {
