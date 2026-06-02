@@ -1326,26 +1326,29 @@ describe("scaffoldRulesToml idempotency", () => {
   beforeAll(() => ensureTmpDir());
   afterAll(() => cleanupTmpDir());
 
-  it("appending duplicate section creates unparseable TOML (known limitation)", () => {
+  it("idempotent — skips duplicate section append", () => {
     const dirName = "ralph-dup";
     const testDir = join(TMP_DIR, dirName);
     mkdirSync(testDir, { recursive: true });
 
     // Scaffold the same section twice
-    scaffoldRulesToml("duprule", testDir);
-    scaffoldRulesToml("duprule", testDir);
+    const msg1 = scaffoldRulesToml("duprule", testDir);
+    const msg2 = scaffoldRulesToml("duprule", testDir);
+
+    // Second call should return the idempotency message
+    expect(msg1).toContain("SCAFFOLDED");
+    expect(msg2).toContain("already exists");
 
     const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
     const content = readFileSync(tomlPath, "utf-8");
 
-    // Both occurrences should be present in raw text
+    // Only ONE occurrence should exist
     const matches = content.match(/\[rules\.duprule\]/g);
     expect(matches).not.toBeNull();
-    expect(matches!.length).toBe(2);
+    expect(matches!.length).toBe(1);
 
-    // Bun.TOML does NOT support duplicate keys — this WILL throw
-    // This is a known limitation: scaffoldRulesToml does not check for existing sections
-    expect(() => Bun.TOML.parse(content)).toThrow();
+    // Should be parseable
+    expect(() => Bun.TOML.parse(content)).not.toThrow();
 
     rmSync(testDir, { recursive: true, force: true });
   });
@@ -1686,6 +1689,228 @@ describe("loadRulesToml — wrong shape", () => {
     );
     // Should scaffold since rules is not an object
     expect(result).toContain("SCAFFOLDED");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Reviewer gap coverage: absolute path, file read failure, edge cases
+// ─────────────────────────────────────────────────────────────
+
+describe("state injection — absolute source path", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("uses absolute source path as-is (Node resolve behavior)", () => {
+    const dirName = "ralph-abs-source";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    // Create a state file in a completely different location
+    const externalDir = join(TMP_DIR, "external-state-location");
+    mkdirSync(externalDir, { recursive: true });
+    const externalFile = join(externalDir, "history.jsonl");
+    writeFileSync(externalFile, "entry-alpha\nentry-beta\n");
+
+    const toml: RalphRulesToml = {
+      rules: {},
+      state_injection: {
+        source: externalFile, // absolute path
+        max_next: 2,
+        max_prev: 0,
+        show_status: false,
+        reminder: "",
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:state}}",
+      { iteration: 1 },
+      testDir,
+      toml,
+    );
+
+    expect(result).toContain("entry-alpha");
+    expect(result).toContain("entry-beta");
+
+    rmSync(testDir, { recursive: true, force: true });
+    rmSync(externalDir, { recursive: true, force: true });
+  });
+
+  it("resolves relative source path against stateDir", () => {
+    const dirName = "ralph-rel-source";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    // Relative path — should resolve against stateDir
+    writeFileSync(join(testDir, "my-state.jsonl"), "rel-entry-1\nrel-entry-2\n");
+
+    const toml: RalphRulesToml = {
+      rules: {},
+      state_injection: {
+        source: "my-state.jsonl", // relative — resolves against stateDir
+        max_next: 0,
+        max_prev: 5,
+        show_status: false,
+        reminder: "",
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:state}}",
+      { iteration: 1 },
+      testDir,
+      toml,
+    );
+
+    expect(result).toContain("rel-entry-1");
+    expect(result).toContain("rel-entry-2");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+describe("state injection — file read failure", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("returns empty string when source points to a directory", () => {
+    const dirName = "ralph-source-is-dir";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    // Create a directory where the source file should be
+    const dirAsSource = join(testDir, "state.jsonl");
+    mkdirSync(dirAsSource, { recursive: true });
+
+    const toml: RalphRulesToml = {
+      rules: {},
+      state_injection: {
+        source: "state.jsonl",
+        max_next: 2,
+        max_prev: 2,
+        show_status: false,
+        reminder: "",
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:state}}",
+      { iteration: 1 },
+      testDir,
+      toml,
+    );
+
+    // readFileSync on a directory throws EISDIR → caught → returns ""
+    expect(result).toBe("");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("returns empty string when source file does not exist", () => {
+    const dirName = "ralph-source-missing";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const toml: RalphRulesToml = {
+      rules: {},
+      state_injection: {
+        source: "nonexistent.jsonl",
+        max_next: 2,
+        max_prev: 2,
+        show_status: false,
+        reminder: "",
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:state}}",
+      { iteration: 1 },
+      testDir,
+      toml,
+    );
+
+    expect(result).toBe("");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("returns empty string when source is empty string", () => {
+    const dirName = "ralph-source-empty";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const toml: RalphRulesToml = {
+      rules: {},
+      state_injection: {
+        source: "",
+        max_next: 2,
+        max_prev: 2,
+        show_status: false,
+        reminder: "",
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:state}}",
+      { iteration: 1 },
+      testDir,
+      toml,
+    );
+
+    expect(result).toBe("");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+describe("resolveRulesTomlPath — edge cases", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("handles stateDir with trailing slash", () => {
+    const dirName = "ralph-trailing-slash";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    // Create the TOML file
+    writeFileSync(join(testDir, `.ralph-${dirName}.toml`), 'rules = {}\n');
+
+    const path = resolveRulesTomlPath(testDir + "/");
+    expect(path).toContain(`.ralph-${dirName}.toml`);
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("handles stateDir as '.' (current directory)", () => {
+    const result = resolveRulesTomlPath(".");
+    // Should produce .ralph-..toml in cwd
+    expect(result).toContain(".ralph-..toml");
+  });
+
+  it("extracts basename correctly for nested path", () => {
+    const dirName = "deep-nested-state";
+    const testDir = join(TMP_DIR, "a", "b", dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    writeFileSync(join(testDir, `.ralph-${dirName}.toml`), 'rules = {}\n');
+
+    const path = resolveRulesTomlPath(testDir);
+    expect(path).toContain(`.ralph-${dirName}.toml`);
+
+    rmSync(join(TMP_DIR, "a"), { recursive: true, force: true });
+  });
+
+  it("falls back to cwd path when no TOML in stateDir", () => {
+    const dirName = "ralph-no-toml-here";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+    // No TOML created in testDir
+
+    const path = resolveRulesTomlPath(testDir);
+    // Falls back to cwd-based path
+    expect(path).toContain(`.ralph-${dirName}.toml`);
 
     rmSync(testDir, { recursive: true, force: true });
   });

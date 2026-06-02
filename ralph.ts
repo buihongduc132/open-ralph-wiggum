@@ -737,8 +737,12 @@ export function loadRuntimeTomlConfig(configPath: string, explicit: boolean): Ra
  * Returns null if not found (opt-in — no file = no injection).
  * No caching — reads fresh every iteration.
  */
+function extractStateDirBasename(dir: string): string {
+   return dir.replace(/[/\\]+$/, "").replace(/.*[\/\\]/, "") || dir;
+}
+
 export function loadRulesToml(currentStateDir: string): RalphRulesToml | null {
-   const stateDirName = currentStateDir.replace(/.*[\/\\]/, "") || currentStateDir;
+   const stateDirName = extractStateDirBasename(currentStateDir);
    const tomlName = `.ralph-${stateDirName}.toml`;
 
    // Search state-dir first, then cwd
@@ -767,7 +771,7 @@ export function loadRulesToml(currentStateDir: string): RalphRulesToml | null {
  * Returns the path in stateDir if stateDir is set, else cwd.
  */
 export function resolveRulesTomlPath(currentStateDir: string): string {
-   const stateDirName = currentStateDir.replace(/.*[\/\\]/, "") || currentStateDir;
+   const stateDirName = extractStateDirBasename(currentStateDir);
    const tomlName = `.ralph-${stateDirName}.toml`;
    if (existsSync(join(currentStateDir, tomlName))) return join(currentStateDir, tomlName);
    return join(process.cwd(), tomlName);
@@ -779,10 +783,19 @@ export function resolveRulesTomlPath(currentStateDir: string): string {
  * Always writes to the state directory (not cwd).
  */
 export function scaffoldRulesToml(rulesName: string, currentStateDir: string): string {
-   const stateDirName = currentStateDir.replace(/.*[\/\\]/, "") || currentStateDir;
+   const stateDirName = extractStateDirBasename(currentStateDir);
    const tomlPath = join(currentStateDir, `.ralph-${stateDirName}.toml`);
    const tomlDir = dirname(tomlPath);
    if (!existsSync(tomlDir)) mkdirSync(tomlDir, { recursive: true });
+
+   // Idempotency: skip if section already exists
+   if (existsSync(tomlPath)) {
+      const existing = readFileSync(tomlPath, "utf-8");
+      if (existing.includes(`[rules.${rulesName}]`)) {
+         return `⚠️ Section [rules.${rulesName}] already exists in ${tomlPath} — not appending duplicate.`;
+      }
+   }
+
    const section = `\n[rules.${rulesName}]\nname = "${rulesName}"\nenabled = true\n\n[[rules.${rulesName}.entries]]\nat = 1\nprompt = "PLACEHOLDER: configure rules.${rulesName} entries"\n`;
 
    writeFileSync(tomlPath, section, { flag: "a" });
@@ -858,12 +871,12 @@ export function resolveInjectPlaceholders(
       if (!rule) {
          // Scaffold missing section
          const placeholder = scaffoldRulesToml(name, currentStateDir);
-         template = template.replace(full, placeholder);
+         template = template.replaceAll(full, placeholder);
          continue;
       }
 
       if (!rule.enabled || !rule.entries?.length) {
-         template = template.replace(full, `<!-- inject:${name} disabled or empty -->`);
+         template = template.replaceAll(full, `<!-- inject:${name} disabled or empty -->`);
          continue;
       }
 
@@ -873,9 +886,9 @@ export function resolveInjectPlaceholders(
          .map(e => e.prompt);
 
       if (activePrompts.length === 0) {
-         template = template.replace(full, `<!-- inject:${name} no active entries at iteration ${state.iteration} -->`);
+         template = template.replaceAll(full, `<!-- inject:${name} no active entries at iteration ${state.iteration} -->`);
       } else {
-         template = template.replace(full, activePrompts.join("\n\n"));
+         template = template.replaceAll(full, activePrompts.join("\n\n"));
       }
    }
 
@@ -1028,7 +1041,7 @@ if (import.meta.main) {
    // Always writes to stateDir (not cwd).
    // ────────────────────────────────────────────────────────────────────
    if (args.includes("--init-rules")) {
-      const stateDirName = stateDir.replace(/.*[\/\\]/, "") || stateDir;
+      const stateDirName = extractStateDirBasename(stateDir);
       const tomlName = `.ralph-${stateDirName}.toml`;
       const tomlPath = join(stateDir, tomlName);
       if (existsSync(tomlPath)) {
