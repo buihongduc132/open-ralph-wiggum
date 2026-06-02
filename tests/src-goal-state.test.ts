@@ -326,6 +326,20 @@ describe("loadGoalState — deeper schema validation", () => {
       expect(loadGoalState(path)).toBeNull();
    });
 
+   it("returns null when lastIterationAt is missing", () => {
+      const path = statePath("no-last-iter");
+      require("fs").writeFileSync(path, JSON.stringify({
+         slug: "test",
+         phase: "planning",
+         startedAt: "2026-01-01",
+         iterations: 0,
+         facts: {},
+         planSteps: {},
+         completionPromise: "COMPLETE",
+      }), "utf-8");
+      expect(loadGoalState(path)).toBeNull();
+   });
+
    it("returns null when completionPromise is missing", () => {
       const path = statePath("no-promise");
       require("fs").writeFileSync(path, JSON.stringify({

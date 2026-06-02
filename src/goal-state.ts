@@ -82,6 +82,7 @@ export function loadGoalState(filePath: string): GoalState | null {
          typeof parsed?.phase !== "string" ||
          !VALID_PHASE_SET.has(parsed.phase) ||
          typeof parsed?.startedAt !== "string" ||
+         typeof parsed?.lastIterationAt !== "string" ||
          typeof parsed?.completionPromise !== "string"
       ) {
          return null;
