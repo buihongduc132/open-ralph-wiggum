@@ -1,36 +1,62 @@
-# Iteration 2 Progress
+# Iteration 3 Progress
 
 ## State Check
-- Previous iterations (1-7 in prior run) completed all 8 tasks
-- Clean working tree at start
-- No demoted tasks, no problem_notes
+- Previous iterations completed all 8 tasks (T1-T8)
+- Iteration 2 fixed state injection bug + added 9 coverage tests (19→28)
+- Clean working tree at start, no demoted tasks, no problem_notes
 
 ## Work Done
 
-### Bug Fix: state injection edge case
-- `resolveInjectPlaceholders()` had a bug: when `max_next=0` and `max_prev>0`, `lines.slice(-N, -0)` returned empty because JS treats `-0` as `0` in slice end position
-- Fixed: use `lines.slice(-max_prev)` when `max_next==0`
+### Coverage Uplift: 22 new tests (28→50, 69→124 expect() calls)
 
-### Coverage Uplift: 9 new tests (19→28)
-1. Multiple modulo entries matching at same iteration (e.g., iteration 15 for at=3 and at=5)
-2. Iteration 0 modulo check (0 % 1 == 0)
-3. State injection with max_prev=0 and max_next=0
-4. State injection with only max_prev (max_next=0) — exposed the bug
-5. Template with no inject placeholders at all
-6. resolveRulesTomlPath prefers stateDir over cwd
-7. resolveRulesTomlPath falls back to cwd
-8. loadRulesToml with state_injection section
-9. loadRulesToml with multiple rules
+Added 5 new describe blocks targeting untested paths:
+
+1. **loadRulesToml error handling** (2 tests)
+   - Corrupt TOML → returns null
+   - Empty TOML → returns empty object
+
+2. **resolveInjectPlaceholders edge cases** (11 tests)
+   - at=0 guard (modulo check rejects)
+   - Negative at guard
+   - Undefined at guard
+   - show_status=false (reminder suppressed)
+   - show_status=true + reminder
+   - Empty JSONL file
+   - Mixed valid/invalid entries in same rule
+   - All entries filtered by modulo
+   - Null TOML (scaffolds)
+   - No state_injection config → empty string
+   - 3 state injection slicing tests (mid-file, short file, max_next only)
+
+3. **scaffoldRulesToml edge cases** (3 tests)
+   - Creates directory if missing
+   - Returns scaffold message with section name
+   - Appends without overwriting existing content
+
+4. **findPlaceholderRules edge cases** (4 tests)
+   - Second rule dirty (first clean)
+   - Empty entries array
+   - No entries field
+   - Partial PLACEHOLDER in prompt
+
+5. **State injection slicing** (3 tests)
+   - Mid-file with max_prev + max_next
+   - File shorter than max_prev + max_next
+   - Only max_next (max_prev=0)
 
 ## Test Results
-- `tests/deterministic-injection.test.ts`: **28 pass, 0 fail**
-- Full suite: **1046 pass, 3 fail** (pre-existing stall-retry — requires compiled binary)
-- 1948 expect() calls
+- `tests/deterministic-injection.test.ts`: **50 pass, 0 fail, 124 expect() calls**
+- Full suite: **1068 pass, 3 fail** (pre-existing stall-retry), **2003 expect() calls**
+
+## External Review
+- `claude -p` verifier: **APPROVED** — all 7 items reviewed, no blockers
+- 4 low-severity observations noted (JSONL injection, PLACEHOLDER one-iteration gap, dead export, untested edge cases)
 
 ## Modulo Checkpoints
-- I % 5 = 2: No SYNC
-- I % 7 = 2: No BACKWARD
-- I % 11 = 2: No mutation/CodeQL
+- I % 5 = 3: No SYNC
+- I % 7 = 3: No BACKWARD
+- I % 11 = 3: No mutation/CodeQL
 
 ## Commits
-- `f0eb4b2` fix: edge-case state injection when max_next=0; add 9 coverage tests
+- `8751d1d` test: coverage uplift iteration 3 — 22 new tests (28→50), 124 expect() calls
+- `5ce5673` chore: update progress for iteration 3
