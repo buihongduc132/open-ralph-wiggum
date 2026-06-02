@@ -5,8 +5,17 @@
  * produced by agents running in JSON mode (claude --output-format stream-json, etc.).
  */
 
-import chalk from "chalk";
 import { stripAnsi } from "../completion";
+
+// ─── ANSI Colors (zero deps — chalk not available) ─────────────────────────────
+
+const ANSI = {
+  cyan: (s: string) => `\x1b[36m${s}\x1b[0m`,
+  yellow: (s: string) => `\x1b[33m${s}\x1b[0m`,
+  gray: (s: string) => `\x1b[90m${s}\x1b[0m`,
+  green: (s: string) => `\x1b[32m${s}\x1b[0m`,
+  red: (s: string) => `\x1b[31m${s}\x1b[0m`,
+} as const;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -146,7 +155,7 @@ function claudeAssistant(p: Record<string, unknown>, cfg: BeautifierConfig): str
   if (!msg || typeof msg !== "object") return lines;
 
   const model = typeof msg.model === "string" ? msg.model : "unknown";
-  lines.push(chalk.cyan(`🤖 ${model}`));
+  lines.push(ANSI.cyan(`🤖 ${model}`));
 
   const content = msg.content;
   if (Array.isArray(content)) {
@@ -156,7 +165,7 @@ function claudeAssistant(p: Record<string, unknown>, cfg: BeautifierConfig): str
       if (b.type === "tool_use") {
         // tool_use blocks in assistant content — show name only if verboseTools
         if (cfg.verboseTools && typeof b.name === "string") {
-          lines.push(chalk.yellow(`🔧 ${b.name}`));
+          lines.push(ANSI.yellow(`🔧 ${b.name}`));
         }
         continue;
       }
@@ -164,7 +173,7 @@ function claudeAssistant(p: Record<string, unknown>, cfg: BeautifierConfig): str
         if (cfg.showThinking) {
           for (const s of b.thinking.split(/\r?\n/)) {
             const trimmed = s.trim();
-            if (trimmed) lines.push(chalk.gray(`💭 ${trimmed}`));
+            if (trimmed) lines.push(ANSI.gray(`💭 ${trimmed}`));
           }
         }
         continue;
@@ -191,7 +200,7 @@ function claudeAssistant(p: Record<string, unknown>, cfg: BeautifierConfig): str
     if (typeof delta.thinking === "string" && cfg.showThinking) {
       for (const s of (delta.thinking as string).split(/\r?\n/)) {
         const trimmed = s.trim();
-        if (trimmed) lines.push(chalk.gray(`💭 ${trimmed}`));
+        if (trimmed) lines.push(ANSI.gray(`💭 ${trimmed}`));
       }
     }
   }
@@ -211,7 +220,7 @@ function claudeContentBlockDelta(p: Record<string, unknown>, cfg: BeautifierConf
     if (typeof delta.thinking === "string") {
       for (const s of (delta.thinking as string).split(/\r?\n/)) {
         const trimmed = s.trim();
-        if (trimmed) lines.push(chalk.gray(`💭 ${trimmed}`));
+        if (trimmed) lines.push(ANSI.gray(`💭 ${trimmed}`));
       }
     }
     return lines;
@@ -237,7 +246,7 @@ function claudeContentBlockStart(p: Record<string, unknown>, cfg: BeautifierConf
   if (cbType === "tool_use") {
     if (!cfg.verboseTools) return [];
     const name = typeof cb.name === "string" ? cb.name : "unknown";
-    return [chalk.yellow(`🔧 ${name}`)];
+    return [ANSI.yellow(`🔧 ${name}`)];
   }
 
   // text blocks and others → suppress
@@ -254,11 +263,11 @@ function claudeResult(p: Record<string, unknown>, cfg: BeautifierConfig): string
     const costStr = costUsd < 0.01 ? `$${costUsd.toFixed(4)}` : `$${costUsd.toFixed(2)}`;
 
     const lines: string[] = [];
-    lines.push(chalk.green(`✅ ${result} (${seconds}s, ${costStr})`));
+    lines.push(ANSI.green(`✅ ${result} (${seconds}s, ${costStr})`));
     return lines;
   }
 
-  return [chalk.green(`✅ ${result}`)];
+  return [ANSI.green(`✅ ${result}`)];
 }
 
 function claudeError(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
@@ -274,7 +283,7 @@ function claudeError(p: Record<string, unknown>, cfg: BeautifierConfig): string[
     message = message.slice(0, cfg.maxErrorLength) + "...";
   }
 
-  return [chalk.red(`❌ ${message}`)];
+  return [ANSI.red(`❌ ${message}`)];
 }
 
 function claudeRetry(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
@@ -299,7 +308,7 @@ function claudeRetry(p: Record<string, unknown>, cfg: BeautifierConfig): string[
   const parts = [`🔄 Retry ${attempt}/${maxAttempts} in ${delayStr}`];
   if (lastError) parts.push(`(${lastError})`);
 
-  return [chalk.yellow(parts.join(" "))];
+  return [ANSI.yellow(parts.join(" "))];
 }
 
 // ─── Generic Adapter ────────────────────────────────────────────────────────
@@ -309,7 +318,7 @@ function genericAdapter(p: Record<string, unknown>): string[] {
   if (p.error && typeof p.error === "object") {
     const err = p.error as Record<string, unknown>;
     if (typeof err.message === "string") {
-      return [chalk.red(`❌ ${err.message}`)];
+      return [ANSI.red(`❌ ${err.message}`)];
     }
   }
 
@@ -320,7 +329,7 @@ function genericAdapter(p: Record<string, unknown>): string[] {
 
   // String error
   if (typeof p.error === "string") {
-    return [chalk.red(`❌ ${p.error}`)];
+    return [ANSI.red(`❌ ${p.error}`)];
   }
 
   // Nothing useful → return raw
