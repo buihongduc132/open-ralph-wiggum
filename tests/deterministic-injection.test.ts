@@ -1374,6 +1374,96 @@ describe("scaffoldRulesToml idempotency", () => {
   });
 });
 
+describe("F4 fix — scaffold idempotency ignores comments", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("does NOT skip scaffold when [rules.X] appears only in a comment", () => {
+    const dirName = "ralph-f4";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    // Write a TOML file that mentions [rules.sync] in a comment but has NO actual section
+    const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
+    writeFileSync(tomlPath, `# See [rules.sync] for details about sync rules\n# Another comment about [rules.sync]\n`);
+
+    const msg = scaffoldRulesToml("sync", testDir);
+
+    // Should scaffold, NOT skip (the old substring match would have skipped)
+    expect(msg).toContain("SCAFFOLDED");
+    expect(msg).not.toContain("already exists");
+
+    const content = readFileSync(tomlPath, "utf-8");
+    // Should now have the actual section appended
+    expect(content).toContain("[rules.sync]");
+    expect(content).toContain("PLACEHOLDER");
+
+    // Should be parseable
+    expect(() => Bun.TOML.parse(content)).not.toThrow();
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("still skips scaffold when section genuinely exists (real TOML header)", () => {
+    const dirName = "ralph-f4-real";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    // Write a TOML file with an actual [rules.sync] section
+    const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
+    writeFileSync(tomlPath, `[rules.sync]\nname = "sync"\nenabled = true\n\n[[rules.sync.entries]]\nat = 5\nprompt = "Do sync"\n`);
+
+    const msg = scaffoldRulesToml("sync", testDir);
+
+    // Should skip, not scaffold again
+    expect(msg).toContain("already exists");
+    expect(msg).not.toContain("SCAFFOLDED");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("does NOT skip when section name is a substring of another section", () => {
+    const dirName = "ralph-f4-sub";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    // Write a TOML file with [rules.sync-backward] but NOT [rules.sync]
+    const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
+    writeFileSync(tomlPath, `[rules.sync-backward]\nname = "sync-backward"\nenabled = true\n\n[[rules.sync-backward.entries]]\nat = 7\nprompt = "Do audit"\n`);
+
+    const msg = scaffoldRulesToml("sync", testDir);
+
+    // Should scaffold sync (not confused by sync-backward)
+    expect(msg).toContain("SCAFFOLDED");
+    expect(msg).not.toContain("already exists");
+
+    const content = readFileSync(tomlPath, "utf-8");
+    expect(content).toContain("[rules.sync]\n");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("handles rule name with hyphens and underscores correctly", () => {
+    const dirName = "ralph-f4-hyphen";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    // Scaffold a rule with hyphens
+    const msg1 = scaffoldRulesToml("my-cool_rule", testDir);
+    expect(msg1).toContain("SCAFFOLDED");
+
+    // Scaffold again — should skip (idempotent)
+    const msg2 = scaffoldRulesToml("my-cool_rule", testDir);
+    expect(msg2).toContain("already exists");
+
+    // A similar-but-different name should still scaffold
+    const msg3 = scaffoldRulesToml("my-cool", testDir);
+    expect(msg3).toContain("SCAFFOLDED");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
 describe("resolveInjectPlaceholders — large iteration and boundary values", () => {
   it("handles very large iteration numbers", () => {
     const toml: RalphRulesToml = {

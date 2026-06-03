@@ -790,10 +790,15 @@ export function scaffoldRulesToml(rulesName: string, currentStateDir: string): s
    const tomlDir = dirname(tomlPath);
    if (!existsSync(tomlDir)) mkdirSync(tomlDir, { recursive: true });
 
-   // Idempotency: skip if section already exists
+   // Idempotency: skip if section already exists as an actual TOML header
+   // Use regex to avoid false-positives from comments like "# See [rules.sync] for details"
+   // or from section names that are substrings of other sections (e.g., [rules.sync-backward])
    if (existsSync(tomlPath)) {
       const existing = readFileSync(tomlPath, "utf-8");
-      if (existing.includes(`[rules.${rulesName}]`)) {
+      // Match [rules.X] at line start, not inside comments or other sections
+      // \n ensures we match the section header boundary, [^\n\]] ensures exact name match
+      const headerRegex = new RegExp(`(?<=^|\n)\\[rules\\.${rulesName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\](?=\\n|$)`);
+      if (headerRegex.test(existing)) {
          return `⚠️ Section [rules.${rulesName}] already exists in ${tomlPath} — not appending duplicate.`;
       }
    }
