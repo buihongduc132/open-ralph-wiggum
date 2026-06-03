@@ -1,4 +1,4 @@
-# Iteration 15 Progress (FORWARD — I % 5 == 0: SYNC)
+# Iteration 16 Progress (FORWARD)
 
 ## State Check
 - All 8 tasks (T1-T8) completed since iteration 4
@@ -6,46 +6,29 @@
 - No inventory problems, no failing tests
 
 ## Modulo Checkpoint
-- I % 5 = 0: **SYNC — Lateral Alignment** (git pull, push, retain hindsight)
-- I % 7 = 1: No backward audit
-- I % 11 = 4: No mutation audit
+- I % 5 = 1: No SYNC
+- I % 7 = 2: No backward audit
+- I % 11 = 5: No mutation audit
 
 ## Work Done (This Iteration)
 
-### 1. F1 Hardening — Runtime Schema Validation
-- Added `validateRulesToml()` function (exported)
-- Validates: rules entries (name string, enabled boolean, entries array, at positive number, prompt string)
-- Validates: state_injection fields (source string, max_next/max_prev non-negative, show_status boolean, reminder string)
-- Returns warning strings array, non-throwing
-- Integrated into `loadRulesToml()` — warns on bad schema but doesn't reject
-- 12 new tests
+### F9 Fix — PLACEHOLDER Gate Catches Newly Scaffolded Sections
 
-### 2. F2 Hardening — Corrupt TOML Warning
-- `loadRulesToml()` now `console.warn()` on corrupt TOML files
-- Shows file path and error message
-- 3 new tests (corrupt, valid, missing)
+**Problem**: When `resolveInjectPlaceholders` encounters a `{{inject:<name>}}` for a rule not present in the TOML, it calls `scaffoldRulesToml()` which writes a PLACEHOLDER section to disk. However, the PLACEHOLDER gate checked the **original in-memory** TOML object (loaded before injection), so the gate missed the newly scaffolded section on the current iteration. It would only catch it on the **next** iteration.
 
-### 3. F5 Hardening — No Double Newlines on Append
-- `scaffoldRulesToml()` reads existing file once (optimization from 2 reads → 1)
-- Checks trailing newline before appending
-- Only adds separator newline if file doesn't already end with one
-- 4 new tests
+**Fix**: After `resolveInjectPlaceholders`, the gate now re-loads the TOML from disk (`loadRulesToml(stateDir)`) before checking for PLACEHOLDERs. This ensures newly scaffolded sections are caught immediately, closing the one-iteration gap.
 
-### 4. Coverage Uplift — validateRulesToml state_injection fields
-- Negative `max_next` warning
-- Non-string `reminder` warning
-- Non-boolean `show_status` warning
-- 3 new tests, fills last gaps in schema validation coverage
-
-## SYNC Ceremony
-- ✅ `git pull --rebase` — already up to date
-- ✅ Hindsight retain — stored iteration 15 progress
-- ✅ `git push` — to origin/feat/deterministic-modulo-injection
+**Changes**:
+- `ralph.ts`: Gate re-loads TOML after injection (3-line change in `loadCustomPromptTemplate`)
+- `tests/deterministic-injection.test.ts`: 3 new tests documenting the behavior:
+  1. Gate misses scaffold on first load, catches on re-load
+  2. Gate catches both pre-existing AND newly scaffolded PLACEHOLDERs after re-load
+  3. Gate returns clean when no scaffolded sections exist
 
 ## Test Results
-- `tests/deterministic-injection.test.ts`: **266 pass, 0 fail, 610 expect() calls** (up from 244/577)
-- Full suite: **1287 pass, 27 skip, 0 fail** (up from 1265)
-- 22 new tests added this iteration
+- `tests/deterministic-injection.test.ts`: **269 pass, 0 fail, 622 expect() calls** (up from 266/610)
+- Full suite: **1290 pass, 27 skip, 0 fail** (up from 1286)
+- 3 new tests added this iteration
 
 ## Findings Status
 | ID | Status | Notes |
@@ -58,22 +41,10 @@
 | F6 | ✅ Fixed (I9) | Returns all sections with PLACEHOLDER |
 | F7 | By design | Gate only runs in custom template path |
 | F8 | ✅ Fixed (I12) | Positional replacement prevents cross-anchor bleed |
+| F9 | ✅ Fixed (I16) | Gate re-loads TOML after injection |
 
 ## Commits
-- `cb3b815` feat: harden F1/F2/F5 — schema validation, corrupt TOML warning, no double newlines
-- `81d4980` test: validateRulesToml coverage — negative max_next, non-string reminder, non-boolean show_status
+- `c39c0b2` fix: F9 gate re-loads TOML after injection to catch newly scaffolded sections
 
-## End of Iteration 15 — Project Complete
-
-All 8 implementation tasks (T1-T8) are complete:
-- T1: TOML schema types defined (RulesConfig, StateInjectionConfig, RalphRulesToml, RuleEntry)
-- T2: loadRulesToml() with state-dir→cwd fallback, no caching
-- T3: resolveInjectPlaceholders() with positional replacement, state injection
-- T4: scaffoldRulesToml() with append-mode, regex idempotency
-- T5: PLACEHOLDER gate in buildPrompt(), case-insensitive detection
-- T6: --init-rules CLI subcommand
-- T7: ralph-run skill updated with injection docs
-- T8: 266 tests, 610 expect() calls, all edge cases covered
-
-All 8 findings (F1-F8) resolved or accepted.
-Last audit: 9.0/10, no demotions, no drift.
+## Pushed
+- ✅ `git push` — to origin/feat/deterministic-modulo-injection
