@@ -3716,7 +3716,7 @@ Gracefully stopping Ralph loop...`);
         if (streamOutput) {
           const abortController = new AbortController;
           currentAbortController = abortController;
-          const streamed2 = await streamProcessOutput(proc, proc.pid, {
+          const streamed = await streamProcessOutput(proc, proc.pid, {
             compactTools: !verboseTools,
             toolSummaryIntervalMs: 3000,
             heartbeatIntervalMs,
@@ -3737,13 +3737,13 @@ Gracefully stopping Ralph loop...`);
           });
           currentHeartbeatTimer = null;
           currentAbortController = null;
-          result = streamed2.stdoutText;
-          stderr = streamed2.stderrText;
-          toolCounts = streamed2.toolCounts;
-          terminatedAfterPromise = streamed2.terminatedAfterPromise;
-          streamedErrors = streamed2.errors;
-          const isPreStartStalled = streamed2.preStartStalled;
-          if (streamed2.stalled || isPreStartStalled) {
+          result = streamed.stdoutText;
+          stderr = streamed.stderrText;
+          toolCounts = streamed.toolCounts;
+          terminatedAfterPromise = streamed.terminatedAfterPromise;
+          streamedErrors = streamed.errors;
+          const isPreStartStalled = streamed.preStartStalled;
+          if (streamed.stalled || isPreStartStalled) {
             const stallType = isPreStartStalled ? "Pre-start" : "";
             console.log(`
 \uD83D\uDED1 ${stallType}Stalling detected for agent: ${currentAgent}`);
@@ -3752,7 +3752,7 @@ Gracefully stopping Ralph loop...`);
               agent: currentAgent,
               model: currentModel,
               timestamp: new Date().toISOString(),
-              lastActivityMs: streamed2.stalledForMs ?? (state.stallingTimeoutMs || stallingTimeoutMs),
+              lastActivityMs: streamed.stalledForMs ?? (state.stallingTimeoutMs || stallingTimeoutMs),
               action: state.stallingAction || stallingAction
             };
             if (!history.stallingEvents) {
@@ -3782,7 +3782,7 @@ Gracefully stopping Ralph loop...`);
               exitCode: stalledExitCode,
               completionDetected: false,
               snapshotBefore,
-              preExtractedErrors: streamed2.errors
+              preExtractedErrors: streamed.errors
             });
             if (state.stallingAction === "rotate" && state.rotation && state.rotation.length > 0) {
               const blacklistEntry = {
@@ -3836,6 +3836,7 @@ Gracefully stopping Ralph loop...`);
           result = buffered.stdoutText;
           stderr = buffered.stderrText;
           toolCounts = buffered.toolCounts;
+          streamedErrors = buffered.errors;
           const isPreStartStalled = buffered.preStartStalled;
           if (buffered.stalled || isPreStartStalled) {
             const stallType = isPreStartStalled ? "Pre-start" : "";
@@ -3867,7 +3868,7 @@ Gracefully stopping Ralph loop...`);
               exitCode: stalledExitCode,
               completionDetected: false,
               snapshotBefore,
-              preExtractedErrors: streamed.errors
+              preExtractedErrors: buffered.errors
             });
             if (state.stallingAction === "rotate" && state.rotation && state.rotation.length > 0) {
               const blacklistEntry = {

@@ -4081,6 +4081,7 @@ Unable to read ${currentTasksFileLabel()}
                result = buffered.stdoutText;
                stderr = buffered.stderrText;
                toolCounts = buffered.toolCounts;
+               streamedErrors = buffered.errors;
 
                const isPreStartStalled = buffered.preStartStalled;
                if (buffered.stalled || isPreStartStalled) {
@@ -4115,7 +4116,7 @@ Unable to read ${currentTasksFileLabel()}
                      exitCode: stalledExitCode,
                      completionDetected: false,
                      snapshotBefore,
-                     preExtractedErrors: streamed.errors,
+                     preExtractedErrors: buffered.errors,
                   });
 
                   // Handle based on action
