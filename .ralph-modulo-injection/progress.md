@@ -1,54 +1,48 @@
-# Iteration 7 Progress (BACKWARD — READ-ONLY Audit)
+# Iteration 9 Progress (FORWARD — Bug Fix + Coverage Uplift)
 
 ## State Check
 - All 8 tasks (T1-T8) completed in iterations 1-2
-- Iteration 3: 50 tests, 124 expect() calls
-- Iteration 4a: 81 tests, 202 expect() calls, external review 8/10
-- Iteration 4b: 109 tests, 252 expect() calls, external review 7.5/10
-- Iteration 5: 137 tests, 318 expect() calls (SYNC checkpoint)
-- Iteration 6: 167 tests, 401 expect() calls, external review 8/10
-- Iteration 7: BACKWARD audit (I % 7 == 0)
-- No demoted tasks, no problem_notes
+- Iteration 7 audit: 8.6/10, no demotions
+- Iteration 8: No state found (skipped or no changes)
+- Iteration 9: Fix failing test + F6 improvement + F3 coverage
 
 ## Modulo Checkpoint
-- **I % 7 == 0: BACKWARD Verifier Loop (READ-ONLY)**
-- No implementation changes this iteration
-- Full audit performed on all 5 areas
+- I % 5 = 4: No SYNC
+- I % 7 = 2: No BACKWARD verifier
+- I % 11 = 9: No mutation/CodeQL
 
 ## Work Done (This Iteration)
 
-### BACKWARD Audit Results
-- `bun test tests/deterministic-injection.test.ts`: **167 pass, 0 fail**
-- Full suite: **1185 pass, 27 skip, 3 fail** (pre-existing stall-retry)
-- External review (claude -p): **8.6/10 overall**
-- 7 findings recorded (F1-F7), none critical, no demotions
-- All T1-T8 tasks remain completed
+### 1. Bug Fix: Whitespace-only TOML returns null
+- `loadRulesToml("   \n\n   \n")` was returning `{}` instead of `null`
+- Added `raw.trim().length === 0` check before parsing
+- Updated 2 older tests that expected empty file → `{}` to match new semantic
+- Empty file and whitespace-only now correctly return `null`
+- Comments-only TOML still returns `{}` (comments are meaningful content)
 
-### Audit Areas Checked
-1. TOML parsing correctness — 8/10
-2. Regex collision safety — 9/10
-3. Append-mode scaffolding — 8/10
-4. PLACEHOLDER gate — 9/10
-5. Plan compliance (T1-T8) — 9/10
+### 2. F6 Fix: findPlaceholderRules returns ALL sections
+- Changed return type from `string | null` to `string[]`
+- Reports ALL sections with PLACEHOLDER prompts, not just the first
+- Updated gate call site to iterate over array
+- Updated all 30+ test assertions to match new return type
+- Fixes UX issue where users had to fix placeholders one at a time
 
-### Findings Summary
-| ID | Severity | Description |
-|----|----------|-------------|
-| F1 | Medium | No runtime schema validation on parsed TOML (acceptable) |
-| F2 | Low | Silent catch on corrupt TOML (acceptable) |
-| F3 | Info | Injected rule content won't re-resolve (correct, untested edge) |
-| F4 | Low | Substring idempotency check in scaffold (low risk) |
-| F5 | Info | Leading newline on append to empty file (cosmetic) |
-| F6 | UX | Returns first PLACEHOLDER only (minor) |
-| F7 | Info | Gate only runs in custom template path (by design) |
+### 3. F3 Coverage: Injected content not re-resolved
+- Added test confirming `{{inject:inner}}` in injected prompt text stays literal
+- Verifies the order-of-operations: rules resolved once, state resolved separately
 
-## Demotions
-**NONE** — no tasks demoted.
+### 4. New Tests: 11 added
+- 4 whitespace edge cases (spaces, tabs, comments, newline-only)
+- 2 F3 non-re-resolution tests
+- 5 F6 all-sections tests (multiple, clean, null, empty, dedup)
 
-## Modulo Checkpoints
-- I % 5 = 2: No SYNC
-- I % 7 = 0: ✅ BACKWARD Verifier Loop completed
-- I % 11 = 7: No mutation/CodeQL
+## Test Results
+- `tests/deterministic-injection.test.ts`: **219 pass, 0 fail, 521 expect() calls**
+- Full suite: **1237 pass, 27 skip, 3 fail** (pre-existing stall-retry, NOT from our work)
+
+## External Review
+- claude -p: **8/10** → fixed docstring → **9/10** expected
 
 ## Commits
-- TBD: `chore: iteration 7 backward audit findings`
+- `1bdfc5e` fix: whitespace-only TOML returns null, findPlaceholderRules returns all sections (F6)
+- `2facf0d` docs: fix stale docstring on findPlaceholderRules return type
