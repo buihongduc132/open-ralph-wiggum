@@ -461,4 +461,52 @@ All facts verified.
       expect(goal2.planSteps[0].touches).toEqual(["src/a.ts"]);
       expect(goal2.doneCondition).toBe(goal1.doneCondition);
    });
+
+   it("preserves non-fact content (comments, notes) in Facts section on round-trip", () => {
+      const path = writeFixture("preserve-notes.md", `# Goal: Note Preservation
+
+## Objective
+Test that notes are preserved.
+
+## Facts
+- [ ] Fact 1: First fact
+
+Note: These facts are important.
+
+- [x] Fact 2: Already verified
+
+## Plan
+1. Do the thing
+
+## Done Condition
+All facts verified.
+`);
+      const goal = parseGoalMd(path, "preserve-notes");
+
+      // Mark fact 1 verified
+      goal.facts[0].verified = true;
+      writeGoalMd(goal);
+
+      // Re-read and check notes are preserved
+      const content = require("fs").readFileSync(path, "utf-8");
+      expect(content).toContain("Note: These facts are important.");
+      expect(content).toContain("Already verified");
+   });
+
+   it("handles Facts as the last section without trailing whitespace", () => {
+      const path = writeFixture("facts-last.md", `# Goal: Facts Last
+
+## Facts
+- [ ] Fact 1: Only fact
+`);
+      const goal = parseGoalMd(path, "facts-last");
+
+      goal.facts[0].verified = true;
+      writeGoalMd(goal);
+
+      const content = require("fs").readFileSync(path, "utf-8");
+      // Should not have excessive trailing newlines
+      expect(content.endsWith("\n")).toBe(true);
+      expect(content.match(/\n{3,}$/)).toBeNull();
+   });
 });

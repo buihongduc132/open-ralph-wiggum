@@ -77,7 +77,7 @@ export function buildInventory(goalsDir: string): GoalInventory {
                ).filter(
                   (f: FactState) => f.status === "verified"
                ).length;
-               factsVerified = Math.max(factsVerified, stateVerified);
+               factsVerified = Math.min(goal.facts.length, Math.max(factsVerified, stateVerified));
             } catch {
                // Malformed state — use defaults
             }

@@ -176,12 +176,27 @@ function rewriteFactsSection(content: string, facts: Fact[]): string {
    const nextSectionOffset = content.substring(afterHeader).search(/^##\s+(?!Facts)/m);
    const sectionEnd = nextSectionOffset === -1 ? content.length : afterHeader + nextSectionOffset;
 
-   // Build new facts lines
-   const newFacts = facts
-      .map(f => `- [${f.verified ? "x" : " "}] Fact ${f.id}: ${f.text}`)
-      .join("\n");
+   const sectionContent = content.substring(afterHeader, sectionEnd);
 
-   return content.substring(0, afterHeader) + newFacts + "\n\n" + content.substring(sectionEnd);
+   // Build a map of fact id -> verified status for lookup
+   const factStatusMap = new Map<number, boolean>();
+   for (const f of facts) {
+      factStatusMap.set(f.id, f.verified);
+   }
+
+   // Replace only the checkbox lines, preserving all other content
+   let factId = 0;
+   const updatedSection = sectionContent.replace(
+      /^\s*- \[[ x]\]\s*(?:Fact\s+\d+:\s*)?.+$/gim,
+      (line) => {
+         factId++;
+         const verified = factStatusMap.get(factId) ?? false;
+         const fact = facts.find(f => f.id === factId);
+         return `- [${verified ? "x" : " "}] Fact ${factId}: ${fact ? fact.text : line.replace(/^\s*- \[[ x]\]\s*(?:Fact\s+\d+:\s*)?/i, "")}`;
+      }
+   );
+
+   return content.substring(0, afterHeader) + updatedSection + content.substring(sectionEnd);
 }
 
 /** Escape special regex characters */

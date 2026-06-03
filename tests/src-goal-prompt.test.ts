@@ -190,3 +190,20 @@ describe("titleToSlug", () => {
       expect(titleToSlug("日本語")).toBe("");
    });
 });
+
+describe("scaffoldGoalMd security", () => {
+   it("strips newlines from title to prevent section injection", () => {
+      const maliciousTitle = "Normal Title\n## Malicious Section\nInjected content";
+      const md = scaffoldGoalMd(maliciousTitle);
+      // Title in header should not contain newlines that create false sections
+      const lines = md.split("\n");
+      // Only one # Goal: line should exist
+      const goalLines = lines.filter(l => l.startsWith("# Goal:"));
+      expect(goalLines.length).toBe(1);
+      // Newlines in title should be replaced with spaces
+      expect(goalLines[0]).not.toMatch(/\n/);
+      // No line should start with ## Malicious Section as a separate header
+      const maliciousLines = lines.filter(l => l.startsWith("## Malicious Section"));
+      expect(maliciousLines.length).toBe(0);
+   });
+});

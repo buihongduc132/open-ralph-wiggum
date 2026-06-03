@@ -221,3 +221,101 @@ export function getNextPhase(current: GoalPhase): GoalPhase | null {
    if (idx >= VALID_PHASES.length - 1) return null;
    return VALID_PHASES[idx + 1];
 }
+
+/**
+ * Sync goal state after an iteration.
+ *
+ * Re-parses goal.md for current fact verification status,
+ * updates goal.state.json accordingly, and detects completion.
+ * Handles phase transitions when all facts are verified.
+ *
+ * @param goalFilePath - Path to goal.md
+ * @param goalStateFilePath - Path to goal.state.json
+ * @param iteration - Current iteration number
+ * @param completionPromise - Promise string for goal completion
+ * @returns Updated GoalState or null if sync failed
+ */
+export function syncGoalStateAfterIteration(
+   goalFilePath: string,
+   goalStateFilePath: string,
+   iteration: number,
+   completionPromise: string = "COMPLETE",
+): GoalState | null {
+   // Import parser lazily to avoid circular dependency at module level
+   const { parseGoalMd } = require("./goal-parser");
+
+   // Parse current goal.md state
+   let goal;
+   try {
+      goal = parseGoalMd(goalFilePath, "");
+   } catch {
+      return null;
+   }
+
+   // Load or create goal state
+   let state = loadGoalState(goalStateFilePath);
+   if (!state) {
+      state = createInitialState(goal.slug || "unknown", completionPromise);
+   }
+
+   // Update iteration tracking
+   state = {
+      ...state,
+      iterations: iteration,
+      lastIterationAt: new Date().toISOString(),
+   };
+
+   // Sync fact verification from goal.md checkboxes
+   for (const fact of goal.facts) {
+      const factKey = String(fact.id);
+      const existingFactState = state.facts[factKey];
+
+      if (fact.verified && existingFactState?.status !== "verified") {
+         // Newly verified fact — record it
+         state = markFactVerified(state, factKey, "goal-md-checkbox");
+      }
+   }
+
+   // Auto-transition: if goal has facts and all are verified, advance phases
+   if (goal.facts.length > 0 && isGoalComplete(state, goal.facts.length)) {
+      // Advance to executing if still planning
+      if (state.phase === "planning") {
+         try {
+            state = transitionPhase(state, "executing");
+         } catch {
+            // Already past executing — that's fine
+         }
+      }
+      // Advance to verifying if executing
+      if (state.phase === "executing") {
+         try {
+            state = transitionPhase(state, "verifying");
+         } catch {
+            // Already past verifying — that's fine
+         }
+      }
+      // Advance to done if verifying
+      if (state.phase === "verifying") {
+         try {
+            state = transitionPhase(state, "done");
+         } catch {
+            // Already done
+         }
+      }
+   } else if (goal.facts.length > 0 && state.phase === "planning") {
+      // Has unverified facts and still in planning — move to executing
+      const hasAnyVerified = goal.facts.some(f => f.verified);
+      if (hasAnyVerified) {
+         try {
+            state = transitionPhase(state, "executing");
+         } catch {
+            // Already past planning
+         }
+      }
+   }
+
+   // Save state
+   saveGoalState(goalStateFilePath, state);
+
+   return state;
+}

@@ -172,7 +172,9 @@ export function formatGoalStatus(
  * Create a scaffold goal.md string for --init-goal.
  */
 export function scaffoldGoalMd(title: string): string {
-   return `# Goal: ${title}
+   // Sanitize title: strip newlines to prevent section injection
+   const safeTitle = title.replace(/[\r\n]/g, " ");
+   return `# Goal: ${safeTitle}
 
 ## Objective
 (Describe the goal in 1-3 sentences)

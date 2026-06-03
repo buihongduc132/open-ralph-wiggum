@@ -221,6 +221,37 @@ describe("findNextActionableGoal", () => {
 
       expect(next!.slug).toBe("executing-goal");
    });
+
+   it("caps factsVerified at factsTotal when state has stale entries", () => {
+      // Goal has 2 facts, but state has 5 verified (stale entries)
+      createGoalDir("drift-goal", `# Goal: Drift Goal
+
+## Facts
+- [ ] Fact 1: First
+- [x] Fact 2: Second
+
+## Plan
+1. Step 1
+`, {
+         slug: "drift-goal", phase: "executing", startedAt: "2026-01-01T00:00:00Z",
+         lastIterationAt: "2026-01-01T00:00:00Z", iterations: 1,
+         facts: {
+            "1": { status: "verified", verifiedAt: "2026-01-01", verifiedBy: "test" },
+            "2": { status: "verified", verifiedAt: "2026-01-01", verifiedBy: "test" },
+            "3": { status: "verified", verifiedAt: "2026-01-01", verifiedBy: "test" },
+            "4": { status: "verified", verifiedAt: "2026-01-01", verifiedBy: "test" },
+            "5": { status: "verified", verifiedAt: "2026-01-01", verifiedBy: "test" },
+         },
+         planSteps: {}, completionPromise: "COMPLETE",
+      });
+
+      const inv = buildInventory(TEMP_DIR);
+      const entry = inv.goals.find(g => g.slug === "drift-goal");
+      expect(entry).toBeDefined();
+      expect(entry!.factsTotal).toBe(2);
+      // Must be capped at factsTotal even though state has 5 verified
+      expect(entry!.factsVerified).toBeLessThanOrEqual(entry!.factsTotal);
+   });
 });
 
 describe("filterByPhase", () => {

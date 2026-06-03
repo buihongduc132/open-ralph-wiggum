@@ -9,6 +9,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, lstatSync } from "f
 import { $ } from "bun";
 import type { AgentType } from "./types";
 import type { BlacklistedAgent } from "../loop-runtime";
+import type { GoalPhase } from "./goal-types";
 
 export interface IterationHistory {
    iteration: number;
@@ -104,7 +105,7 @@ export interface RalphState {
    fallbackBlacklist?: string[];
    // Goal mode (opt-in, optional fields only)
    goalSlug?: string;
-   goalPhase?: string;
+   goalPhase?: GoalPhase;
 }
 
 export function loadState(statePath: string): RalphState | null {

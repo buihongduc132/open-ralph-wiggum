@@ -22,7 +22,7 @@ import { ARGS_TEMPLATES, type AgentBuildArgsOptions } from "./agent-builders";
 import { beautifyJsonLine, isJsonModeAgent, type BeautifierConfig } from "./src/json-beautifier";
 import { stripFrontmatter } from "./template-utils";
 import { parseGoalMd, writeGoalMd } from "./src/goal-parser";
-import { createInitialState as createGoalState, loadGoalState, saveGoalState, transitionPhase, markFactVerified, updatePlanStep, isGoalComplete, getNextPhase } from "./src/goal-state";
+import { createInitialState as createGoalState, loadGoalState, saveGoalState, transitionPhase, markFactVerified, updatePlanStep, isGoalComplete, getNextPhase, syncGoalStateAfterIteration } from "./src/goal-state";
 import { buildInventory, findNextActionableGoal, filterByPhase } from "./src/goal-inventory";
 import { buildGoalPromptSection, formatGoalInventory, formatGoalStatus, scaffoldGoalMd, titleToSlug } from "./src/goal-prompt";
 import type { RalphState } from "./loop-helpers";
@@ -1698,9 +1698,6 @@ Learn more: https://ghuntley.com/ralph/
    // Goal mode (opt-in)
    let goalPath = "";
    let goalDir = "";
-   let goalInitTitle = "";
-   let goalListFlag = false;
-   let goalStatusFlag = false;
    let stallRetriesProvided = false;
    let stallRetryMinutesProvided = false;
    let maxIterationsProvided = false;
@@ -1935,11 +1932,11 @@ Learn more: https://ghuntley.com/ralph/
             console.error("Error: --init-goal requires a title");
             process.exit(1);
          }
-         goalInitTitle = val;
+         // --init-goal is handled by early-exit above; skip here
       } else if (arg === "--list-goals") {
-         goalListFlag = true;
+         // --list-goals is handled by early-exit above; skip here
       } else if (arg === "--goal-status") {
-         goalStatusFlag = true;
+         // --goal-status is handled by early-exit above; skip here
       } else if (arg === "--rotation") {
          const val = args[++i];
          if (!val) {
@@ -3949,6 +3946,41 @@ Unable to read ${currentTasksFileLabel()}
                snapshotBefore,
             });
 
+            // Goal mode: sync goal state after each iteration
+            let goalCompleted = false;
+            if (state.goalSlug && goalPath) {
+               try {
+                  const goalStatePath = join(dirname(goalPath), "goal.state.json");
+                  const updatedGoalState = syncGoalStateAfterIteration(
+                     goalPath,
+                     goalStatePath,
+                     state.iteration,
+                     completionPromise,
+                  );
+                  if (updatedGoalState) {
+                     state.goalPhase = updatedGoalState.phase;
+                     try { saveState(state); } catch { /* best-effort */ }
+
+                     // Log goal progress
+                     const goal = parseGoalMd(goalPath, state.goalSlug);
+                     const verifiedCount = goal.facts.filter(f => f.verified).length;
+                     console.log(`\n📋 Goal progress: ${updatedGoalState.phase} (${verifiedCount}/${goal.facts.length} facts verified)`);
+
+                     // Auto-detect goal completion
+                     if (updatedGoalState.phase === "done") {
+                        goalCompleted = true;
+                        console.log(`\n╔══════════════════════════════════════════════════════════════════╗`);
+                        console.log(`║  🎯 Goal completed: ${goal.title}`);
+                        console.log(`║  All ${goal.facts.length} facts verified after ${state.iteration} iterations`);
+                        console.log(`║  Total time: ${formatDurationLong(history.totalDurationMs)}`);
+                        console.log(`╚══════════════════════════════════════════════════════════════════╝`);
+                     }
+                  }
+               } catch (err) {
+                  console.warn(`Warning: Goal state sync failed: ${err}`);
+               }
+            }
+
             // Show struggle warning if detected
             const struggle = history.struggleIndicators;
             if (state.iteration > 2 && (struggle.noProgressIterations >= 3 || struggle.shortIterations >= 3)) {
@@ -4078,6 +4110,24 @@ Unable to read ${currentTasksFileLabel()}
                    }
                    break;
                 }
+            }
+
+            // Goal mode: auto-complete when goal state reaches "done"
+            if (goalCompleted && !completionDetected) {
+               if (state.iteration < minIterations) {
+                  console.log(`\n⏳ Goal facts all verified, but minimum iterations (${minIterations}) not yet reached.`);
+                  console.log(`   Continuing to iteration ${state.iteration + 1}...`);
+               } else {
+                  // Goal complete — clean up and exit
+                  const defaultStateDir = join(process.cwd(), ".ralph");
+                  if (stateDirInput === defaultStateDir) {
+                     clearState();
+                     clearHistory();
+                     clearContext();
+                     clearPendingQuestions();
+                  }
+                  break;
+               }
             }
 
             // Clear context only if it was present at iteration start (preserve mid-iteration additions)

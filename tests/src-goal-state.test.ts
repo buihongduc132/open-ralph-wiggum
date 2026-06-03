@@ -16,6 +16,7 @@ import {
    updatePlanStep,
    isGoalComplete,
    getNextPhase,
+   syncGoalStateAfterIteration,
 } from "../src/goal-state";
 import type { GoalState, GoalPhase } from "../src/goal-types";
 
@@ -464,5 +465,125 @@ describe("getNextPhase", () => {
 
    it("returns null for done (terminal)", () => {
       expect(getNextPhase("done")).toBeNull();
+   });
+});
+
+describe("syncGoalStateAfterIteration", () => {
+   const SYNC_DIR = join(TEMP_DIR, "sync-test");
+
+   beforeEach(() => {
+      if (!existsSync(SYNC_DIR)) mkdirSync(SYNC_DIR, { recursive: true });
+   });
+
+   it("creates initial state if none exists", () => {
+      const goalMd = join(SYNC_DIR, "new-goal.md");
+      const statePath = join(SYNC_DIR, "goal.state.json");
+      const { writeFileSync: wf } = require("fs");
+      wf(goalMd, `# Goal: Sync Test
+
+## Facts
+- [ ] Fact 1: First
+- [ ] Fact 2: Second
+
+## Plan
+1. Step 1
+`);
+
+      const result = syncGoalStateAfterIteration(goalMd, statePath, 1);
+      expect(result).not.toBeNull();
+      expect(result!.iterations).toBe(1);
+      expect(result!.phase).toBe("planning");
+      expect(existsSync(statePath)).toBe(true);
+   });
+
+   it("syncs verified facts from goal.md checkboxes", () => {
+      const goalMd = join(SYNC_DIR, "verified-goal.md");
+      const statePath = join(SYNC_DIR, "verified-goal.state.json");
+      const { writeFileSync: wf } = require("fs");
+      wf(goalMd, `# Goal: Verified Test
+
+## Facts
+- [x] Fact 1: First
+- [ ] Fact 2: Second
+
+## Plan
+1. Step 1
+`);
+
+      const result = syncGoalStateAfterIteration(goalMd, statePath, 1);
+      expect(result).not.toBeNull();
+      expect(result!.facts["1"].status).toBe("verified");
+      expect(result!.facts["2"]).toBeUndefined(); // Not yet verified
+   });
+
+   it("transitions to done when all facts are verified", () => {
+      const goalMd = join(SYNC_DIR, "complete-goal.md");
+      const statePath = join(SYNC_DIR, "complete-goal.state.json");
+      const { writeFileSync: wf } = require("fs");
+      wf(goalMd, `# Goal: Complete Test
+
+## Facts
+- [x] Fact 1: First
+- [x] Fact 2: Second
+
+## Plan
+1. Step 1
+`);
+
+      const result = syncGoalStateAfterIteration(goalMd, statePath, 3);
+      expect(result).not.toBeNull();
+      expect(result!.phase).toBe("done");
+      expect(result!.iterations).toBe(3);
+   });
+
+   it("transitions to executing when some facts are verified", () => {
+      const goalMd = join(SYNC_DIR, "partial-goal.md");
+      const statePath = join(SYNC_DIR, "partial-goal.state.json");
+      const { writeFileSync: wf } = require("fs");
+      wf(goalMd, `# Goal: Partial Test
+
+## Facts
+- [x] Fact 1: First
+- [ ] Fact 2: Second
+
+## Plan
+1. Step 1
+`);
+
+      const result = syncGoalStateAfterIteration(goalMd, statePath, 1);
+      expect(result).not.toBeNull();
+      expect(result!.phase).toBe("executing");
+   });
+
+   it("returns null for unparseable goal.md", () => {
+      const goalMd = join(SYNC_DIR, "broken.md");
+      const statePath = join(SYNC_DIR, "broken.state.json");
+      const { writeFileSync: wf } = require("fs");
+      wf(goalMd, "not a valid goal file");
+
+      const result = syncGoalStateAfterIteration(goalMd, statePath, 1);
+      expect(result).toBeNull();
+   });
+
+   it("updates lastIterationAt on each call", () => {
+      const goalMd = join(SYNC_DIR, "time-goal.md");
+      const statePath = join(SYNC_DIR, "time-goal.state.json");
+      const { writeFileSync: wf } = require("fs");
+      wf(goalMd, `# Goal: Time Test
+
+## Facts
+- [ ] Fact 1: First
+
+## Plan
+1. Step 1
+`);
+
+      const before = new Date().toISOString();
+      const result = syncGoalStateAfterIteration(goalMd, statePath, 1);
+      const after = new Date().toISOString();
+
+      expect(result).not.toBeNull();
+      expect(result!.lastIterationAt >= before).toBe(true);
+      expect(result!.lastIterationAt <= after).toBe(true);
    });
 });
