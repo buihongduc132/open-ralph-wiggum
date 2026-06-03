@@ -66,6 +66,10 @@ export function tasksMarkdownAllComplete(tasksMarkdown: string): boolean {
   return sawTask;
 }
 
+/** Extract display text from agent output for completion/promise detection.
+ *  @param extraFlags Pass agent extra flags for flag-based JSON detection (codex --json, gemini --output-format stream-json).
+ *  If not provided, flag-based JSON agents will be treated as non-JSON (raw passthrough).
+ */
 export function extractAgentCompletionText(output: string, agentType: string, extraFlags?: string[]): string {
   // Non-JSON agents without JSON flags: return raw output unchanged
   if (!hasJsonAdapter(agentType) && !isJsonModeAgent(agentType, extraFlags)) return output;

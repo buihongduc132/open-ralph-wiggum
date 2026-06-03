@@ -3326,7 +3326,7 @@ Unable to read ${currentTasksFileLabel()}
                proc.stdout as ReadableStream<Uint8Array>,
                chunk => {
                   if (stdoutAcc) {
-                     stdoutAcc.append(chunk, false);
+                     stdoutAcc.append(chunk);
                   } else {
                      stdoutText += chunk;
                   }
@@ -3337,7 +3337,7 @@ Unable to read ${currentTasksFileLabel()}
                proc.stderr as ReadableStream<Uint8Array>,
                chunk => {
                   if (stderrAcc) {
-                     stderrAcc.append(chunk, true);
+                     stderrAcc.append(chunk);
                   } else {
                      stderrText += chunk;
                   }
@@ -3358,7 +3358,16 @@ Unable to read ${currentTasksFileLabel()}
 
       const finalStdout = stdoutAcc ? stdoutAcc.tail : stdoutText;
       const finalStderr = stderrAcc ? stderrAcc.tail : stderrText;
-      const finalErrors = stdoutAcc ? stdoutAcc.errors : [];
+      // Merge errors from both stdout and stderr accumulators, deduplicated
+      const allErrors: string[] = [];
+      const errorSet = new Set<string>();
+      if (stdoutAcc) {
+         for (const e of stdoutAcc.errors) { if (errorSet.add(e)) allErrors.push(e); }
+      }
+      if (stderrAcc) {
+         for (const e of stderrAcc.errors) { if (errorSet.add(e)) allErrors.push(e); }
+      }
+      const finalErrors = allErrors;
       const finalBytes = stdoutAcc ? stdoutAcc.totalBytes : stdoutText.length;
 
       return {

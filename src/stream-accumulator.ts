@@ -29,10 +29,10 @@ export class StreamAccumulator {
    }
 
    /**
-    * Append a chunk of output. `isError` indicates stderr vs stdout
-    * but both streams feed the same tail buffer and error scanner.
+    * Append a chunk of output. Both stdout and stderr streams feed the
+    * same tail buffer and error scanner (errors can appear on either).
     */
-   append(chunk: string, isError: boolean): void {
+   append(chunk: string): void {
       if (chunk.length === 0) return;
 
       // Track total bytes (string length ≈ UTF-8 byte count for ASCII-heavy agent output)

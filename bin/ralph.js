@@ -771,7 +771,7 @@ class StreamAccumulator {
   constructor(options) {
     this.tailMaxBytes = options?.tailMaxBytes ?? DEFAULT_TAIL_MAX_BYTES;
   }
-  append(chunk, isError) {
+  append(chunk) {
     if (chunk.length === 0)
       return;
     this._totalBytes += chunk.length;
@@ -3221,14 +3221,14 @@ Your answer: `, (answer) => {
       await Promise.all([
         streamText(proc.stdout, (chunk) => {
           if (stdoutAcc) {
-            stdoutAcc.append(chunk, false);
+            stdoutAcc.append(chunk);
           } else {
             stdoutText += chunk;
           }
         }, false),
         streamText(proc.stderr, (chunk) => {
           if (stderrAcc) {
-            stderrAcc.append(chunk, true);
+            stderrAcc.append(chunk);
           } else {
             stderrText += chunk;
           }
@@ -3245,7 +3245,21 @@ Your answer: `, (answer) => {
     }
     const finalStdout = stdoutAcc ? stdoutAcc.tail : stdoutText;
     const finalStderr = stderrAcc ? stderrAcc.tail : stderrText;
-    const finalErrors = stdoutAcc ? stdoutAcc.errors : [];
+    const allErrors = [];
+    const errorSet = new Set;
+    if (stdoutAcc) {
+      for (const e of stdoutAcc.errors) {
+        if (errorSet.add(e))
+          allErrors.push(e);
+      }
+    }
+    if (stderrAcc) {
+      for (const e of stderrAcc.errors) {
+        if (errorSet.add(e))
+          allErrors.push(e);
+      }
+    }
+    const finalErrors = allErrors;
     const finalBytes = stdoutAcc ? stdoutAcc.totalBytes : stdoutText.length;
     return {
       stdoutText: finalStdout,
