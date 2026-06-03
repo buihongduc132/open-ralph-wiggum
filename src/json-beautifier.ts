@@ -316,7 +316,12 @@ function claudeRetry(p: Record<string, unknown>, cfg: BeautifierConfig): string[
   let lastError = rawError;
   if (lastError.length > 40) lastError = lastError.slice(0, 40) + "...";
 
-  const delayStr = delayMs < 60000 ? `${Math.round(delayMs / 1000)}s` : `${Math.round(delayMs / 60000)}m`;
+  const delayStr = delayMs < 60000
+    ? `${Math.round(delayMs / 1000)}s`
+    : delayMs < 3600000
+      ? `${Math.round(delayMs / 60000)}m`
+      : `${Math.round(delayMs / 3600000)}h`;
+
   const parts = [`🔄 Retry ${attempt}/${maxAttempts} in ${delayStr}`];
   if (lastError) parts.push(`(${lastError})`);
 

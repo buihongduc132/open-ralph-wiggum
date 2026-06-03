@@ -468,6 +468,26 @@ describe("Claude adapter — auto_retry_start", () => {
     expect(result.length).toBeGreaterThan(0);
     expect(result.some(r => stripAnsi(r).includes("30s"))).toBe(true);
   });
+
+  it("shows hours when delay >= 1 hour", () => {
+    const line = JSON.stringify({
+      type: "auto_retry_start",
+      retryInfo: { attempt: 4, maxAttempts: 10, delayMs: 7200000, lastError: "server overloaded" },
+    });
+    const result = beautifyJsonLine(line, config({ agentType: "claude-code", showRetry: true }));
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.some(r => stripAnsi(r).includes("2h"))).toBe(true);
+  });
+
+  it("shows 0s when delayMs is 0", () => {
+    const line = JSON.stringify({
+      type: "auto_retry_start",
+      retryInfo: { attempt: 1, maxAttempts: 3, delayMs: 0, lastError: "" },
+    });
+    const result = beautifyJsonLine(line, config({ agentType: "claude-code", showRetry: true }));
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.some(r => stripAnsi(r).includes("0s"))).toBe(true);
+  });
 });
 
 // ─── Claude adapter: suppressed events ──────────────────────────────────────
