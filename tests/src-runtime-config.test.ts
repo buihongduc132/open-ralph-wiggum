@@ -118,4 +118,58 @@ no_commit = true
       expect(result.stderr).not.toContain("must be a number");
       expect(result.stderr).not.toContain("must be a boolean");
    });
+
+   // ─── json_display config ────────────────────────────────────────────────
+
+   it("exits with error when json_display is invalid", () => {
+      const result = spawnRalphWithToml(`
+prompt = "test task"
+json_display = "invalid"
+`);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("Invalid json_display");
+   });
+
+   it("accepts json_display = beautify", () => {
+      const result = spawnRalphWithToml(`
+prompt = "test task"
+json_display = "beautify"
+`);
+      expect(result.stderr).not.toContain("Invalid json_display");
+   });
+
+   it("accepts json_display = raw", () => {
+      const result = spawnRalphWithToml(`
+prompt = "test task"
+json_display = "raw"
+`);
+      expect(result.stderr).not.toContain("Invalid json_display");
+   });
+
+   it("accepts json_display = text", () => {
+      const result = spawnRalphWithToml(`
+prompt = "test task"
+json_display = "text"
+`);
+      expect(result.stderr).not.toContain("Invalid json_display");
+   });
+
+   // ─── output_buffer_bytes config ─────────────────────────────────────────
+
+   it("exits with error when output_buffer_bytes is negative", () => {
+      const result = spawnRalphWithToml(`
+prompt = "test task"
+output_buffer_bytes = -1
+`);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("output_buffer_bytes must be non-negative");
+   });
+
+   it("accepts output_buffer_bytes = 0", () => {
+      const result = spawnRalphWithToml(`
+prompt = "test task"
+output_buffer_bytes = 0
+`);
+      expect(result.stderr).not.toContain("output_buffer_bytes");
+   });
 });
