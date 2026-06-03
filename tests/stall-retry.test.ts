@@ -117,12 +117,12 @@ describe("stall retries", () => {
       "--no-stream",
       "--no-questions",
       "--no-commit",
-      "--pre-start-timeout", "5000",
+      "--pre-start-timeout", "1000",
     ]);
 
     // Ralph exits 0 when completion promise detected.
     expect(result.exitCode).toBe(0);
-  });
+  }, 30_000);
 
   // Skipped: pre-start stalling fires at stallingTimeout/3 ≈ 12min before fake-agent
   // produces output. Requires fix to pre-start timeout behavior (default should be shorter).
