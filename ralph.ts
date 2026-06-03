@@ -21,9 +21,9 @@ import {
 import { ARGS_TEMPLATES, type AgentBuildArgsOptions } from "./agent-builders";
 import { beautifyJsonLine, isJsonModeAgent, type BeautifierConfig } from "./src/json-beautifier";
 import { stripFrontmatter } from "./template-utils";
-import { parseGoalMd, writeGoalMd } from "./src/goal-parser";
-import { createInitialState as createGoalState, loadGoalState, saveGoalState, transitionPhase, markFactVerified, updatePlanStep, isGoalComplete, getNextPhase, syncGoalStateAfterIteration } from "./src/goal-state";
-import { buildInventory, findNextActionableGoal, filterByPhase } from "./src/goal-inventory";
+import { parseGoalMd } from "./src/goal-parser";
+import { createInitialState as createGoalState, loadGoalState, saveGoalState, syncGoalStateAfterIteration } from "./src/goal-state";
+import { buildInventory, findNextActionableGoal } from "./src/goal-inventory";
 import { buildGoalPromptSection, formatGoalInventory, formatGoalStatus, scaffoldGoalMd, titleToSlug } from "./src/goal-prompt";
 import type { RalphState } from "./loop-helpers";
 
@@ -1848,7 +1848,10 @@ Learn more: https://ghuntley.com/ralph/
       // Goal mode (opt-in)
       if (runtimeTomlConfig.goal) goalPath = runtimeTomlConfig.goal;
       if (runtimeTomlConfig.goal_dir) goalDir = runtimeTomlConfig.goal_dir;
-      if (runtimeTomlConfig.goal_promise) completionPromise = runtimeTomlConfig.goal_promise;
+      // goal_promise only applies when goal mode is active (opt-in)
+      if (runtimeTomlConfig.goal_promise && (runtimeTomlConfig.goal || runtimeTomlConfig.goal_dir)) {
+         completionPromise = runtimeTomlConfig.goal_promise;
+      }
    }
 
    // Env var fallback for reuse_check (if TOML didn't set it)
@@ -2452,37 +2455,7 @@ ${context}
 `
          : "";
 
-      // Tasks mode: use task-specific instructions
-      if (state.tasksMode) {
-         const tasksSection = getTasksModeSection(state);
-         return `
-# Ralph Wiggum Loop - Iteration ${state.iteration}
-
-You are in an iterative development loop working through a task list.
-${contextSection}${tasksSection}
-## Your Main Goal
-
-${state.prompt}
-
-## Critical Rules
-
-- Work on ONE task at a time from ${currentTasksFileLabel()}
-- ONLY output <promise>${state.taskPromise}</promise> when the current task is complete and marked in ${currentTasksFileLabel()}
-- ONLY output <promise>${state.completionPromise}</promise> when ALL tasks are truly done
-- Output promise tags DIRECTLY - do not quote them, explain them, or say you "will" output them
-- Do NOT lie or output false promises to exit the loop
-- If stuck, try a different approach
-- Check your work before claiming completion
-
-## Current Iteration: ${state.iteration}${state.maxIterations > 0 ? ` / ${state.maxIterations}` : " (unlimited)"} (min: ${state.minIterations ?? 1})
-
-Tasks Mode: ENABLED - Work on one task at a time from ${currentTasksFileLabel()}
-
-Now, work on the current task. Good luck!
-`.trim();
-      }
-
-      // Goal mode: goal-aware prompt with facts + plan
+      // Goal mode: supersedes tasks mode when --goal is active (plan F4)
       if (state.goalSlug && goalPath) {
          try {
             const goal = parseGoalMd(goalPath, state.goalSlug);
@@ -2514,9 +2487,39 @@ ${state.prompt}
 Now, work on the goal. Good luck!
 `.trim();
          } catch (err) {
-            // Goal parse failed — fall through to default mode
+            // Goal parse failed — fall through to tasks or default mode
             console.error(`Warning: Goal mode parse error: ${err}`);
          }
+      }
+
+      // Tasks mode: use task-specific instructions
+      if (state.tasksMode) {
+         const tasksSection = getTasksModeSection(state);
+         return `
+# Ralph Wiggum Loop - Iteration ${state.iteration}
+
+You are in an iterative development loop working through a task list.
+${contextSection}${tasksSection}
+## Your Main Goal
+
+${state.prompt}
+
+## Critical Rules
+
+- Work on ONE task at a time from ${currentTasksFileLabel()}
+- ONLY output <promise>${state.taskPromise}</promise> when the current task is complete and marked in ${currentTasksFileLabel()}
+- ONLY output <promise>${state.completionPromise}</promise> when ALL tasks are truly done
+- Output promise tags DIRECTLY - do not quote them, explain them, or say you "will" output them
+- Do NOT lie or output false promises to exit the loop
+- If stuck, try a different approach
+- Check your work before claiming completion
+
+## Current Iteration: ${state.iteration}${state.maxIterations > 0 ? ` / ${state.maxIterations}` : " (unlimited)"} (min: ${state.minIterations ?? 1})
+
+Tasks Mode: ENABLED - Work on one task at a time from ${currentTasksFileLabel()}
+
+Now, work on the current task. Good luck!
+`.trim();
       }
 
       // Default mode: simple instructions without tool-specific mentions

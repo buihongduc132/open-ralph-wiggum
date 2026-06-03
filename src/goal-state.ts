@@ -9,6 +9,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import type { GoalPhase, GoalState } from "./goal-types";
+import { parseGoalMd } from "./goal-parser";
 
 const VALID_PHASES: GoalPhase[] = ["planning", "executing", "verifying", "done"];
 const VALID_PHASE_SET = new Set<string>(VALID_PHASES);
@@ -241,9 +242,6 @@ export function syncGoalStateAfterIteration(
    iteration: number,
    completionPromise: string = "COMPLETE",
 ): GoalState | null {
-   // Import parser lazily to avoid circular dependency at module level
-   const { parseGoalMd } = require("./goal-parser");
-
    // Parse current goal.md state
    let goal;
    try {

@@ -241,7 +241,10 @@ export function applyTomlConfig(result: ParsedMainArgs, config: RalphRuntimeConf
    // Goal mode (opt-in)
    if (config.goal) result.goalPath = config.goal;
    if (config.goal_dir) result.goalDir = config.goal_dir;
-   if (config.goal_promise) result.completionPromise = config.goal_promise;
+   // goal_promise only applies when goal mode is active (opt-in)
+   if (config.goal_promise && (config.goal || config.goal_dir)) {
+      result.completionPromise = config.goal_promise;
+   }
 }
 
 export function parseMainArgs(args: string[], validAgents: string[]): ParsedMainArgs {
