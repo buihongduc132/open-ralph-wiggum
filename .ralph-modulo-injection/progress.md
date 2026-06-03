@@ -1,34 +1,62 @@
-# Iteration 16 Progress (FORWARD)
+# Iteration 17 Progress (FORWARD)
 
 ## State Check
 - All 8 tasks (T1-T8) completed since iteration 4
-- Iteration 14 audit: 9.0/10, no demotions
+- Iteration 16: F9 fix (gate re-load)
 - No inventory problems, no failing tests
 
 ## Modulo Checkpoint
-- I % 5 = 1: No SYNC
-- I % 7 = 2: No backward audit
-- I % 11 = 5: No mutation audit
+- I % 5 = 2: No SYNC
+- I % 7 = 3: No backward audit
+- I % 11 = 6: No mutation audit
 
 ## Work Done (This Iteration)
 
-### F9 Fix — PLACEHOLDER Gate Catches Newly Scaffolded Sections
+### Coverage Uplift — 15 New Tests
 
-**Problem**: When `resolveInjectPlaceholders` encounters a `{{inject:<name>}}` for a rule not present in the TOML, it calls `scaffoldRulesToml()` which writes a PLACEHOLDER section to disk. However, the PLACEHOLDER gate checked the **original in-memory** TOML object (loaded before injection), so the gate missed the newly scaffolded section on the current iteration. It would only catch it on the **next** iteration.
+**Target**: PICK 1 with LOWEST coverage → injection module edge cases
 
-**Fix**: After `resolveInjectPlaceholders`, the gate now re-loads the TOML from disk (`loadRulesToml(stateDir)`) before checking for PLACEHOLDERs. This ensures newly scaffolded sections are caught immediately, closing the one-iteration gap.
+**New test areas** (269→284 tests, 622→670 expect() calls):
 
-**Changes**:
-- `ralph.ts`: Gate re-loads TOML after injection (3-line change in `loadCustomPromptTemplate`)
-- `tests/deterministic-injection.test.ts`: 3 new tests documenting the behavior:
-  1. Gate misses scaffold on first load, catches on re-load
-  2. Gate catches both pre-existing AND newly scaffolded PLACEHOLDERs after re-load
-  3. Gate returns clean when no scaffolded sections exist
+1. **Multiple unknown anchors scaffold in same call** (3 tests):
+   - Two unknown rules scaffolded in single `resolveInjectPlaceholders` call
+   - Mixed known + unknown: known resolves while unknown scaffolds
+   - Three unknown anchors with null TOML
+
+2. **State injection edge cases** (3 tests):
+   - Read error when source is a directory → graceful empty string
+   - `max_next=0` with `max_prev>0` — all lines shown as previous
+   - State always injects while rule fires conditionally (combined integration test)
+
+3. **Template whitespace** (1 test):
+   - Anchor surrounded by whitespace preserves spacing
+
+4. **Rule firing verification** (1 test):
+   - `at=1` fires at every iteration (0, 1, 5, 100)
+
+5. **validateRulesToml entry object validation** (3 tests):
+   - Entry is null → warning
+   - Entry is string → warning
+   - Entry is number → warning
+
+6. **Path normalization** (3 tests):
+   - Trailing slashes, dot-slash prefix, bare directory name
+
+7. **loadRulesToml priority** (1 test):
+   - stateDir TOML preferred over cwd TOML when both exist
 
 ## Test Results
-- `tests/deterministic-injection.test.ts`: **269 pass, 0 fail, 622 expect() calls** (up from 266/610)
-- Full suite: **1290 pass, 27 skip, 0 fail** (up from 1286)
-- 3 new tests added this iteration
+- `tests/deterministic-injection.test.ts`: **284 pass, 0 fail, 670 expect() calls** (up from 269/622)
+- Full suite: **1305 pass, 27 skip, 0 fail** (up from 1290)
+- 15 new tests added this iteration
+
+## External Review
+- **claude -p**: 9/10, all PASS on every review point
+  - resolveInjectPlaceholders: PASS (positional replacement, state-after-rules, modulo check, scaffolding)
+  - PLACEHOLDER gate + F9 fix: PASS
+  - New tests: PASS (well-structured, meaningful edge cases)
+  - No logic bugs found
+  - Single deduction: iteration-0 semantic ambiguity (every rule fires at iter 0)
 
 ## Findings Status
 | ID | Status | Notes |
@@ -44,7 +72,7 @@
 | F9 | ✅ Fixed (I16) | Gate re-loads TOML after injection |
 
 ## Commits
-- `c39c0b2` fix: F9 gate re-loads TOML after injection to catch newly scaffolded sections
+- `471013c` test: 15 new coverage tests — multi-scaffold, state read errors, entry validation, path normalization (269→284, 622→670 expects)
 
 ## Pushed
 - ✅ `git push` — to origin/feat/deterministic-modulo-injection
