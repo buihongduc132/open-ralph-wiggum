@@ -755,6 +755,8 @@ export function loadRulesToml(currentStateDir: string): RalphRulesToml | null {
       if (existsSync(path)) {
          try {
             const raw = readFileSync(path, "utf-8");
+            // Whitespace-only content (no comments, no keys) — treat as missing
+            if (raw.trim().length === 0) return null;
             const parsed = Bun.TOML.parse(raw) as Record<string, unknown>;
             return parsed as unknown as RalphRulesToml;
          } catch {
@@ -806,18 +808,19 @@ export function scaffoldRulesToml(rulesName: string, currentStateDir: string): s
  * Scan a parsed TOML for any rule entry whose prompt contains "PLACEHOLDER".
  * Returns the first offending section name, or null if all clean.
  */
-export function findPlaceholderRules(toml: RalphRulesToml | null): string | null {
-   if (!toml || !toml.rules) return null;
+export function findPlaceholderRules(toml: RalphRulesToml | null): string[] {
+   if (!toml || !toml.rules) return [];
+   const found: string[] = [];
    for (const [sectionName, section] of Object.entries(toml.rules)) {
       if (section?.entries && Array.isArray(section.entries)) {
          for (const entry of section.entries) {
             if (typeof entry.prompt === "string" && /PLACEHOLDER/i.test(entry.prompt)) {
-               return sectionName;
+               if (!found.includes(sectionName)) found.push(sectionName);
             }
          }
       }
    }
-   return null;
+   return found;
 }
 
 /**
@@ -2571,10 +2574,12 @@ Learn more: https://ghuntley.com/ralph/
          template = resolveInjectPlaceholders(template, { iteration: state.iteration }, stateDir, rulesToml);
 
          // PLACEHOLDER gate: abort if any rule entry still has PLACEHOLDER
-         const placeholderSection = findPlaceholderRules(rulesToml);
-         if (placeholderSection) {
+         const placeholderSections = findPlaceholderRules(rulesToml);
+         if (placeholderSections.length > 0) {
             console.error(`\n❌ Ralph PLACEHOLDER Gate — Iteration ${state.iteration}`);
-            console.error(`   [rules.${placeholderSection}] contains a PLACEHOLDER prompt.`);
+            for (const sec of placeholderSections) {
+               console.error(`   [rules.${sec}] contains a PLACEHOLDER prompt.`);
+            }
             console.error(`   Configure your rules in the TOML file before continuing.`);
             process.exit(1);
          }

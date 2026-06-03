@@ -114,9 +114,9 @@ describe("scaffoldRulesToml", () => {
 
 describe("findPlaceholderRules", () => {
   it("returns null for empty/null TOML", () => {
-    expect(findPlaceholderRules(null)).toBeNull();
-    expect(findPlaceholderRules({})).toBeNull();
-    expect(findPlaceholderRules({ rules: {} })).toBeNull();
+    expect(findPlaceholderRules(null)).toEqual([]);
+    expect(findPlaceholderRules({})).toEqual([]);
+    expect(findPlaceholderRules({ rules: {} })).toEqual([]);
   });
 
   it("finds PLACEHOLDER in rule entries", () => {
@@ -129,7 +129,7 @@ describe("findPlaceholderRules", () => {
         },
       },
     };
-    expect(findPlaceholderRules(toml)).toBe("test");
+    expect(findPlaceholderRules(toml)).toEqual(["test"]);
   });
 
   it("returns null when all entries are clean", () => {
@@ -142,7 +142,7 @@ describe("findPlaceholderRules", () => {
         },
       },
     };
-    expect(findPlaceholderRules(toml)).toBeNull();
+    expect(findPlaceholderRules(toml)).toEqual([]);
   });
 });
 
@@ -621,7 +621,7 @@ describe("loadRulesToml error handling", () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it("returns empty object for empty TOML file", () => {
+  it("returns null for empty TOML file", () => {
     const dirName = "ralph-empty-toml";
     const testDir = join(TMP_DIR, dirName);
     mkdirSync(testDir, { recursive: true });
@@ -630,9 +630,8 @@ describe("loadRulesToml error handling", () => {
     writeFileSync(tomlPath, "");
 
     const result = loadRulesToml(testDir);
-    // Empty file parses as empty object, not null
-    expect(result).not.toBeNull();
-    expect(result?.rules).toBeUndefined();
+    // Empty file = no content, treat as missing
+    expect(result).toBeNull();
 
     rmSync(testDir, { recursive: true, force: true });
   });
@@ -956,7 +955,7 @@ describe("findPlaceholderRules edge cases", () => {
         },
       },
     };
-    expect(findPlaceholderRules(toml)).toBe("dirty");
+    expect(findPlaceholderRules(toml)).toEqual(["dirty"]);
   });
 
   it("returns null when entries array is empty", () => {
@@ -969,7 +968,7 @@ describe("findPlaceholderRules edge cases", () => {
         },
       },
     };
-    expect(findPlaceholderRules(toml)).toBeNull();
+    expect(findPlaceholderRules(toml)).toEqual([]);
   });
 
   it("handles rule with no entries field", () => {
@@ -981,7 +980,7 @@ describe("findPlaceholderRules edge cases", () => {
         } as any,
       },
     };
-    expect(findPlaceholderRules(toml)).toBeNull();
+    expect(findPlaceholderRules(toml)).toEqual([]);
   });
 
   it("detects partial PLACEHOLDER in prompt", () => {
@@ -994,7 +993,7 @@ describe("findPlaceholderRules edge cases", () => {
         },
       },
     };
-    expect(findPlaceholderRules(toml)).toBe("partial");
+    expect(findPlaceholderRules(toml)).toEqual(["partial"]);
   });
 });
 
@@ -1550,9 +1549,11 @@ describe("findPlaceholderRules — comprehensive scan", () => {
       },
     };
     const result = findPlaceholderRules(toml);
-    // Should return first dirty rule (order may vary by JS engine)
-    expect(result).not.toBeNull();
-    expect(["c", "d"]).toContain(result);
+    // Should return all dirty rules
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    for (const r of result) {
+      expect(["c", "d"]).toContain(r);
+    }
   });
 
   it("finds PLACEHOLDER even in disabled rules", () => {
@@ -1567,7 +1568,7 @@ describe("findPlaceholderRules — comprehensive scan", () => {
     };
     // Gate scans ALL entries regardless of enabled flag
     const result = findPlaceholderRules(toml);
-    expect(result).toBe("off");
+    expect(result).toEqual(["off"]);
   });
 });
 
@@ -2480,7 +2481,7 @@ describe("findPlaceholderRules — partial word match", () => {
       },
     };
     // .includes("PLACEHOLDER") matches "PLACEHOLDER_EXTRA"
-    expect(findPlaceholderRules(toml)).toBe("partial");
+    expect(findPlaceholderRules(toml)).toEqual(["partial"]);
   });
 
   it("matches lowercase 'placeholder' (case-insensitive)", () => {
@@ -2496,7 +2497,7 @@ describe("findPlaceholderRules — partial word match", () => {
       },
     };
     // Case-insensitive detection catches lowercase 'placeholder'
-    expect(findPlaceholderRules(toml)).toBe("lower");
+    expect(findPlaceholderRules(toml)).toEqual(["lower"]);
   });
 });
 
@@ -2574,7 +2575,7 @@ describe("findPlaceholderRules — non-array entries guard", () => {
       },
     } as unknown as RalphRulesToml;
     // Should not crash, should return null (no PLACEHOLDER found)
-    expect(findPlaceholderRules(toml)).toBeNull();
+    expect(findPlaceholderRules(toml)).toEqual([]);
   });
 
   it("skips null entries gracefully", () => {
@@ -2587,7 +2588,7 @@ describe("findPlaceholderRules — non-array entries guard", () => {
         },
       },
     } as unknown as RalphRulesToml;
-    expect(findPlaceholderRules(toml)).toBeNull();
+    expect(findPlaceholderRules(toml)).toEqual([]);
   });
 });
 
@@ -2622,9 +2623,8 @@ describe("loadRulesToml — corrupt/invalid TOML content", () => {
     writeFileSync(tomlPath, "");
 
     const result = loadRulesToml(testDir);
-    // Empty file is valid TOML — should return parsed (empty object)
-    expect(result).not.toBeNull();
-    expect(result).toEqual({});
+    // Empty file = no content, treat as missing
+    expect(result).toBeNull();
 
     rmSync(testDir, { recursive: true, force: true });
   });
@@ -3079,7 +3079,7 @@ describe("findPlaceholderRules — with disabled rule containing PLACEHOLDER", (
     };
 
     const result = findPlaceholderRules(toml);
-    expect(result).toBe("disabled");
+    expect(result).toEqual(["disabled"]);
   });
 
   it("does not fire on rules without PLACEHOLDER", () => {
@@ -3093,7 +3093,7 @@ describe("findPlaceholderRules — with disabled rule containing PLACEHOLDER", (
       },
     };
 
-    expect(findPlaceholderRules(toml)).toBeNull();
+    expect(findPlaceholderRules(toml)).toEqual([]);
   });
 });
 
@@ -3455,7 +3455,7 @@ describe("findPlaceholderRules — PLACEHOLDER in state_injection.reminder", () 
 
     // findPlaceholderRules only scans rules, not state_injection
     const result = findPlaceholderRules(toml);
-    expect(result).toBeNull();
+    expect(result).toEqual([]);
   });
 });
 
@@ -3533,7 +3533,7 @@ reminder = ""
 
     // Step 3: Placeholder check
     const placeholder = findPlaceholderRules(toml);
-    expect(placeholder).toBeNull();
+    expect(placeholder).toEqual([]);
 
     rmSync(testDir, { recursive: true, force: true });
   });
@@ -3555,7 +3555,7 @@ prompt = "PLACEHOLDER: todo"
     expect(toml).not.toBeNull();
 
     const placeholder = findPlaceholderRules(toml);
-    expect(placeholder).toBe("incomplete");
+    expect(placeholder).toEqual(["incomplete"]);
 
     rmSync(testDir, { recursive: true, force: true });
   });
@@ -3675,9 +3675,10 @@ describe("getDefaultRulesToml — PLACEHOLDER prompts in both rules", () => {
 
     const result = findPlaceholderRules(parsed);
     // Default TOML has PLACEHOLDER prompts in sync and verifier
-    expect(result).not.toBeNull();
-    // Should find the first one
-    expect(result === "sync" || result === "verifier").toBe(true);
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    for (const r of result) {
+      expect(r === "sync" || r === "verifier").toBe(true);
+    }
   });
 });
 
@@ -3803,7 +3804,7 @@ describe("findPlaceholderRules — case-insensitive PLACEHOLDER detection", () =
         lower: { name: "lower", enabled: true, entries: [{ at: 1, prompt: "placeholder: fill in" }] },
       },
     };
-    expect(findPlaceholderRules(toml)).toBe("lower");
+    expect(findPlaceholderRules(toml)).toEqual(["lower"]);
   });
 
   it("detects mixed case 'PlaceHolder' in prompt", () => {
@@ -3812,7 +3813,7 @@ describe("findPlaceholderRules — case-insensitive PLACEHOLDER detection", () =
         mixed: { name: "mixed", enabled: true, entries: [{ at: 1, prompt: "PlaceHolder: stuff" }] },
       },
     };
-    expect(findPlaceholderRules(toml)).toBe("mixed");
+    expect(findPlaceholderRules(toml)).toEqual(["mixed"]);
   });
 
   it("detects 'Placeholder' (title case) in prompt", () => {
@@ -3821,7 +3822,7 @@ describe("findPlaceholderRules — case-insensitive PLACEHOLDER detection", () =
         title: { name: "title", enabled: true, entries: [{ at: 1, prompt: "Placeholder: configure me" }] },
       },
     };
-    expect(findPlaceholderRules(toml)).toBe("title");
+    expect(findPlaceholderRules(toml)).toEqual(["title"]);
   });
 });
 
@@ -3881,5 +3882,897 @@ custom_field = "extra"
     expect(result!.rules?.custom.entries[0].prompt).toBe("hello");
 
     rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Iteration 8 — Coverage Uplift
+// ═══════════════════════════════════════════════════════════════
+
+describe("resolveInjectPlaceholders — entries with string at values", () => {
+  it("skips entries where at is a string instead of number", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        str_at: { name: "str_at", enabled: true, entries: [{ at: "five" as unknown as number, prompt: "bad" }] },
+      },
+    };
+    const result = resolveInjectPlaceholders("{{inject:str_at}}", { iteration: 5 }, ".", toml);
+    expect(result).toContain("no active entries");
+  });
+
+  it("skips entries where at is a boolean", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        bool_at: { name: "bool_at", enabled: true, entries: [{ at: true as unknown as number, prompt: "bad" }] },
+      },
+    };
+    const result = resolveInjectPlaceholders("{{inject:bool_at}}", { iteration: 1 }, ".", toml);
+    expect(result).toContain("no active entries");
+  });
+
+  it("skips entries where at is null", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        null_at: { name: "null_at", enabled: true, entries: [{ at: null as unknown as number, prompt: "bad" }] },
+      },
+    };
+    const result = resolveInjectPlaceholders("{{inject:null_at}}", { iteration: 1 }, ".", toml);
+    expect(result).toContain("no active entries");
+  });
+});
+
+describe("resolveInjectPlaceholders — entries with non-string prompt", () => {
+  it("skips entries where prompt is a number", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        num_prompt: {
+          name: "num_prompt",
+          enabled: true,
+          entries: [{ at: 1, prompt: 42 as unknown as string }],
+        },
+      },
+    };
+    const result = resolveInjectPlaceholders("{{inject:num_prompt}}", { iteration: 1 }, ".", toml);
+    // Number prompt won't be filtered — modulo matches, prompt (42) is joined
+    expect(result).not.toContain("no active entries");
+  });
+
+  it("handles entries where prompt is missing", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        no_prompt: {
+          name: "no_prompt",
+          enabled: true,
+          entries: [{ at: 1 }] as unknown as { at: number; prompt: string }[],
+        },
+      },
+    };
+    const result = resolveInjectPlaceholders("{{inject:no_prompt}}", { iteration: 1 }, ".", toml);
+    expect(result).toBeDefined();
+  });
+});
+
+describe("findPlaceholderRules — multiple rules with PLACEHOLDER", () => {
+  it("returns all rules with PLACEHOLDER when multiple have it", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        alpha: { name: "alpha", enabled: true, entries: [{ at: 1, prompt: "PLACEHOLDER: fix me" }] },
+        beta: { name: "beta", enabled: true, entries: [{ at: 1, prompt: "PLACEHOLDER: fix me too" }] },
+      },
+    };
+    const result = findPlaceholderRules(toml);
+    expect(result.length).toBe(2);
+    expect(result).toContain("alpha");
+    expect(result).toContain("beta");
+  });
+
+  it("finds PLACEHOLDER in second rule when first is clean", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        clean: { name: "clean", enabled: true, entries: [{ at: 1, prompt: "Real prompt" }] },
+        dirty: { name: "dirty", enabled: true, entries: [{ at: 1, prompt: "PLACEHOLDER" }] },
+      },
+    };
+    expect(findPlaceholderRules(toml)).toEqual(["dirty"]);
+  });
+
+  it("returns null when only non-rule sections have PLACEHOLDER", () => {
+    const toml: RalphRulesToml = {
+      state_injection: {
+        source: "state.jsonl",
+        max_next: 1,
+        max_prev: 1,
+        show_status: true,
+        reminder: "PLACEHOLDER: set a reminder",
+      },
+    };
+    expect(findPlaceholderRules(toml)).toEqual([]);
+  });
+});
+
+describe("scaffoldRulesToml — append to existing TOML with content", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("appends new section to existing TOML without corruption", () => {
+    const dirName = "ralph-append-existing";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
+    writeFileSync(tomlPath, `[rules.existing]
+name = "existing"
+enabled = true
+
+[[rules.existing.entries]]
+at = 5
+prompt = "Real content"
+`);
+
+    scaffoldRulesToml("newsection", testDir);
+
+    const updated = readFileSync(tomlPath, "utf-8");
+    expect(updated).toContain("[rules.existing]");
+    expect(updated).toContain("[rules.newsection]");
+    expect(updated).toContain("PLACEHOLDER");
+    expect(updated).toContain("Real content");
+
+    const parsed = Bun.TOML.parse(updated) as Record<string, unknown>;
+    expect(parsed.rules).toBeDefined();
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("handles appending third section to file with two sections", () => {
+    const dirName = "ralph-append-third";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
+    writeFileSync(tomlPath, `[rules.first]
+name = "first"
+enabled = true
+
+[[rules.first.entries]]
+at = 2
+prompt = "First"
+
+[rules.second]
+name = "second"
+enabled = true
+
+[[rules.second.entries]]
+at = 3
+prompt = "Second"
+`);
+
+    scaffoldRulesToml("third", testDir);
+
+    const updated = readFileSync(tomlPath, "utf-8");
+    expect(updated).toContain("[rules.first]");
+    expect(updated).toContain("[rules.second]");
+    expect(updated).toContain("[rules.third]");
+
+    const parsed = Bun.TOML.parse(updated) as Record<string, unknown>;
+    expect(parsed.rules).toBeDefined();
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+describe("resolveInjectPlaceholders — state injection with Unicode content", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("handles UTF-8 state file with emojis and CJK characters", () => {
+    const testDir = join(TMP_DIR, "ralph-unicode");
+    mkdirSync(testDir, { recursive: true });
+    writeFileSync(join(testDir, "state.jsonl"), "\uD83D\uDD27 Fixed bug \u7F16\u53F742\n\u2705 \u6D4B\u8BD5\u901A\u8FC7\n");
+
+    const toml: RalphRulesToml = {
+      state_injection: {
+        source: "state.jsonl",
+        max_next: 1,
+        max_prev: 1,
+        show_status: true,
+        reminder: "Unicode reminder \uD83C\uDF89",
+      },
+    };
+
+    const result = resolveInjectPlaceholders("{{inject:state}}", { iteration: 1 }, testDir, toml);
+    expect(result).toContain("\uD83D\uDD27 Fixed bug \u7F16\u53F742");
+    expect(result).toContain("\u2705 \u6D4B\u8BD5\u901A\u8FC7");
+    expect(result).toContain("Unicode reminder \uD83C\uDF89");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+describe("resolveInjectPlaceholders — state injection with large file", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("correctly slices from 1000-line state file", () => {
+    const testDir = join(TMP_DIR, "ralph-large-state");
+    mkdirSync(testDir, { recursive: true });
+
+    const lines = Array.from({ length: 1000 }, (_, i) => `entry-${i}`);
+    writeFileSync(join(testDir, "state.jsonl"), lines.join("\n"));
+
+    const toml: RalphRulesToml = {
+      state_injection: {
+        source: "state.jsonl",
+        max_next: 3,
+        max_prev: 5,
+        show_status: false,
+        reminder: "",
+      },
+    };
+
+    const result = resolveInjectPlaceholders("{{inject:state}}", { iteration: 1 }, testDir, toml);
+    expect(result).toContain("entry-992");
+    expect(result).toContain("entry-996");
+    expect(result).toContain("entry-997");
+    expect(result).toContain("entry-999");
+    expect(result).not.toContain("entry-991");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+describe("loadRulesToml — symlinked TOML file", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("reads TOML through symlink", () => {
+    const dirName = "ralph-symlink";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const realTomlPath = join(TMP_DIR, "real-config.toml");
+    writeFileSync(realTomlPath, `[rules.linked]
+name = "linked"
+enabled = true
+
+[[rules.linked.entries]]
+at = 1
+prompt = "Linked rule"
+`);
+
+    const symlinkPath = join(testDir, `.ralph-${dirName}.toml`);
+    try {
+      require("fs").symlinkSync(realTomlPath, symlinkPath);
+    } catch {
+      rmSync(testDir, { recursive: true, force: true });
+      return;
+    }
+
+    const result = loadRulesToml(testDir);
+    expect(result).not.toBeNull();
+    expect(result!.rules?.linked.entries[0].prompt).toBe("Linked rule");
+
+    rmSync(testDir, { recursive: true, force: true });
+    rmSync(realTomlPath, { force: true });
+  });
+});
+
+describe("resolveInjectPlaceholders — template with inject anchors adjacent to text", () => {
+  it("resolves inject anchor surrounded by other text", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        mid: { name: "mid", enabled: true, entries: [{ at: 2, prompt: "MIDDLE" }] },
+      },
+    };
+    const result = resolveInjectPlaceholders(
+      "Before {{inject:mid}} After",
+      { iteration: 4 },
+      ".",
+      toml,
+    );
+    expect(result).toBe("Before MIDDLE After");
+  });
+
+  it("resolves multiple inject anchors with text between them", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        first: { name: "first", enabled: true, entries: [{ at: 1, prompt: "FIRST" }] },
+        second: { name: "second", enabled: true, entries: [{ at: 1, prompt: "SECOND" }] },
+      },
+    };
+    const result = resolveInjectPlaceholders(
+      "Header\n{{inject:first}}\nSeparator\n{{inject:second}}\nFooter",
+      { iteration: 1 },
+      ".",
+      toml,
+    );
+    expect(result).toContain("FIRST");
+    expect(result).toContain("SECOND");
+    expect(result).toContain("Separator");
+    expect(result).toContain("Header");
+    expect(result).toContain("Footer");
+  });
+});
+
+describe("resolveInjectPlaceholders — iteration boundary math", () => {
+  it("matches at=1 for iteration 0", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        every: { name: "every", enabled: true, entries: [{ at: 1, prompt: "ALWAYS" }] },
+      },
+    };
+    expect(resolveInjectPlaceholders("{{inject:every}}", { iteration: 0 }, ".", toml)).toContain("ALWAYS");
+  });
+
+  it("matches at=100 for iteration 100", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        cent: { name: "cent", enabled: true, entries: [{ at: 100, prompt: "CENTURY" }] },
+      },
+    };
+    expect(resolveInjectPlaceholders("{{inject:cent}}", { iteration: 100 }, ".", toml)).toContain("CENTURY");
+  });
+
+  it("does NOT match at=100 for iteration 99", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        cent: { name: "cent", enabled: true, entries: [{ at: 100, prompt: "CENTURY" }] },
+      },
+    };
+    expect(resolveInjectPlaceholders("{{inject:cent}}", { iteration: 99 }, ".", toml)).toContain("no active entries");
+  });
+
+  it("matches at=2 for every even iteration", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        even: { name: "even", enabled: true, entries: [{ at: 2, prompt: "EVEN" }] },
+      },
+    };
+    expect(resolveInjectPlaceholders("{{inject:even}}", { iteration: 2 }, ".", toml)).toContain("EVEN");
+    expect(resolveInjectPlaceholders("{{inject:even}}", { iteration: 4 }, ".", toml)).toContain("EVEN");
+    expect(resolveInjectPlaceholders("{{inject:even}}", { iteration: 10 }, ".", toml)).toContain("EVEN");
+    expect(resolveInjectPlaceholders("{{inject:even}}", { iteration: 1 }, ".", toml)).toContain("no active entries");
+    expect(resolveInjectPlaceholders("{{inject:even}}", { iteration: 3 }, ".", toml)).toContain("no active entries");
+  });
+});
+
+describe("resolveRulesTomlPath — extractStateDirBasename edge cases", () => {
+  it("handles dot-prefixed directory name", () => {
+    const result = resolveRulesTomlPath("./.ralph-hidden");
+    expect(result).toContain(".ralph-.ralph-hidden.toml");
+  });
+
+  it("handles single-char directory name", () => {
+    const result = resolveRulesTomlPath("a");
+    expect(result).toContain(".ralph-a.toml");
+  });
+
+  it("handles deeply nested path", () => {
+    const result = resolveRulesTomlPath("/a/b/c/d/e/f");
+    expect(result).toContain(".ralph-f.toml");
+  });
+
+  it("handles path with dots in middle segments", () => {
+    const result = resolveRulesTomlPath("./foo.bar/baz");
+    expect(result).toContain(".ralph-baz.toml");
+  });
+});
+
+describe("Integration — rules + state injection combined", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("resolves both rules and state in same template", () => {
+    const dirName = "ralph-combined";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+    writeFileSync(join(testDir, "state.jsonl"), "prev-entry\ncurr-entry\n");
+
+    const toml: RalphRulesToml = {
+      rules: {
+        sync: { name: "sync", enabled: true, entries: [{ at: 1, prompt: "Sync checkpoint" }] },
+      },
+      state_injection: {
+        source: "state.jsonl",
+        max_next: 1,
+        max_prev: 1,
+        show_status: true,
+        reminder: "State reminder",
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:sync}}\n---\n{{inject:state}}",
+      { iteration: 1 },
+      testDir,
+      toml,
+    );
+    expect(result).toContain("Sync checkpoint");
+    expect(result).toContain("prev-entry");
+    expect(result).toContain("curr-entry");
+    expect(result).toContain("State reminder");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("resolves rules that are inactive alongside active state", () => {
+    const dirName = "ralph-inactive-rule-state";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+    writeFileSync(join(testDir, "state.jsonl"), "entry\n");
+
+    const toml: RalphRulesToml = {
+      rules: {
+        every5: { name: "every5", enabled: true, entries: [{ at: 5, prompt: "Checkpoint" }] },
+      },
+      state_injection: {
+        source: "state.jsonl",
+        max_next: 1,
+        max_prev: 0,
+        show_status: false,
+        reminder: "",
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:every5}}\n---\n{{inject:state}}",
+      { iteration: 3 },
+      testDir,
+      toml,
+    );
+    expect(result).toContain("no active entries");
+    expect(result).toContain("entry");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+describe("resolveInjectPlaceholders — state injection with show_status variations", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("shows reminder when show_status is true", () => {
+    const testDir = join(TMP_DIR, "ralph-status-true");
+    mkdirSync(testDir, { recursive: true });
+    writeFileSync(join(testDir, "state.jsonl"), "entry\n");
+
+    const toml: RalphRulesToml = {
+      state_injection: {
+        source: "state.jsonl",
+        max_next: 1,
+        max_prev: 0,
+        show_status: true,
+        reminder: "Don't forget!",
+      },
+    };
+
+    const result = resolveInjectPlaceholders("{{inject:state}}", { iteration: 1 }, testDir, toml);
+    expect(result).toContain("> Don't forget!");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("hides reminder when show_status is false", () => {
+    const testDir = join(TMP_DIR, "ralph-status-false");
+    mkdirSync(testDir, { recursive: true });
+    writeFileSync(join(testDir, "state.jsonl"), "entry\n");
+
+    const toml: RalphRulesToml = {
+      state_injection: {
+        source: "state.jsonl",
+        max_next: 1,
+        max_prev: 0,
+        show_status: false,
+        reminder: "Hidden reminder",
+      },
+    };
+
+    const result = resolveInjectPlaceholders("{{inject:state}}", { iteration: 1 }, testDir, toml);
+    expect(result).not.toContain("> Hidden reminder");
+    expect(result).toContain("## State Context");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+describe("scaffoldRulesToml — creates parent directory tree", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("creates nested directories for TOML path", () => {
+    const dirName = "ralph-nested-parent";
+    const testDir = join(TMP_DIR, dirName, "sub1", "sub2");
+
+    scaffoldRulesToml("deep", join(TMP_DIR, dirName, "sub1", "sub2"));
+
+    const tomlPath = join(TMP_DIR, dirName, "sub1", "sub2", `.ralph-sub2.toml`);
+    expect(existsSync(tomlPath)).toBe(true);
+
+    const content = readFileSync(tomlPath, "utf-8");
+    expect(content).toContain("[rules.deep]");
+
+    rmSync(join(TMP_DIR, dirName), { recursive: true, force: true });
+  });
+});
+
+describe("resolveInjectPlaceholders — entry order preservation", () => {
+  it("concatenates matching entries in TOML order", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        ordered: {
+          name: "ordered",
+          enabled: true,
+          entries: [
+            { at: 1, prompt: "FIRST" },
+            { at: 1, prompt: "SECOND" },
+            { at: 1, prompt: "THIRD" },
+          ],
+        },
+      },
+    };
+
+    const result = resolveInjectPlaceholders("{{inject:ordered}}", { iteration: 1 }, ".", toml);
+    const firstIdx = result.indexOf("FIRST");
+    const secondIdx = result.indexOf("SECOND");
+    const thirdIdx = result.indexOf("THIRD");
+    expect(firstIdx).toBeLessThan(secondIdx);
+    expect(secondIdx).toBeLessThan(thirdIdx);
+  });
+
+  it("only concatenates entries matching the modulo, preserving order", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        sparse: {
+          name: "sparse",
+          enabled: true,
+          entries: [
+            { at: 2, prompt: "EVEN" },
+            { at: 3, prompt: "THREE" },
+            { at: 6, prompt: "SIX" },
+          ],
+        },
+      },
+    };
+
+    // iteration 6: 6%2=0, 6%3=0, 6%6=0
+    const result = resolveInjectPlaceholders("{{inject:sparse}}", { iteration: 6 }, ".", toml);
+    expect(result).toContain("EVEN");
+    expect(result).toContain("THREE");
+    expect(result).toContain("SIX");
+
+    const evenIdx = result.indexOf("EVEN");
+    const threeIdx = result.indexOf("THREE");
+    const sixIdx = result.indexOf("SIX");
+    expect(evenIdx).toBeLessThan(threeIdx);
+    expect(threeIdx).toBeLessThan(sixIdx);
+  });
+});
+
+describe("loadRulesToml — whitespace-only TOML file", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("returns null for whitespace-only TOML file", () => {
+    const dirName = "ralph-ws-toml";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+    writeFileSync(join(testDir, `.ralph-${dirName}.toml`), "   \n\n   \n");
+
+    const result = loadRulesToml(testDir);
+    expect(result).toBeNull();
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+describe("getDefaultRulesToml — content validation", () => {
+  it("contains state_injection section", () => {
+    const toml = getDefaultRulesToml();
+    expect(toml).toContain("[state_injection]");
+    expect(toml).toContain("source");
+    expect(toml).toContain("max_next");
+    expect(toml).toContain("max_prev");
+  });
+
+  it("contains PLACEHOLDER in sync entries", () => {
+    const toml = getDefaultRulesToml();
+    expect(toml).toContain("PLACEHOLDER: configure sync");
+  });
+
+  it("contains PLACEHOLDER in verifier entries", () => {
+    const toml = getDefaultRulesToml();
+    expect(toml).toContain("PLACEHOLDER: configure verifier");
+  });
+
+  it("has exactly two rules sections", () => {
+    const toml = getDefaultRulesToml();
+    const parsed = Bun.TOML.parse(toml) as Record<string, unknown>;
+    const rules = parsed.rules as Record<string, unknown>;
+    expect(Object.keys(rules)).toHaveLength(2);
+    expect(rules).toHaveProperty("sync");
+    expect(rules).toHaveProperty("verifier");
+  });
+});
+
+describe("resolveInjectPlaceholders — rule with entries containing mixed at types", () => {
+  it("processes valid entries and skips invalid ones", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        mixed: {
+          name: "mixed",
+          enabled: true,
+          entries: [
+            { at: 1, prompt: "VALID" },
+            { at: "bad" as unknown as number, prompt: "INVALID" },
+            { at: 2, prompt: "ALSO_VALID" },
+          ] as unknown as { at: number; prompt: string }[],
+        },
+      },
+    };
+
+    // iteration 2: at=1 matches (2%1=0), at="bad" skipped, at=2 matches (2%2=0)
+    const result = resolveInjectPlaceholders("{{inject:mixed}}", { iteration: 2 }, ".", toml);
+    expect(result).toContain("VALID");
+    expect(result).toContain("ALSO_VALID");
+    expect(result).not.toContain("INVALID");
+  });
+});
+
+describe("resolveInjectPlaceholders — {{inject:state}} when source file is a directory", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("returns empty string when source points to a directory", () => {
+    const testDir = join(TMP_DIR, "ralph-src-dir");
+    mkdirSync(testDir, { recursive: true });
+    mkdirSync(join(testDir, "state.jsonl"));
+
+    const toml: RalphRulesToml = {
+      state_injection: {
+        source: "state.jsonl",
+        max_next: 5,
+        max_prev: 5,
+        show_status: true,
+        reminder: "test",
+      },
+    };
+
+    const result = resolveInjectPlaceholders("{{inject:state}}", { iteration: 1 }, testDir, toml);
+    expect(result).toBe("");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+describe("resolveInjectPlaceholders — template with many inject anchors", () => {
+  it("resolves 5 different inject anchors in one template", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        a: { name: "a", enabled: true, entries: [{ at: 1, prompt: "AAA" }] },
+        b: { name: "b", enabled: true, entries: [{ at: 1, prompt: "BBB" }] },
+        c: { name: "c", enabled: true, entries: [{ at: 1, prompt: "CCC" }] },
+        d: { name: "d", enabled: true, entries: [{ at: 1, prompt: "DDD" }] },
+        e: { name: "e", enabled: true, entries: [{ at: 1, prompt: "EEE" }] },
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:a}} {{inject:b}} {{inject:c}} {{inject:d}} {{inject:e}}",
+      { iteration: 1 },
+      ".",
+      toml,
+    );
+    expect(result).toContain("AAA");
+    expect(result).toContain("BBB");
+    expect(result).toContain("CCC");
+    expect(result).toContain("DDD");
+    expect(result).toContain("EEE");
+  });
+});
+
+describe("resolveInjectPlaceholders — inject anchor at start and end of template", () => {
+  it("resolves anchor at very start of template", () => {
+    const toml: RalphRulesToml = {
+      rules: { start: { name: "start", enabled: true, entries: [{ at: 1, prompt: "START_VALUE" }] } },
+    };
+    const result = resolveInjectPlaceholders("{{inject:start}}\nBody text", { iteration: 1 }, ".", toml);
+    expect(result.startsWith("START_VALUE")).toBe(true);
+  });
+
+  it("resolves anchor at very end of template", () => {
+    const toml: RalphRulesToml = {
+      rules: { end: { name: "end", enabled: true, entries: [{ at: 1, prompt: "END_VALUE" }] } },
+    };
+    const result = resolveInjectPlaceholders("Body text\n{{inject:end}}", { iteration: 1 }, ".", toml);
+    expect(result.endsWith("END_VALUE")).toBe(true);
+  });
+});
+
+describe("resolveInjectPlaceholders — prime iteration modulo check", () => {
+  it("returns comment for non-multiples of 7", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        prime7: { name: "prime7", enabled: true, entries: [{ at: 7, prompt: "CHECK" }] },
+      },
+    };
+    for (const i of [1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 13]) {
+      const result = resolveInjectPlaceholders("{{inject:prime7}}", { iteration: i }, ".", toml);
+      expect(result).toContain("no active entries");
+    }
+    for (const i of [7, 14, 21, 28]) {
+      const result = resolveInjectPlaceholders("{{inject:prime7}}", { iteration: i }, ".", toml);
+      expect(result).toContain("CHECK");
+    }
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// Iteration 9 — Bug fix + F6 improvement + F3 coverage
+// ────────────────────────────────────────────────────────────────
+
+describe("loadRulesToml — whitespace-only TOML file", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("returns null for whitespace-only TOML file", () => {
+    const dirName = "ralph-ws-toml-9";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+    writeFileSync(join(testDir, `.ralph-${dirName}.toml`), "   \n\n   \n");
+
+    const result = loadRulesToml(testDir);
+    expect(result).toBeNull();
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("returns null for tab-only TOML file", () => {
+    const dirName = "ralph-tab-toml";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+    writeFileSync(join(testDir, `.ralph-${dirName}.toml`), "\t\t\n\t\n");
+
+    const result = loadRulesToml(testDir);
+    expect(result).toBeNull();
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("returns parsed object for comments-only TOML file", () => {
+    const dirName = "ralph-cmt-toml-9";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+    writeFileSync(join(testDir, `.ralph-${dirName}.toml`), "# comment\n# another");
+
+    const result = loadRulesToml(testDir);
+    expect(result).not.toBeNull();
+    expect(result!.rules).toBeUndefined();
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("returns null for newline-only TOML file", () => {
+    const dirName = "ralph-newline-toml";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+    writeFileSync(join(testDir, `.ralph-${dirName}.toml`), "\n");
+
+    const result = loadRulesToml(testDir);
+    expect(result).toBeNull();
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+describe("F3 — injected content with {{inject:*}} is NOT re-resolved", () => {
+  it("leaves {{inject:other}} in injected prompt as literal text", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        outer: {
+          name: "outer",
+          enabled: true,
+          entries: [{ at: 1, prompt: "This has {{inject:inner}} inside" }],
+        },
+        inner: {
+          name: "inner",
+          enabled: true,
+          entries: [{ at: 1, prompt: "inner content" }],
+        },
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "START {{inject:outer}} END",
+      { iteration: 1 },
+      ".",
+      toml,
+    );
+
+    // The outer is resolved, but the {{inject:inner}} inside its prompt
+    // should remain as literal text (NOT re-resolved)
+    expect(result).toContain("This has {{inject:inner}} inside");
+    expect(result).not.toContain("inner content");
+    expect(result).toContain("START");
+    expect(result).toContain("END");
+  });
+
+  it("resolves each top-level anchor independently", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        alpha: {
+          name: "alpha",
+          enabled: true,
+          entries: [{ at: 2, prompt: "Alpha at 2" }],
+        },
+        beta: {
+          name: "beta",
+          enabled: true,
+          entries: [{ at: 3, prompt: "Beta at 3" }],
+        },
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:alpha}} | {{inject:beta}}",
+      { iteration: 6 }, // 6%2==0, 6%3==0 → both active
+      ".",
+      toml,
+    );
+
+    expect(result).toContain("Alpha at 2");
+    expect(result).toContain("Beta at 3");
+  });
+});
+
+describe("findPlaceholderRules — returns all matching sections (F6 fix)", () => {
+  it("returns all sections with PLACEHOLDER, not just the first", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        sync: { name: "sync", enabled: true, entries: [{ at: 5, prompt: "PLACEHOLDER: sync" }] },
+        verify: { name: "verify", enabled: true, entries: [{ at: 7, prompt: "PLACEHOLDER: verify" }] },
+        deploy: { name: "deploy", enabled: true, entries: [{ at: 11, prompt: "Real prompt" }] },
+      },
+    };
+
+    const result = findPlaceholderRules(toml);
+    expect(result.length).toBe(2);
+    expect(result).toContain("sync");
+    expect(result).toContain("verify");
+    expect(result).not.toContain("deploy");
+  });
+
+  it("returns empty array when no rules have PLACEHOLDER", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        clean: { name: "clean", enabled: true, entries: [{ at: 1, prompt: "Real work" }] },
+      },
+    };
+
+    expect(findPlaceholderRules(toml)).toEqual([]);
+  });
+
+  it("returns empty array for null TOML", () => {
+    expect(findPlaceholderRules(null)).toEqual([]);
+  });
+
+  it("returns empty array for TOML with empty rules", () => {
+    expect(findPlaceholderRules({ rules: {} })).toEqual([]);
+  });
+
+  it("deduplicates section names", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        multi: {
+          name: "multi",
+          enabled: true,
+          entries: [
+            { at: 1, prompt: "PLACEHOLDER: first" },
+            { at: 2, prompt: "PLACEHOLDER: second" },
+          ],
+        },
+      },
+    };
+
+    const result = findPlaceholderRules(toml);
+    expect(result).toEqual(["multi"]);
   });
 });
