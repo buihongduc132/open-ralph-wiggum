@@ -5682,3 +5682,50 @@ describe("F1: validateRulesToml — runtime schema validation", () => {
     }
   });
 });
+
+describe("validateRulesToml — additional state_injection coverage", () => {
+  it("warns on state_injection with negative max_next", () => {
+    const toml: RalphRulesToml = {
+      rules: {},
+      state_injection: {
+        source: "state.jsonl",
+        max_next: -3,
+        max_prev: 1,
+        show_status: true,
+        reminder: "",
+      },
+    };
+    const warnings = validateRulesToml(toml);
+    expect(warnings.some(w => w.includes("state_injection") && w.includes("max_next"))).toBe(true);
+  });
+
+  it("warns on state_injection with non-string reminder", () => {
+    const toml = {
+      rules: {},
+      state_injection: {
+        source: "state.jsonl",
+        max_next: 1,
+        max_prev: 1,
+        show_status: true,
+        reminder: 42,
+      },
+    } as unknown as RalphRulesToml;
+    const warnings = validateRulesToml(toml);
+    expect(warnings.some(w => w.includes("state_injection") && w.includes("reminder"))).toBe(true);
+  });
+
+  it("warns on state_injection with non-boolean show_status", () => {
+    const toml = {
+      rules: {},
+      state_injection: {
+        source: "state.jsonl",
+        max_next: 1,
+        max_prev: 1,
+        show_status: "yes",
+        reminder: "",
+      },
+    } as unknown as RalphRulesToml;
+    const warnings = validateRulesToml(toml);
+    expect(warnings.some(w => w.includes("state_injection") && w.includes("show_status"))).toBe(true);
+  });
+});
