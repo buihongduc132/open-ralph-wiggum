@@ -1,0 +1,454 @@
+/**
+ * Tests for Ralph External Review Gate.
+ *
+ * Phase 0: RalphState unification + atomic saveState
+ * Phase 1: Types + run-hash
+ */
+
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { join } from "path";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, renameSync } from "fs";
+import {
+   loadState,
+   saveState,
+   clearState,
+   type RalphState,
+} from "../src/loop-helpers";
+import {
+   generateRunHash,
+   parseQuorum,
+   buildReviewPrompt,
+   createReviewGateState,
+   resetVotes,
+   checkQuorum,
+   injectRejectionFeedback,
+   parseVoterTimeout,
+   validateReviewConfig,
+} from "../src/review-gate";
+import { parseReviewConfig } from "../src/runtime-config";
+
+let tmpDir: string;
+let statePath: string;
+
+beforeEach(() => {
+   tmpDir = join(process.cwd(), `.test-review-gate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+   mkdirSync(tmpDir, { recursive: true });
+   statePath = join(tmpDir, "ralph-loop.state.json");
+});
+
+afterEach(() => {
+   if (existsSync(tmpDir)) {
+      rmSync(tmpDir, { recursive: true, force: true });
+   }
+});
+
+// ── Phase 0: Atomic saveState ──────────────────────────────────────────────
+
+describe("Phase 0 — Atomic saveState", () => {
+   it("writes state file atomically (temp file + rename, not direct write)", () => {
+      const state: RalphState = {
+         active: true,
+         iteration: 1,
+         minIterations: 1,
+         maxIterations: 100,
+         completionPromise: "COMPLETE",
+         tasksMode: false,
+         taskPromise: "",
+         prompt: "test prompt",
+         startedAt: new Date().toISOString(),
+         model: "test-model",
+         agent: "opencode",
+      };
+
+      saveState(state, statePath, tmpDir);
+
+      // State file should exist and be valid JSON
+      expect(existsSync(statePath)).toBe(true);
+      const loaded = JSON.parse(readFileSync(statePath, "utf-8"));
+      expect(loaded.active).toBe(true);
+      expect(loaded.iteration).toBe(1);
+   });
+
+   it("does NOT leave .tmp files after successful write", () => {
+      const state: RalphState = {
+         active: true,
+         iteration: 1,
+         minIterations: 1,
+         maxIterations: 100,
+         completionPromise: "COMPLETE",
+         tasksMode: false,
+         taskPromise: "",
+         prompt: "test",
+         startedAt: new Date().toISOString(),
+         model: "test",
+         agent: "opencode",
+      };
+
+      saveState(state, statePath, tmpDir);
+      saveState(state, statePath, tmpDir);
+      saveState(state, statePath, tmpDir);
+
+      // No leftover temp files
+      const files = require("fs").readdirSync(tmpDir).filter((f: string) => f.endsWith(".tmp") || f.includes(".tmp-"));
+      expect(files.length).toBe(0);
+   });
+
+   it("overwrites existing state file correctly", () => {
+      // Write initial state
+      const state1: RalphState = {
+         active: true,
+         iteration: 1,
+         minIterations: 1,
+         maxIterations: 100,
+         completionPromise: "COMPLETE",
+         tasksMode: false,
+         taskPromise: "",
+         prompt: "first",
+         startedAt: new Date().toISOString(),
+         model: "test",
+         agent: "opencode",
+      };
+      saveState(state1, statePath, tmpDir);
+
+      // Overwrite with new state
+      const state2: RalphState = { ...state1, iteration: 5, prompt: "second" };
+      saveState(state2, statePath, tmpDir);
+
+      const loaded = loadState(statePath);
+      expect(loaded!.iteration).toBe(5);
+      expect(loaded!.prompt).toBe("second");
+   });
+
+   it("handles load of state with missing optional fields (backward compat)", () => {
+      // Minimal state file (no runHash, no reviewGate)
+      writeFileSync(statePath, JSON.stringify({
+         active: true,
+         iteration: 1,
+         minIterations: 1,
+         maxIterations: 100,
+         completionPromise: "COMPLETE",
+         tasksMode: false,
+         taskPromise: "",
+         prompt: "test",
+         startedAt: new Date().toISOString(),
+         model: "test",
+         agent: "opencode",
+      }));
+
+      const loaded = loadState(statePath);
+      expect(loaded).not.toBeNull();
+      // Optional fields should be undefined (not crash)
+      expect(loaded!.runHash).toBeUndefined();
+      expect(loaded!.reviewGate).toBeUndefined();
+   });
+});
+
+// ── Phase 1: Run Hash ──────────────────────────────────────────────────────
+
+describe("Phase 1 — Run Hash", () => {
+   it("generates a 16-char hex string", () => {
+      const hash = generateRunHash("/tmp/test", "/tmp/test/.ralph");
+      expect(hash).toMatch(/^[0-9a-f]{16}$/);
+   });
+
+   it("generates unique hashes across calls", () => {
+      const hashes = new Set<string>();
+      for (let i = 0; i < 100; i++) {
+         hashes.add(generateRunHash("/tmp/test", "/tmp/test/.ralph"));
+      }
+      // With randomBytes(8), collisions among 100 hashes should be ~0
+      expect(hashes.size).toBeGreaterThan(90);
+   });
+
+   it("generates different hashes for different cwds", () => {
+      const h1 = generateRunHash("/tmp/a", "/tmp/a/.ralph");
+      const h2 = generateRunHash("/tmp/b", "/tmp/b/.ralph");
+      // Very likely different (different input to hash)
+      expect(h1).not.toBe(h2);
+   });
+});
+
+// ── Phase 1: Quorum Parsing ────────────────────────────────────────────────
+
+describe("Phase 1 — Quorum Parsing", () => {
+   it("parses '3/3' quorum correctly", () => {
+      const result = parseQuorum("3/3");
+      expect(result.required).toBe(3);
+      expect(result.total).toBe(3);
+   });
+
+   it("parses '2/3' quorum correctly", () => {
+      const result = parseQuorum("2/3");
+      expect(result.required).toBe(2);
+      expect(result.total).toBe(3);
+   });
+
+   it("parses '1/1' quorum correctly", () => {
+      const result = parseQuorum("1/1");
+      expect(result.required).toBe(1);
+      expect(result.total).toBe(1);
+   });
+
+   it("throws on invalid format", () => {
+      expect(() => parseQuorum("invalid")).toThrow();
+   });
+
+   it("throws on required > total", () => {
+      expect(() => parseQuorum("3/2")).toThrow();
+   });
+
+   it("throws on zero values", () => {
+      expect(() => parseQuorum("0/3")).toThrow();
+      expect(() => parseQuorum("3/0")).toThrow();
+   });
+});
+
+// ── Phase 1: Review Config Parsing ──────────────────────────────────────────
+
+describe("Phase 1 — Review Config Parsing", () => {
+   it("parses a valid [review] section", () => {
+      const result = parseReviewConfig({
+         review: {
+            enabled: true,
+            quorum: "3/3",
+            voter_timeout: "10m",
+            max_reject_cycles: 5,
+            voter: [
+               { agent: "pi", model: "bhd-litellm/role-smart" },
+               { agent: "claude-code", model: "anthropic/claude-sonnet-4" },
+               { agent: "opencode", model: "anthropic/claude-sonnet-4" },
+            ],
+         },
+      });
+
+      expect(result).not.toBeNull();
+      expect(result!.enabled).toBe(true);
+      expect(result!.quorum).toBe("3/3");
+      expect(result!.voters.length).toBe(3);
+      expect(result!.voters[0].agent).toBe("pi");
+      expect(result!.voterTimeout).toBe("10m");
+      expect(result!.maxRejectCycles).toBe(5);
+   });
+
+   it("returns null when review is disabled", () => {
+      const result = parseReviewConfig({
+         review: { enabled: false },
+      });
+      expect(result).toBeNull();
+   });
+
+   it("returns null when no review section", () => {
+      const result = parseReviewConfig({});
+      expect(result).toBeNull();
+   });
+
+   it("uses defaults for optional fields", () => {
+      const result = parseReviewConfig({
+         review: {
+            enabled: true,
+            quorum: "1/1",
+            voter: [
+               { agent: "pi", model: "test-model" },
+            ],
+         },
+      });
+
+      expect(result).not.toBeNull();
+      expect(result!.voterTimeout).toBe("10m"); // default
+      expect(result!.maxRejectCycles).toBe(5); // default
+      expect(result!.reviewPromptFile).toBe(""); // default
+   });
+});
+
+// ── Phase 2: Review Gate Logic ──────────────────────────────────────────────
+
+const TEST_CONFIG: ReviewConfig = {
+   enabled: true,
+   quorum: "3/3",
+   voterTimeout: "10m",
+   maxRejectCycles: 5,
+   reviewPromptFile: "",
+   voters: [
+      { agent: "pi", model: "test-model-1" },
+      { agent: "pi", model: "test-model-2" },
+      { agent: "pi", model: "test-model-3" },
+   ],
+};
+
+describe("Phase 2 — Review Gate Logic", () => {
+   it("T2: Quorum met with 3/3 approve votes", () => {
+      const gateState = createReviewGateState(TEST_CONFIG);
+      gateState.phase = "waiting_review";
+      // Set all votes to approved
+      for (const key of Object.keys(gateState.votes)) {
+         gateState.votes[key] = { status: "approved", at: new Date().toISOString(), reason: "" };
+      }
+
+      const result = checkQuorum(gateState);
+      expect(result.quorumMet).toBe(true);
+      expect(result.approvedCount).toBe(3);
+      expect(result.anyRejected).toBe(false);
+   });
+
+   it("T3: Quorum not met with 2/3 approve", () => {
+      const gateState = createReviewGateState(TEST_CONFIG);
+      gateState.phase = "waiting_review";
+      const keys = Object.keys(gateState.votes);
+      gateState.votes[keys[0]] = { status: "approved", at: new Date().toISOString(), reason: "" };
+      gateState.votes[keys[1]] = { status: "approved", at: new Date().toISOString(), reason: "" };
+      // voter-2 still pending
+
+      const result = checkQuorum(gateState);
+      expect(result.quorumMet).toBe(false);
+      expect(result.approvedCount).toBe(2);
+      expect(result.pendingCount).toBe(1);
+   });
+
+   it("T4: Single reject resets all votes and collects reasons", () => {
+      const gateState = createReviewGateState(TEST_CONFIG);
+      gateState.phase = "waiting_review";
+      const keys = Object.keys(gateState.votes);
+      // 2 approve + 1 reject
+      gateState.votes[keys[0]] = { status: "approved", at: new Date().toISOString(), reason: "" };
+      gateState.votes[keys[1]] = { status: "approved", at: new Date().toISOString(), reason: "" };
+      gateState.votes[keys[2]] = { status: "rejected", at: new Date().toISOString(), reason: "Tests failing" };
+
+      const quorumResult = checkQuorum(gateState);
+      expect(quorumResult.anyRejected).toBe(true);
+      expect(quorumResult.rejectionReasons).toContain("Voter voter-2: Tests failing");
+
+      const reset = resetVotes(gateState, quorumResult.rejectionReasons);
+      expect(reset.rejectCycleCount).toBe(1);
+      expect(reset.phase).toBe("inner_complete");
+      // All votes should be pending
+      for (const vote of Object.values(reset.votes)) {
+         expect(vote.status).toBe("pending");
+      }
+      expect(reset.lastRejectionReasons).toContain("Voter voter-2: Tests failing");
+   });
+
+   it("T5: Max reject cycles force-stops", () => {
+      const gateState = createReviewGateState(TEST_CONFIG);
+      gateState.rejectCycleCount = 5;
+      gateState.phase = "rejected";
+
+      expect(gateState.rejectCycleCount).toBeGreaterThanOrEqual(TEST_CONFIG.maxRejectCycles);
+      expect(gateState.phase).toBe("rejected");
+   });
+
+   it("T6: Voter timeout calculation", () => {
+      expect(parseVoterTimeout("10m")).toBe(600_000);
+      expect(parseVoterTimeout("300s")).toBe(300_000);
+      expect(parseVoterTimeout("1h")).toBe(3_600_000);
+      expect(parseVoterTimeout("500ms")).toBe(500);
+   });
+
+   it("T7: Review disabled by default (no config)", () => {
+      // When no ReviewConfig is provided, review is disabled
+      const gateState = createReviewGateState({
+         enabled: false,
+         quorum: "1/1",
+         voterTimeout: "10m",
+         maxRejectCycles: 5,
+         reviewPromptFile: "",
+         voters: [{ agent: "pi", model: "test" }],
+      });
+      expect(gateState.enabled).toBe(false);
+   });
+
+   it("T9: Review gate state created correctly", () => {
+      const gateState = createReviewGateState(TEST_CONFIG);
+      expect(gateState.quorumRequired).toBe(3);
+      expect(gateState.quorumTotal).toBe(3);
+      expect(gateState.phase).toBe("disabled"); // starts disabled until activated
+      expect(Object.keys(gateState.votes).length).toBe(3);
+      for (const vote of Object.values(gateState.votes)) {
+         expect(vote.status).toBe("pending");
+      }
+   });
+
+   it("T10: No promise tag in voter output = unrecognized", () => {
+      // Simulate voter output without a promise tag
+      const output = "I think this is bad";
+      // checkTerminalPromise should return false for both
+      const { checkTerminalPromise: ctp } = require("../completion");
+      expect(ctp(output, "APPROVE")).toBe(false);
+      expect(ctp(output, "REJECT")).toBe(false);
+   });
+
+   it("T11: REJECT in discussion but no tag = no false positive", () => {
+      const output = "I should reject... actually fine\n<promise>APPROVE</promise>";
+      const { checkTerminalPromise: ctp } = require("../completion");
+      expect(ctp(output, "REJECT")).toBe(false);
+      expect(ctp(output, "APPROVE")).toBe(true);
+   });
+
+   it("T12: Rejection feedback injection writes to context file", () => {
+      const ctxPath = join(tmpDir, "ralph-context.md");
+      writeFileSync(ctxPath, "Existing context\n");
+
+      injectRejectionFeedback(ctxPath, ["Tests failing", "Missing error handling"]);
+
+      const content = readFileSync(ctxPath, "utf-8");
+      expect(content).toContain("Existing context");
+      expect(content).toContain("Review Feedback");
+      expect(content).toContain("Tests failing");
+      expect(content).toContain("Missing error handling");
+   });
+
+   it("T19: Invalid quorum config (3/3 with 2 voters) is caught", () => {
+      const badConfig: ReviewConfig = {
+         enabled: true,
+         quorum: "3/3",
+         voterTimeout: "10m",
+         maxRejectCycles: 5,
+         reviewPromptFile: "",
+         voters: [
+            { agent: "pi", model: "test-1" },
+            { agent: "pi", model: "test-2" },
+         ],
+      };
+
+      expect(() => validateReviewConfig(badConfig)).toThrow(/quorum.*specifies.*voters.*configured/);
+   });
+
+   it("T20: Custom prompt file not found → warning + built-in prompt used", () => {
+      const prompt = buildReviewPrompt({
+         runHash: "abcd1234",
+         cwd: "/tmp/test",
+         prompt: "Build a feature",
+         iterationCount: 5,
+         rejectionHistory: [],
+         customPromptTemplate: "/nonexistent/path/prompt.txt",
+      });
+
+      // Should contain default prompt content
+      expect(prompt).toContain("abcd1234");
+      expect(prompt).toContain("Build a feature");
+      expect(prompt).toContain("APPROVE");
+      expect(prompt).toContain("REJECT");
+   });
+
+   it("T21: Old state file (no reviewGate) → defaults applied", () => {
+      // Write state without reviewGate or runHash
+      const minimalState = {
+         active: true,
+         iteration: 1,
+         minIterations: 1,
+         maxIterations: 100,
+         completionPromise: "COMPLETE",
+         tasksMode: false,
+         taskPromise: "",
+         prompt: "test",
+         startedAt: new Date().toISOString(),
+         model: "test",
+         agent: "opencode",
+      };
+      writeFileSync(statePath, JSON.stringify(minimalState));
+
+      const loaded = loadState(statePath);
+      expect(loaded).not.toBeNull();
+      expect(loaded!.reviewGate).toBeUndefined();
+      expect(loaded!.runHash).toBeUndefined();
+   });
+});

@@ -4,7 +4,7 @@
 
 import { existsSync, readFileSync } from "fs";
 import { dirname, isAbsolute, resolve } from "path";
-import type { AgentType, RalphRuntimeConfig } from "./types";
+import type { AgentType, RalphRuntimeConfig, ReviewConfig, ReviewVoter } from "./types";
 
 export function normalizeRuntimeConfigValue(path: string, value: unknown, expected: "string" | "number" | "boolean" | "string[]"): string | number | boolean | string[] | undefined {
    if (value === undefined) return undefined;
@@ -100,6 +100,83 @@ export function loadRuntimeTomlConfig(configPath: string, explicit: boolean): Ra
       return config;
    } catch (error) {
       console.error(`Error: Failed to parse Ralph TOML config at ${configPath}`);
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+   }
+}
+
+/** Parse the [review] section from a parsed TOML object. */
+export function parseReviewConfig(parsed: Record<string, unknown>): ReviewConfig | null {
+   const reviewSection = parsed.review;
+   if (!reviewSection || typeof reviewSection !== "object") {
+      return null;
+   }
+   const review = reviewSection as Record<string, unknown>;
+
+   const enabled = normalizeRuntimeConfigValue("review.enabled", review.enabled, "boolean") as boolean | undefined;
+   if (!enabled) {
+      return null;
+   }
+
+   const quorum = normalizeRuntimeConfigValue("review.quorum", review.quorum, "string") as string | undefined;
+   if (!quorum) {
+      console.error("Error: review.quorum is required when review is enabled. Expected \"X/Y\" format (e.g., \"3/3\").");
+      process.exit(1);
+   }
+
+   const voterTimeout = (normalizeRuntimeConfigValue("review.voter_timeout", review.voter_timeout, "string") as string | undefined) || "10m";
+   const maxRejectCycles = (normalizeRuntimeConfigValue("review.max_reject_cycles", review.max_reject_cycles, "number") as number | undefined) ?? 5;
+   const reviewPromptFile = (normalizeRuntimeConfigValue("review.review_prompt_file", review.review_prompt_file, "string") as string | undefined) || "";
+
+   // Parse voters from [[review.voter]] array
+   const voters: ReviewVoter[] = [];
+   if (Array.isArray(review.voter)) {
+      for (let i = 0; i < review.voter.length; i++) {
+         const v = review.voter[i];
+         if (typeof v !== "object" || v === null) {
+            console.error(`Error: review.voter[${i}] must be a table.`);
+            process.exit(1);
+         }
+         const voterObj = v as Record<string, unknown>;
+         const agent = normalizeRuntimeConfigValue(`review.voter[${i}].agent`, voterObj.agent, "string") as string | undefined;
+         const model = normalizeRuntimeConfigValue(`review.voter[${i}].model`, voterObj.model, "string") as string | undefined;
+         if (!agent || !model) {
+            console.error(`Error: review.voter[${i}] must have both 'agent' and 'model' fields.`);
+            process.exit(1);
+         }
+         voters.push({ agent, model });
+      }
+   }
+
+   if (voters.length === 0) {
+      console.error("Error: At least one [[review.voter]] is required when review is enabled.");
+      process.exit(1);
+   }
+
+   return {
+      enabled: true,
+      quorum,
+      voterTimeout,
+      maxRejectCycles,
+      reviewPromptFile,
+      voters,
+   };
+}
+
+export function loadReviewConfig(configPath: string): ReviewConfig | null {
+   if (!existsSync(configPath)) {
+      return null;
+   }
+   try {
+      const raw = readFileSync(configPath, "utf-8");
+      const parsed = Bun.TOML.parse(raw) as Record<string, unknown>;
+      const reviewConfig = parseReviewConfig(parsed);
+      if (reviewConfig?.reviewPromptFile) {
+         reviewConfig.reviewPromptFile = resolveConfigRelativePath(configPath, reviewConfig.reviewPromptFile);
+      }
+      return reviewConfig;
+   } catch (error) {
+      console.error(`Error: Failed to parse review config from ${configPath}`);
       console.error(error instanceof Error ? error.message : String(error));
       process.exit(1);
    }

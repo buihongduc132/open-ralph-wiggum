@@ -5,10 +5,11 @@
  * Extracted from ralph.ts for testability and coverage tracking.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, lstatSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, lstatSync, renameSync } from "fs";
 import { $ } from "bun";
 import type { AgentType } from "./types";
 import type { BlacklistedAgent } from "../loop-runtime";
+import type { ReviewGateState } from "./types";
 
 export interface IterationHistory {
    iteration: number;
@@ -102,6 +103,9 @@ export interface RalphState {
    stallRetries?: boolean;
    stallRetryMinutes?: number;
    fallbackBlacklist?: string[];
+   // Review gate fields
+   runHash?: string;
+   reviewGate?: ReviewGateState;
 }
 
 export function loadState(statePath: string): RalphState | null {
@@ -131,7 +135,10 @@ export function saveState(state: RalphState, statePath: string, stateDir: string
    } else {
       mkdirSync(stateDir, { recursive: true });
    }
-   writeFileSync(statePath, JSON.stringify(state, null, 2));
+   // Atomic write: temp file + renameSync (POSIX guarantees atomicity)
+   const tmpPath = `${statePath}.tmp-${process.pid}-${Date.now()}`;
+   writeFileSync(tmpPath, JSON.stringify(state, null, 2));
+   renameSync(tmpPath, statePath);
 }
 
 export function clearState(statePath: string): void {
