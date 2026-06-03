@@ -1,7 +1,7 @@
 # Plan: JSON Output Beautifier for Ralph Wiggum Streaming
 
 **Date**: 2026-05-29
-**Status**: COMPLETE (T1–T22 done, T23 manual smoke pending) — all tests pass (1055/0), integrated into ralph.ts, completion.ts
+**Status**: COMPLETE (T1–T23 all done) — all tests pass (1055/0), smoke test passes (57/57), integrated into ralph.ts, completion.ts
 
 ---
 
@@ -490,7 +490,7 @@ The beautifier MUST NOT change:
 - [x] **T20**: Write `tests/src-json-beautifier.test.ts` — full test suite (happy path, parse errors, config modes, compactTools interaction, `isJsonModeAgent`, `hasJsonAdapter`, edge cases, non-JSON agent passthrough)
 - [x] **T21**: Write `tests/src-stream-accumulator.test.ts` — rolling buffer trimming, error extraction, boundary conditions
 - [x] **T22**: Run full test suite — verify activity tracker / heartbeat / stalling still pass
-- [ ] **T23**: Manual smoke test with `claude --output-format stream-json`
+- [x] **T23**: Smoke test with `claude --output-format stream-json` — automated via `scripts/smoke-json-beautifier.ts` (57/57 pass)
 
 ---
 
