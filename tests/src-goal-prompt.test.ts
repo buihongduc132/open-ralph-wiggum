@@ -93,6 +93,30 @@ describe("buildGoalPromptSection", () => {
       const section = buildGoalPromptSection(goal, state, 3);
       expect(section).toContain("All plan steps complete");
    });
+
+   it("handles orphaned step ID (step in goal but no state entry)", () => {
+      const goal = makeTestGoal();
+      // State has no planSteps entries at all
+      const state = makeTestState({
+         planSteps: {},
+      });
+      const section = buildGoalPromptSection(goal, state, 1);
+      // Orphaned steps are treated as pending (not "done")
+      expect(section).toContain("Step 1: Step 1");
+   });
+
+   it("handles gap in plan step state (step 1 done, step 2 missing)", () => {
+      const goal = makeTestGoal();
+      // Step 1 is done, but step 2 has no state entry at all
+      const state = makeTestState({
+         planSteps: {
+            "1": { status: "done", iterations: [1] },
+         },
+      });
+      const section = buildGoalPromptSection(goal, state, 2);
+      // Step 2 should be selected (orphaned → treated as pending)
+      expect(section).toContain("Step 2: Step 2");
+   });
 });
 
 describe("formatGoalInventory", () => {
@@ -159,5 +183,10 @@ describe("titleToSlug", () => {
 
    it("handles empty string", () => {
       expect(titleToSlug("")).toBe("");
+   });
+
+   it("returns empty string for only special characters", () => {
+      expect(titleToSlug("@#$%^&*!")).toBe("");
+      expect(titleToSlug("日本語")).toBe("");
    });
 });

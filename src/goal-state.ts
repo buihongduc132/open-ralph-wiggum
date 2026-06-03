@@ -151,9 +151,9 @@ export function markFactVerified(
 ): GoalState {
    const existing = state.facts[factId];
 
-   // Already verified — keep original timestamp (idempotent)
+   // Already verified — return a shallow copy to maintain immutability
    if (existing?.status === "verified") {
-      return state;
+      return { ...state };
    }
 
    return {

@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync } from "fs";
 import { join } from "path";
 import {
    buildInventory,
@@ -149,6 +149,26 @@ describe("buildInventory", () => {
       const goal = inv.goals.find(g => g.slug === "max-verified");
       expect(goal).toBeDefined();
       expect(goal!.factsVerified).toBe(2); // max(goal.md=2, state=1) = 2
+   });
+
+   it("skips broken symlinks (statSync failure)", () => {
+      const brokenLink = join(TEMP_DIR, "broken-link");
+      try {
+         symlinkSync("/nonexistent/path/that/does/not/exist", brokenLink);
+      } catch {
+         // Skip test if symlinks not supported
+         return;
+      }
+
+      const inv = buildInventory(TEMP_DIR);
+      expect(inv.goals).toHaveLength(0);
+   });
+
+   it("skips non-directory entries (files, symlinks to files)", () => {
+      writeFileSync(join(TEMP_DIR, "readme.md"), "not a directory", "utf-8");
+
+      const inv = buildInventory(TEMP_DIR);
+      expect(inv.goals).toHaveLength(0);
    });
 });
 

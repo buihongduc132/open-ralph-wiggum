@@ -82,6 +82,36 @@ describe("loadGoalState — malformed inputs", () => {
       require("fs").writeFileSync(path, "{}", "utf-8");
       expect(loadGoalState(path)).toBeNull();
    });
+
+   it("returns null when facts field is null (typeof null === 'object')", () => {
+      const path = statePath("null-facts");
+      require("fs").writeFileSync(path, JSON.stringify({
+         slug: "test",
+         phase: "planning",
+         startedAt: "2026-01-01T00:00:00Z",
+         lastIterationAt: "2026-01-01T00:00:00Z",
+         iterations: 0,
+         facts: null,
+         planSteps: {},
+         completionPromise: "COMPLETE",
+      }), "utf-8");
+      expect(loadGoalState(path)).toBeNull();
+   });
+
+   it("returns null when planSteps field is null", () => {
+      const path = statePath("null-plansteps");
+      require("fs").writeFileSync(path, JSON.stringify({
+         slug: "test",
+         phase: "planning",
+         startedAt: "2026-01-01T00:00:00Z",
+         lastIterationAt: "2026-01-01T00:00:00Z",
+         iterations: 0,
+         facts: {},
+         planSteps: null,
+         completionPromise: "COMPLETE",
+      }), "utf-8");
+      expect(loadGoalState(path)).toBeNull();
+   });
 });
 
 describe("loadGoalState / saveGoalState", () => {
@@ -182,6 +212,16 @@ describe("markFactVerified", () => {
       // Should keep original timestamp
       expect(updated.facts["1"].verifiedAt).toBe("2026-01-01");
       expect(updated.facts["1"].verifiedBy).toBe("bun test");
+   });
+
+   it("returns a new object reference even when already verified (immutability)", () => {
+      const state = createInitialState("test");
+      state.facts["1"] = { status: "verified", verifiedAt: "2026-01-01", verifiedBy: "bun test" };
+
+      const updated = markFactVerified(state, "1", "bun test2");
+
+      // Must return a different reference
+      expect(updated).not.toBe(state);
    });
 
    it("creates fact entry if it does not exist", () => {

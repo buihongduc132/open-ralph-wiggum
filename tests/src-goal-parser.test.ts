@@ -326,6 +326,53 @@ All facts verified.
       expect(reparsed.doneCondition).toBe("All facts verified.");
    });
 
+   it("extractSection ignores ## headings inside fenced code blocks", () => {
+      const path = writeFixture("code-block-sections.md", `# Goal: Code Block Test
+
+## Objective
+Parse correctly despite code blocks.
+
+\`\`\`markdown
+## Fake Section
+This should be ignored.
+\`\`\`
+
+## Facts
+- [ ] Fact 1: Parser ignores ## in code blocks
+
+## Plan
+1. Do it
+
+## Done Condition
+All facts verified.
+`);
+      const goal = parseGoalMd(path, "code-block");
+      expect(goal.title).toBe("Code Block Test");
+      expect(goal.objective).toBe("Parse correctly despite code blocks.");
+      expect(goal.facts).toHaveLength(1);
+      expect(goal.facts[0].text).toBe("Parser ignores ## in code blocks");
+      expect(goal.planSteps).toHaveLength(1);
+      expect(goal.doneCondition).toBe("All facts verified.");
+   });
+
+   it("throws descriptive error when file is deleted before write", () => {
+      const path = writeFixture("deleted-before-write.md", `# Goal: Delete Test
+
+## Objective
+Test.
+
+## Facts
+- [ ] Fact 1: Something
+
+## Done Condition
+Done.
+`);
+      const goal = parseGoalMd(path, "delete-test");
+      // Delete the file
+      rmSync(path, { force: true });
+      expect(() => writeGoalMd(goal)).toThrow(/file not found/);
+   });
+
    it("handles goal.md without ## Facts header (returns unchanged)", () => {
       const path = writeFixture("no-facts-section.md", `# Goal: No Facts
 

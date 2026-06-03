@@ -55,12 +55,21 @@ export function writeGoalMd(goal: Goal): void {
       throw new Error("Cannot write goal: no filePath set");
    }
 
-   let content = readFileSync(goal.filePath, "utf-8");
+   let content: string;
+   try {
+      content = readFileSync(goal.filePath, "utf-8");
+   } catch {
+      throw new Error(`Cannot write goal: file not found: ${goal.filePath}`);
+   }
 
    // Rewrite the Facts section
    content = rewriteFactsSection(content, goal.facts);
 
-   writeFileSync(goal.filePath, content, "utf-8");
+   try {
+      writeFileSync(goal.filePath, content, "utf-8");
+   } catch {
+      throw new Error(`Cannot write goal: write failed: ${goal.filePath}`);
+   }
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────
@@ -71,10 +80,16 @@ function extractTitle(content: string): string {
    return match ? match[1].trim() : "";
 }
 
+/** Strip fenced code blocks (```...```) so ## inside code doesn't confuse section extraction. */
+function stripFencedCodeBlocks(content: string): string {
+   return content.replace(/```[\s\S]*?```/g, "");
+}
+
 /** Extract a named ## Section's content (up to the next ## or EOF) */
 function extractSection(content: string, sectionName: string): string {
+   const stripped = stripFencedCodeBlocks(content);
    const regex = new RegExp(`^##\\s+${escapeRegex(sectionName)}\\s*\\n([\\s\\S]*?)(?=^##\\s|$(?!\\n))`, "m");
-   const match = content.match(regex);
+   const match = stripped.match(regex);
    if (!match) return "";
    return match[1].trim();
 }

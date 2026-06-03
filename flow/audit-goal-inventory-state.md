@@ -34,3 +34,18 @@
 **Overall Assessment:** 0 HIGH, 1 MEDIUM, 5 LOW, 2 VERY LOW. No security vulnerabilities. No breaking changes. All 6 phases stable.
 
 **Test Status:** 1123 pass, 0 fail, 27 skip (1150 tests across 45 files)
+
+### Iteration 12–13 — Fix Resolutions
+
+| ID | Status | Resolution |
+|----|--------|------------|
+| M1 | ✅ Fixed (b80012c) | multiTouchMatch regex now strips without em-dash dependency |
+| M2 | ✅ Fixed | Added `stripFencedCodeBlocks()` before section extraction |
+| M3 | ✅ Fixed | `writeGoalMd` now wraps read/write in try/catch with descriptive errors |
+| M4 | ✅ Fixed | `markFactVerified` returns `{ ...state }` (shallow copy) for already-verified |
+| M5 | ✅ Confirmed | Null checks already present (typeof null === "object" then === null check); added explicit tests |
+| M6 | ✅ Tested | Added tests for broken symlinks and non-directory entries |
+| M7 | ✅ Tested | Added tests for orphaned step IDs and gap in state entries |
+| M8 | ✅ Tested | Added tests for special-char-only titles; ralph.ts already rejects empty slugs |
+
+**Test Status:** 1136 pass, 0 fail, 27 skip (1163 tests across 45 files)
