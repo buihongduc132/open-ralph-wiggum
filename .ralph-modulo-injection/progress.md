@@ -62,3 +62,18 @@
 ## Commits
 - `cb3b815` feat: harden F1/F2/F5 — schema validation, corrupt TOML warning, no double newlines
 - `81d4980` test: validateRulesToml coverage — negative max_next, non-string reminder, non-boolean show_status
+
+## End of Iteration 15 — Project Complete
+
+All 8 implementation tasks (T1-T8) are complete:
+- T1: TOML schema types defined (RulesConfig, StateInjectionConfig, RalphRulesToml, RuleEntry)
+- T2: loadRulesToml() with state-dir→cwd fallback, no caching
+- T3: resolveInjectPlaceholders() with positional replacement, state injection
+- T4: scaffoldRulesToml() with append-mode, regex idempotency
+- T5: PLACEHOLDER gate in buildPrompt(), case-insensitive detection
+- T6: --init-rules CLI subcommand
+- T7: ralph-run skill updated with injection docs
+- T8: 266 tests, 610 expect() calls, all edge cases covered
+
+All 8 findings (F1-F8) resolved or accepted.
+Last audit: 9.0/10, no demotions, no drift.
