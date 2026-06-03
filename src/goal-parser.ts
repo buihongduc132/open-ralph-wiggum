@@ -178,6 +178,17 @@ function rewriteFactsSection(content: string, facts: Fact[]): string {
 
    const sectionContent = content.substring(afterHeader, sectionEnd);
 
+   // Strip fenced code blocks before processing checkboxes to avoid
+   // corrupting code lines that match the checkbox pattern.
+   // Replace code blocks with unique placeholders, then restore after.
+   const codeBlocks: string[] = [];
+   const codeBlockPlaceholder = "\x00FENCED_CODE_BLOCK_";
+   const strippedSection = sectionContent.replace(/```[\s\S]*?```/g, (match) => {
+      const idx = codeBlocks.length;
+      codeBlocks.push(match);
+      return `${codeBlockPlaceholder}${idx}\x00`;
+   });
+
    // Build a map of fact id -> verified status for lookup
    const factStatusMap = new Map<number, boolean>();
    for (const f of facts) {
@@ -186,7 +197,7 @@ function rewriteFactsSection(content: string, facts: Fact[]): string {
 
    // Replace only the checkbox lines, preserving all other content
    let factId = 0;
-   const updatedSection = sectionContent.replace(
+   let updatedSection = strippedSection.replace(
       /^\s*- \[[ x]\]\s*(?:Fact\s+\d+:\s*)?.+$/gim,
       (line) => {
          factId++;
@@ -195,6 +206,11 @@ function rewriteFactsSection(content: string, facts: Fact[]): string {
          return `- [${verified ? "x" : " "}] Fact ${factId}: ${fact ? fact.text : line.replace(/^\s*- \[[ x]\]\s*(?:Fact\s+\d+:\s*)?/i, "")}`;
       }
    );
+
+   // Restore fenced code blocks
+   for (let i = 0; i < codeBlocks.length; i++) {
+      updatedSection = updatedSection.replace(`${codeBlockPlaceholder}${i}\x00`, codeBlocks[i]);
+   }
 
    return content.substring(0, afterHeader) + updatedSection + content.substring(sectionEnd);
 }

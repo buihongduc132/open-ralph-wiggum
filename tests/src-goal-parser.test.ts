@@ -509,4 +509,46 @@ All facts verified.
       expect(content.endsWith("\n")).toBe(true);
       expect(content.match(/\n{3,}$/)).toBeNull();
    });
+
+   it("preserves fenced code blocks in Facts section on round-trip", () => {
+      const path = writeFixture("facts-codeblock.md", `# Goal: Codeblock Test
+
+## Facts
+- [ ] Fact 1: First fact
+
+\`\`\`markdown
+- [ ] This is NOT a fact, it's in a code block
+- [ ] Another fake fact
+\`\`\`
+
+- [x] Fact 2: Second fact
+
+## Plan
+1. Step 1
+
+## Done Condition
+All facts verified.
+`);
+      const goal = parseGoalMd(path, "codeblock-test");
+
+      // Should only parse real facts, not ones inside code blocks
+      expect(goal.facts).toHaveLength(2);
+      expect(goal.facts[0].text).toBe("First fact");
+      expect(goal.facts[1].text).toBe("Second fact");
+
+      // Mark fact 1 verified
+      goal.facts[0].verified = true;
+      writeGoalMd(goal);
+
+      // Re-read and verify code blocks preserved
+      const content = require("fs").readFileSync(path, "utf-8");
+      expect(content).toContain("This is NOT a fact, it's in a code block");
+      expect(content).toContain("Another fake fact");
+
+      // Re-parse to verify round-trip correctness
+      const goal2 = parseGoalMd(path, "codeblock-test");
+      expect(goal2.facts).toHaveLength(2);
+      expect(goal2.facts[0].verified).toBe(true);
+      expect(goal2.facts[1].verified).toBe(true);
+   });
 });
