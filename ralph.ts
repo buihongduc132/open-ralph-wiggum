@@ -2681,7 +2681,10 @@ Learn more: https://ghuntley.com/ralph/
          template = resolveInjectPlaceholders(template, { iteration: state.iteration }, stateDir, rulesToml);
 
          // PLACEHOLDER gate: abort if any rule entry still has PLACEHOLDER
-         const placeholderSections = findPlaceholderRules(rulesToml);
+         // Re-load TOML after injection — resolveInjectPlaceholders may have scaffolded
+         // new sections to disk that weren't in the original in-memory TOML (F9 fix).
+         const rulesTomlUpdated = loadRulesToml(stateDir);
+         const placeholderSections = findPlaceholderRules(rulesTomlUpdated);
          if (placeholderSections.length > 0) {
             console.error(`\n❌ Ralph PLACEHOLDER Gate — Iteration ${state.iteration}`);
             for (const sec of placeholderSections) {

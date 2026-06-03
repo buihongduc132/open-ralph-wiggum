@@ -5729,3 +5729,126 @@ describe("validateRulesToml — additional state_injection coverage", () => {
     expect(warnings.some(w => w.includes("state_injection") && w.includes("show_status"))).toBe(true);
   });
 });
+
+describe("F9: PLACEHOLDER gate catches newly scaffolded sections", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("gate misses scaffolded section on FIRST load but catches on RE-LOAD", () => {
+    // Scenario: TOML has clean rules, but template references a missing rule.
+    // resolveInjectPlaceholders scaffolds the missing section to disk.
+    // The gate checks the ORIGINAL in-memory TOML → misses it.
+    // Re-loading TOML from disk → catches it.
+    const dirName = `ralph-f9-scaffold-gap-${Date.now()}`;
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    // Create a TOML file with one clean rule but NOT the referenced "missing" rule
+    // loadRulesToml derives TOML name from extractStateDirBasename(testDir) = dirName
+    const tomlName = `.ralph-${dirName}.toml`;
+    const tomlContent = `
+[rules.existing]
+name = "existing"
+enabled = true
+
+[[rules.existing.entries]]
+at = 5
+prompt = "Real prompt"
+`;
+    writeFileSync(join(testDir, tomlName), tomlContent);
+
+    // Step 1: Load TOML — has [rules.existing] but NOT [rules.missing]
+    const rulesToml = loadRulesToml(testDir);
+    expect(rulesToml).not.toBeNull();
+    expect(findPlaceholderRules(rulesToml)).toEqual([]); // Gate passes on initial load
+
+    // Step 2: Resolve template that references the missing rule
+    const template = "Header\n{{inject:missing}}\nFooter";
+    const resolved = resolveInjectPlaceholders(template, { iteration: 1 }, testDir, rulesToml);
+    expect(resolved).toContain("SCAFFOLDED");
+    expect(resolved).toContain("PLACEHOLDER");
+
+    // Step 3: Gate still passes on the ORIGINAL in-memory TOML — this is the gap
+    const gateBefore = findPlaceholderRules(rulesToml);
+    expect(gateBefore).toEqual([]); // BUG: gate misses the newly scaffolded section
+
+    // Step 4: Re-loading TOML from disk catches it
+    const rulesTomlReloaded = loadRulesToml(testDir);
+    const gateAfter = findPlaceholderRules(rulesTomlReloaded);
+    expect(gateAfter).toContain("missing"); // Re-load catches the scaffolded PLACEHOLDER
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("gate catches both pre-existing and newly scaffolded PLACEHOLDERs after re-load", () => {
+    const dirName = `ralph-f9-both-${Date.now()}`;
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    // TOML with one PLACEHOLDER rule
+    // loadRulesToml derives TOML name from extractStateDirBasename(testDir) = dirName
+    const tomlName = `.ralph-${dirName}.toml`;
+    const tomlContent = `
+[rules.existing]
+name = "existing"
+enabled = true
+
+[[rules.existing.entries]]
+at = 5
+prompt = "PLACEHOLDER: not yet configured"
+`;
+    writeFileSync(join(testDir, tomlName), tomlContent);
+
+    const rulesToml = loadRulesToml(testDir);
+
+    // Gate catches pre-existing PLACEHOLDER
+    const gateBefore = findPlaceholderRules(rulesToml);
+    expect(gateBefore).toContain("existing");
+
+    // Resolve template that ALSO references a missing rule
+    const template = "{{inject:existing}}\n{{inject:newrule}}";
+    resolveInjectPlaceholders(template, { iteration: 1 }, testDir, rulesToml);
+
+    // Re-load catches BOTH
+    const reloaded = loadRulesToml(testDir);
+    const gateAfter = findPlaceholderRules(reloaded);
+    expect(gateAfter).toContain("existing");
+    expect(gateAfter).toContain("newrule");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("gate re-load returns empty when no scaffolded sections exist", () => {
+    const dirName = `ralph-f9-clean-${Date.now()}`;
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    // TOML with clean rules, template matches all of them
+    // loadRulesToml derives TOML name from extractStateDirBasename(testDir) = dirName
+    const tomlName = `.ralph-${dirName}.toml`;
+    const tomlContent = `
+[rules.sync]
+name = "sync"
+enabled = true
+
+[[rules.sync.entries]]
+at = 5
+prompt = "Sync checkpoint"
+`;
+    writeFileSync(join(testDir, tomlName), tomlContent);
+
+    const rulesToml = loadRulesToml(testDir);
+
+    // Resolve template that only references existing clean rule
+    const template = "{{inject:sync}}";
+    const resolved = resolveInjectPlaceholders(template, { iteration: 5 }, testDir, rulesToml);
+    expect(resolved).toContain("Sync checkpoint");
+    expect(resolved).not.toContain("SCAFFOLDED");
+
+    // Re-load — still clean
+    const reloaded = loadRulesToml(testDir);
+    expect(findPlaceholderRules(reloaded)).toEqual([]);
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
