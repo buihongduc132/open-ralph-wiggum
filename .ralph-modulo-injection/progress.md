@@ -1,51 +1,36 @@
-# Iteration 47 Progress (FORWARD)
+# Iteration 105 Progress (BACKWARD+SYNC)
 
-## State Check
-- All 8 tasks (T1-T8) completed since iteration 4
-- No demotions, no failing tests
-- I46: confirmed all complete, no remaining work
-- I45 SYNC: M1/M4 fixed, committed
-- I44 BACKWARD mutation audit: 9/10 score
+## Modulo Checkpoints
+- I % 5 == 0 → SYNC ✓ (committed, pulled, retained to hindsight)
+- I % 7 == 0 → BACKWARD verifier ✓ (no demotions, no drift, 9.5/10)
 
-## Modulo Checkpoint
-- I % 5 = 2: No SYNC
-- I % 7 = 5: No BACKWARD verifier
-- I % 11 = 3: No BACKWARD mutation
-
-## Work Done — ALL COMPLETE
-
-All engineering tasks complete. No remaining work:
-- 363 injection tests, 818 expect() calls — ALL PASS
-- 1384 total tests pass, 0 fail, 27 skip (pre-existing)
-- Feature is production-ready
-
-## Test Results
+## Audit Summary
 - **1384 pass, 27 skip, 0 fail**
-- 2711+ expect() calls across 40 files
-- Injection file: 363 tests, 818 expects — ALL PASS
+- All T1-T8 remain **completed** — no demotions
+- No implementation drift from plan
+- All previous findings (F1-F9, M1-M4) resolved
+
+## Backward Hunt Results
+| Check | Result |
+|-------|--------|
+| TOML parsing correctness | ✓ PASS |
+| Regex collision with {{iteration}} etc. | ✓ PASS |
+| Append-mode scaffolding integrity | ✓ PASS |
+| PLACEHOLDER gate fires every iteration | ✓ PASS |
+| Implementation drift from plan | ✓ NO DRIFT |
 
 ## All Tasks Status
 | Task | Status | Notes |
 |------|--------|-------|
-| T1 — TOML schema types | ✅ completed | RulesConfig, StateInjectionConfig, RalphRulesToml |
-| T2 — loadRulesToml() | ✅ completed | State-dir → cwd fallback, no cache |
-| T3 — resolveInjectPlaceholders | ✅ completed | {{inject:*}} regex, modulo, state JSONL |
-| T4 — scaffoldRulesToml | ✅ completed | Append-mode, fixed leading newline |
-| T5 — PLACEHOLDER gate | ✅ completed | Re-loads TOML after injection |
-| T6 — init-rules subcommand | ✅ completed | Scaffolds with defaults |
-| T7 — ralph-run skill update | ✅ completed | Documents injection pattern |
+| T1 — TOML schema types | ✅ completed | |
+| T2 — loadRulesToml() | ✅ completed | |
+| T3 — resolveInjectPlaceholders | ✅ completed | |
+| T4 — scaffoldRulesToml | ✅ completed | |
+| T5 — PLACEHOLDER gate | ✅ completed | |
+| T6 — init-rules subcommand | ✅ completed | |
+| T7 — ralph-run skill update | ✅ completed | |
 | T8 — Tests | ✅ completed | 363 tests, 818 expect() calls |
 
-## Cumulative Audit Findings
-| ID | Status | Notes |
-|----|--------|-------|
-| F1-F9 | ✅ All resolved | Hardened/fixed in I9-I16 |
-| M1 | ✅ Fixed (I45) | State/rule collision test added |
-| M2 | Documented | NaN at values — by-design |
-| M3 | Documented | Infinity at values — by-design |
-| M4 | ✅ Fixed (I45) | Leading newline fix + hardened test |
-
 ## Next Checkpoints
-- **I49** (I%7==0): BACKWARD — verifier loop (READ-ONLY)
-- **I50** (I%5==0): SYNC — git pull --rebase, commit, retain hindsight
-- **I55** (I%11==0): BACKWARD — mutation + CodeQL (READ-ONLY)
+- **I110** (I%11==0): BACKWARD — mutation + CodeQL (READ-ONLY)
+- **I112** (I%7==0): BACKWARD — verifier loop (READ-ONLY)
