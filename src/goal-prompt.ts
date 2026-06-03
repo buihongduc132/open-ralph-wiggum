@@ -10,7 +10,7 @@
  * This is opt-in only — no behavior change without --goal flag.
  */
 
-import type { Goal, GoalState, Fact } from "./goal-types";
+import type { Goal, GoalPhase, GoalState, Fact } from "./goal-types";
 
 /**
  * Build the goal-aware section for the iteration prompt.
@@ -90,7 +90,7 @@ function buildPlanSection(
 }
 
 /** Get an emoji for the goal phase */
-function phaseEmoji(phase: string): string {
+function phaseEmoji(phase: GoalPhase): string {
    switch (phase) {
       case "planning": return "📋";
       case "executing": return "🔄";
@@ -107,7 +107,7 @@ export function formatGoalInventory(
    goals: Array<{
       slug: string;
       title: string;
-      phase: string;
+      phase: GoalPhase;
       factsTotal: number;
       factsVerified: number;
    }>

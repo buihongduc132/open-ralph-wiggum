@@ -8,7 +8,7 @@
 import { existsSync, readdirSync, statSync, readFileSync } from "fs";
 import { join, basename } from "path";
 import { parseGoalMd } from "./goal-parser";
-import type { GoalInventory, GoalInventoryEntry, GoalPhase } from "./goal-types";
+import type { FactState, GoalInventory, GoalInventoryEntry, GoalPhase } from "./goal-types";
 
 const VALID_PHASES: GoalPhase[] = ["planning", "executing", "verifying", "done"];
 
@@ -75,8 +75,8 @@ export function buildInventory(goalsDir: string): GoalInventory {
                const stateVerified = Object.values(
                   state.facts ?? {}
                ).filter(
-                  (f: any) => f.status === "verified"
-               ).length as number;
+                  (f: FactState) => f.status === "verified"
+               ).length;
                factsVerified = Math.max(factsVerified, stateVerified);
             } catch {
                // Malformed state — use defaults

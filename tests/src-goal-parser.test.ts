@@ -270,6 +270,30 @@ Done.
       expect(goal.planSteps[0].touches).toEqual(["src/primary.ts"]);
       expect(goal.planSteps[0].text).toBe("Step one");
    });
+
+   it("parses em-dash multi-touch with comma-separated files", () => {
+      const path = writeFixture("em-dash-multi.md", `# Goal: Em-Dash Multi
+
+## Objective
+Test em-dash multi-touch.
+
+## Facts
+- [ ] Fact 1: Em-dash multi works
+
+## Plan
+1. Step one — touches \`src/a.ts\`, \`src/b.ts\`
+2. Step two — touches \`src/c.ts\`, \`src/d.ts\`, \`src/e.ts\`
+
+## Done Condition
+Done.
+`);
+      const goal = parseGoalMd(path, "em-dash-multi");
+
+      expect(goal.planSteps[0].touches).toEqual(["src/a.ts", "src/b.ts"]);
+      expect(goal.planSteps[0].text).toBe("Step one");
+      expect(goal.planSteps[1].touches).toEqual(["src/c.ts", "src/d.ts", "src/e.ts"]);
+      expect(goal.planSteps[1].text).toBe("Step two");
+   });
 });
 
 describe("writeGoalMd — edge cases", () => {

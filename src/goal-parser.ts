@@ -135,16 +135,10 @@ function extractPlanSteps(content: string): PlanStep[] {
          if (currentStep) steps.push(currentStep);
 
          let text = stepMatch[2];
-         // Extract "touches `path`" from the step line
+         // Extract touches from step line. Try multi-touch first, then single.
          let touches: string[] | undefined;
-         const touchMatch = text.match(/—\s*touches\s+`([^`]+)`/);
-         if (touchMatch) {
-            touches = [touchMatch[1]];
-            text = text.replace(/\s*—\s*touches\s+`[^`]+`/, "");
-         }
-         // Also handle "touches `a`, `b`" format
-         const multiTouchMatch = stepMatch[2].match(/touches\s+((?:`[^`]+`(?:,\s*)?)+)/);
-         if (multiTouchMatch && !touches) {
+         const multiTouchMatch = text.match(/(?:—\s*)?touches\s+((?:`[^`]+`(?:,\s*)?)+)/);
+         if (multiTouchMatch) {
             touches = [...multiTouchMatch[1].matchAll(/`([^`]+)`/g)].map(m => m[1]);
             text = text.replace(/\s*(?:—\s*)?touches\s+(?:`[^`]+`(?:,\s*)?)+/, "");
          }
