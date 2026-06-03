@@ -478,12 +478,20 @@ function geminiAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): strin
     return [ANSI.red(`❌ ${msg}`)];
   }
 
+  // Result / complete events
+  const t = typeof p.type === "string" ? p.type : "";
+  if (t === "result" || t === "complete") {
+    const output = typeof p.result === "string" ? p.result : typeof p.output === "string" ? p.output : "";
+    if (output.trim()) return [ANSI.green(`✅ ${output.trim()}`)];
+    return [];
+  }
+
   // Content field (some gemini versions)
   if (typeof p.content === "string" && p.content.trim()) {
     return [p.content.trim()];
   }
 
-  return [];
+  return []
 }
 
 // ─── Generic Adapter ────────────────────────────────────────────────────────

@@ -866,3 +866,40 @@ describe("extractJsonCompletionText: non-Claude agents", () => {
     expect(result.some(r => r.includes("Streamed text"))).toBe(true);
   });
 });
+
+// ─── Gemini result/complete adapter tests ─────────────────────────────────────
+
+describe("gemini adapter (beautify mode) – result/complete events", () => {
+  const cfg: BeautifierConfig = {
+    mode: "beautify",
+    agentType: "gemini",
+    verboseTools: false,
+    showThinking: true,
+    showRetry: true,
+    showError: true,
+    showCost: true,
+    maxErrorLength: 120,
+  };
+
+  it("renders result event with result field", () => {
+    const line = JSON.stringify({ type: "result", result: "All done" });
+    const out = beautifyJsonLine(line, cfg);
+    expect(out.length).toBe(1);
+    expect(out[0]).toContain("All done");
+    expect(out[0]).toContain("✅");
+  });
+
+  it("renders complete event with output field", () => {
+    const line = JSON.stringify({ type: "complete", output: "Task complete" });
+    const out = beautifyJsonLine(line, cfg);
+    expect(out.length).toBe(1);
+    expect(out[0]).toContain("Task complete");
+    expect(out[0]).toContain("✅");
+  });
+
+  it("suppresses result event with empty result", () => {
+    const line = JSON.stringify({ type: "result", result: "" });
+    const out = beautifyJsonLine(line, cfg);
+    expect(out).toEqual([]);
+  });
+});

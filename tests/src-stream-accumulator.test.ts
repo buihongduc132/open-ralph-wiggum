@@ -77,8 +77,8 @@ describe("StreamAccumulator — tail trimming", () => {
       const threshold = 50;
       const acc = new StreamAccumulator({ tailMaxBytes: threshold });
 
-      acc.append(byteString(60, "A"), false);
-      acc.append(byteString(60, "B"), false);
+      acc.append(byteString(60, "A"));
+      acc.append(byteString(60, "B"));
       // Total = 120, exceeds 2*50=100 → trim to last 50
       expect(acc.tail.length).toBe(threshold);
       // Last 50 chars should all be "B"

@@ -19,7 +19,7 @@ import {
    type BlacklistedAgent,
 } from "./loop-runtime";
 import { ARGS_TEMPLATES, type AgentBuildArgsOptions } from "./agent-builders";
-import { beautifyJsonLine, isJsonModeAgent, type BeautifierConfig } from "./src/json-beautifier";
+import { beautifyJsonLine, extractJsonCompletionText, isJsonModeAgent, type BeautifierConfig } from "./src/json-beautifier";
 import { StreamAccumulator } from "./src/stream-accumulator";
 import { stripFrontmatter } from "./template-utils";
 
@@ -3122,9 +3122,12 @@ Unable to read ${currentTasksFileLabel()}
          if (!isError && promisePattern) {
             // Check beautified output lines first
             completionPromiseSeen = outputLines.some(outputLine => promisePattern.test(outputLine.trim()));
-            // For JSON-mode agents, also check the raw line (beautified output may wrap the promise tag with prefix/suffix)
+            // For JSON-mode agents, parse JSON and test extracted completion text
+            // Raw line is JSON (e.g. {"type":"result","result":"<promise>COMPLETE</promise>"})
+            // which can't match the anchored ^...$ pattern directly.
             if (!completionPromiseSeen && isJsonModeAgent(options.agent.type, options.extraFlags)) {
-               completionPromiseSeen = promisePattern.test(line.trim());
+               const extracted = extractJsonCompletionText(line, options.agent.type);
+               completionPromiseSeen = extracted.some(el => promisePattern.test(el.trim()));
             }
          }
          if (tool) {
