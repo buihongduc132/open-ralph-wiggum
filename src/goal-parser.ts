@@ -131,7 +131,7 @@ function extractPlanSteps(content: string): PlanStep[] {
          const multiTouchMatch = stepMatch[2].match(/touches\s+((?:`[^`]+`(?:,\s*)?)+)/);
          if (multiTouchMatch && !touches) {
             touches = [...multiTouchMatch[1].matchAll(/`([^`]+)`/g)].map(m => m[1]);
-            text = text.replace(/\s*—\s*touches\s+(?:`[^`]+`(?:,\s*)?)+/, "");
+            text = text.replace(/\s*(?:—\s*)?touches\s+(?:`[^`]+`(?:,\s*)?)+/, "");
          }
 
          currentStep = {

@@ -198,6 +198,80 @@ Done.
    });
 });
 
+describe("parseGoalMd — multi-touch plan steps", () => {
+   it("parses multi-touch step with comma-separated touches", () => {
+      const path = writeFixture("multi-touch.md", `# Goal: Multi Touch
+
+## Objective
+Test multi-touch parsing.
+
+## Facts
+- [ ] Fact 1: Multi-touch works
+
+## Plan
+1. Refactor module touches \`src/a.ts\`, \`src/b.ts\`, \`src/c.ts\`
+2. Simple step
+
+## Done Condition
+All done.
+`);
+      const goal = parseGoalMd(path, "multi-touch");
+
+      expect(goal.planSteps).toHaveLength(2);
+      expect(goal.planSteps[0].touches).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
+      expect(goal.planSteps[0].text).toBe("Refactor module");
+      expect(goal.planSteps[1].touches).toBeUndefined();
+   });
+
+   it("parses multi-touch step with verification sub-line", () => {
+      const path = writeFixture("multi-touch-verif.md", `# Goal: Multi Touch Verif
+
+## Objective
+Test multi-touch with verification.
+
+## Facts
+- [ ] Fact 1: Combined works
+
+## Plan
+1. Refactor module touches \`src/a.ts\`, \`src/b.ts\`
+   - Verification: \`bun test tests/a.test.ts tests/b.test.ts\`
+2. Clean up
+
+## Done Condition
+All done.
+`);
+      const goal = parseGoalMd(path, "multi-touch-verif");
+
+      expect(goal.planSteps).toHaveLength(2);
+      expect(goal.planSteps[0].touches).toEqual(["src/a.ts", "src/b.ts"]);
+      expect(goal.planSteps[0].verification).toBe("bun test tests/a.test.ts tests/b.test.ts");
+      expect(goal.planSteps[0].text).toBe("Refactor module");
+      expect(goal.planSteps[1].text).toBe("Clean up");
+   });
+
+   it("prefers em-dash touch syntax over multi-touch when both present", () => {
+      const path = writeFixture("touch-precedence.md", `# Goal: Touch Precedence
+
+## Objective
+Test touch precedence.
+
+## Facts
+- [ ] Fact 1: Precedence works
+
+## Plan
+1. Step one — touches \`src/primary.ts\`
+
+## Done Condition
+Done.
+`);
+      const goal = parseGoalMd(path, "touch-precedence");
+
+      // em-dash format should win (single touch via touchMatch)
+      expect(goal.planSteps[0].touches).toEqual(["src/primary.ts"]);
+      expect(goal.planSteps[0].text).toBe("Step one");
+   });
+});
+
 describe("writeGoalMd — edge cases", () => {
    it("throws when filePath is undefined", () => {
       const goal: Goal = {
