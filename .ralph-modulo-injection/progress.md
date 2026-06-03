@@ -1,62 +1,38 @@
-# Iteration 17 Progress (FORWARD)
+# Iteration 18 Progress (FORWARD)
 
 ## State Check
 - All 8 tasks (T1-T8) completed since iteration 4
-- Iteration 16: F9 fix (gate re-load)
 - No inventory problems, no failing tests
+- External review 9/10 on I17, 9/10 on I18
 
 ## Modulo Checkpoint
-- I % 5 = 2: No SYNC
-- I % 7 = 3: No backward audit
-- I % 11 = 6: No mutation audit
+- I % 5 = 3: No SYNC
+- I % 7 = 4: No backward audit
+- I % 11 = 7: No mutation audit
 
 ## Work Done (This Iteration)
 
-### Coverage Uplift — 15 New Tests
+### Edge Case Fix + Test Polish (284→285 tests)
 
-**Target**: PICK 1 with LOWEST coverage → injection module edge cases
+1. **Content-free state header fix**: `resolveInjectPlaceholders` now returns `""` instead of emitting bare `## State Context` header when `max_prev=0`, `max_next=0`, and `show_status=false`. Addresses reviewer observation.
 
-**New test areas** (269→284 tests, 622→670 expect() calls):
+2. **Duplicate describe disambiguation**: Renamed second `"loadRulesToml — whitespace-only TOML file"` describe block to `"loadRulesToml — whitespace/edge-case TOML content"` to eliminate test name collision.
 
-1. **Multiple unknown anchors scaffold in same call** (3 tests):
-   - Two unknown rules scaffolded in single `resolveInjectPlaceholders` call
-   - Mixed known + unknown: known resolves while unknown scaffolds
-   - Three unknown anchors with null TOML
+3. **New test**: `max_prev=0, max_next=0, show_status=false` returns empty string.
 
-2. **State injection edge cases** (3 tests):
-   - Read error when source is a directory → graceful empty string
-   - `max_next=0` with `max_prev>0` — all lines shown as previous
-   - State always injects while rule fires conditionally (combined integration test)
-
-3. **Template whitespace** (1 test):
-   - Anchor surrounded by whitespace preserves spacing
-
-4. **Rule firing verification** (1 test):
-   - `at=1` fires at every iteration (0, 1, 5, 100)
-
-5. **validateRulesToml entry object validation** (3 tests):
-   - Entry is null → warning
-   - Entry is string → warning
-   - Entry is number → warning
-
-6. **Path normalization** (3 tests):
-   - Trailing slashes, dot-slash prefix, bare directory name
-
-7. **loadRulesToml priority** (1 test):
-   - stateDir TOML preferred over cwd TOML when both exist
+4. **Updated 2 existing tests** to match improved behavior.
 
 ## Test Results
-- `tests/deterministic-injection.test.ts`: **284 pass, 0 fail, 670 expect() calls** (up from 269/622)
-- Full suite: **1305 pass, 27 skip, 0 fail** (up from 1290)
-- 15 new tests added this iteration
+- `tests/deterministic-injection.test.ts`: **285 pass, 0 fail, 667 expect() calls**
+- Full suite: **1306 pass, 27 skip, 0 fail** (up from 1305)
+- 1 new test, 2 updated tests this iteration
 
-## External Review
-- **claude -p**: 9/10, all PASS on every review point
-  - resolveInjectPlaceholders: PASS (positional replacement, state-after-rules, modulo check, scaffolding)
-  - PLACEHOLDER gate + F9 fix: PASS
-  - New tests: PASS (well-structured, meaningful edge cases)
-  - No logic bugs found
-  - Single deduction: iteration-0 semantic ambiguity (every rule fires at iter 0)
+## External Review (claude -p)
+- **Score: 9/10**, all 10 functional checklist points PASS
+- Observations addressed:
+  - ✅ Duplicate describe block → disambiguated
+  - ✅ max_prev=0+max_next=0 empty header → returns `""`
+- Remaining minor: docstring positioning (cosmetic, non-blocking)
 
 ## Findings Status
 | ID | Status | Notes |
@@ -72,7 +48,7 @@
 | F9 | ✅ Fixed (I16) | Gate re-loads TOML after injection |
 
 ## Commits
-- `471013c` test: 15 new coverage tests — multi-scaffold, state read errors, entry validation, path normalization (269→284, 622→670 expects)
+- `5216932` fix: no content-free state header when max_prev=0+max_next=0, disambiguate duplicate describe (284→285 tests)
 
 ## Pushed
 - ✅ `git push` — to origin/feat/deterministic-modulo-injection
