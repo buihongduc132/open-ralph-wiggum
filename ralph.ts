@@ -8,7 +8,7 @@
 
 import { $ } from "bun";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, lstatSync } from "fs";
-import { dirname, isAbsolute, join, relative, resolve } from "path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import { checkTerminalPromise, containsPromiseTag, escapeRegex, stripAnsi, tasksMarkdownAllComplete } from "./completion";
 import {
    decideLoopOwnership,
@@ -766,9 +766,10 @@ export function loadRulesToml(currentStateDir: string): RalphRulesToml | null {
             }
             return toml;
          } catch (err) {
-            // Corrupt file — warn and treat as not found
-            console.warn(`⚠️ Ralph: corrupt TOML file ${path}: ${err instanceof Error ? err.message : String(err)}`);
-            return null;
+            // Corrupt file — fatal error, don't silently skip (would bypass PLACEHOLDER gate)
+            console.error(`❌ Ralph: corrupt TOML file ${path}: ${err instanceof Error ? err.message : String(err)}`);
+            console.error(`   If this file exists, it must be valid TOML. Delete it or fix the syntax.`);
+            process.exit(1);
          }
       }
    }
@@ -836,7 +837,7 @@ export function findPlaceholderRules(toml: RalphRulesToml | null): string[] {
    for (const [sectionName, section] of Object.entries(toml.rules)) {
       if (section?.entries && Array.isArray(section.entries)) {
          for (const entry of section.entries) {
-            if (typeof entry.prompt === "string" && /PLACEHOLDER/i.test(entry.prompt)) {
+            if (entry && typeof entry.prompt === "string" && /PLACEHOLDER/i.test(entry.prompt)) {
                if (!found.includes(sectionName)) found.push(sectionName);
             }
          }
@@ -880,8 +881,8 @@ export function validateRulesToml(toml: RalphRulesToml | null): string[] {
                   warnings.push(`[rules.${key}].entries[${i}] must be an object`);
                   continue;
                }
-               if (typeof entry.at !== "number") {
-                  warnings.push(`[rules.${key}].entries[${i}].at must be a number`);
+               if (typeof entry.at !== "number" || !Number.isInteger(entry.at)) {
+                  warnings.push(`[rules.${key}].entries[${i}].at must be a positive integer`);
                } else if (entry.at <= 0) {
                   warnings.push(`[rules.${key}].entries[${i}].at must be positive, got ${entry.at}`);
                }
@@ -899,11 +900,11 @@ export function validateRulesToml(toml: RalphRulesToml | null): string[] {
       if (typeof si.source !== "string") {
          warnings.push("[state_injection].source must be a string");
       }
-      if (typeof si.max_next !== "number" || si.max_next < 0) {
-         warnings.push("[state_injection].max_next must be a non-negative number");
+      if (typeof si.max_next !== "number" || !Number.isInteger(si.max_next) || si.max_next < 0) {
+         warnings.push("[state_injection].max_next must be a non-negative integer");
       }
-      if (typeof si.max_prev !== "number" || si.max_prev < 0) {
-         warnings.push("[state_injection].max_prev must be a non-negative number");
+      if (typeof si.max_prev !== "number" || !Number.isInteger(si.max_prev) || si.max_prev < 0) {
+         warnings.push("[state_injection].max_prev must be a non-negative integer");
       }
       if (typeof si.show_status !== "boolean") {
          warnings.push("[state_injection].show_status must be a boolean");
@@ -966,7 +967,7 @@ export function resolveInjectPlaceholders(
 
       // Collect entries where iteration % at == 0
       const activePrompts = rule.entries
-         .filter(e => typeof e.at === "number" && e.at > 0 && state.iteration % e.at === 0)
+         .filter(e => e && typeof e.at === "number" && e.at > 0 && state.iteration % e.at === 0)
          .map(e => e.prompt);
 
       if (activePrompts.length === 0) {
@@ -986,11 +987,28 @@ export function resolveInjectPlaceholders(
    template = template.replace(/\{\{inject:state\}\}/g, () => {
       if (!toml?.state_injection) return "";
       const cfg = toml.state_injection;
-      const sourcePath = cfg.source ? resolve(currentStateDir, cfg.source) : "";
-      if (!sourcePath || !existsSync(sourcePath)) return "";
+      // Security: enforce source path stays within state-dir (no traversal/absolute)
+      if (!cfg.source || typeof cfg.source !== "string") return "";
+      if (isAbsolute(cfg.source) || cfg.source.includes("..")) {
+         console.warn(`⚠️ Ralph: state_injection.source rejected (unsafe path): ${cfg.source}`);
+         return "";
+      }
+      const sourcePath = resolve(currentStateDir, cfg.source);
+      // Verify resolved path stays within state-dir
+      const stateDirRoot = resolve(currentStateDir) + sep;
+      if (!sourcePath.startsWith(stateDirRoot)) {
+         console.warn(`⚠️ Ralph: state_injection.source resolved outside state-dir: ${sourcePath}`);
+         return "";
+      }
+      if (!existsSync(sourcePath)) return "";
       try {
          const raw = readFileSync(sourcePath, "utf-8");
-         const lines = raw.split("\n").filter(l => l.trim());
+         // Performance guard: skip files > 1MB
+         if (raw.length > 1_048_576) {
+            console.warn(`⚠️ Ralph: state_injection.source too large (${raw.length} bytes), skipping`);
+            return "";
+         }
+         const lines = raw.split(/\r?\n/).filter(l => l.trim());
          const prev = cfg.max_prev > 0
             ? (cfg.max_next > 0 ? lines.slice(-cfg.max_prev - cfg.max_next, -cfg.max_next) : lines.slice(-cfg.max_prev))
             : [];

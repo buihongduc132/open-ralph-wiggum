@@ -608,7 +608,7 @@ describe("loadRulesToml error handling", () => {
   beforeAll(() => ensureTmpDir());
   afterAll(() => cleanupTmpDir());
 
-  it("returns null for corrupt TOML file", () => {
+  it("calls process.exit(1) for corrupt TOML file", () => {
     const dirName = "ralph-corrupt";
     const testDir = join(TMP_DIR, dirName);
     mkdirSync(testDir, { recursive: true });
@@ -616,10 +616,17 @@ describe("loadRulesToml error handling", () => {
     const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
     writeFileSync(tomlPath, "this is [not valid {{{ TOML");
 
-    const result = loadRulesToml(testDir);
-    expect(result).toBeNull();
-
-    rmSync(testDir, { recursive: true, force: true });
+    // Mock process.exit to prevent test runner death
+    const origExit = process.exit;
+    const exitCodes: number[] = [];
+    process.exit = ((code: number) => { exitCodes.push(code); }) as never;
+    try {
+      loadRulesToml(testDir);
+      expect(exitCodes).toEqual([1]);
+    } finally {
+      process.exit = origExit;
+      rmSync(testDir, { recursive: true, force: true });
+    }
   });
 
   it("returns null for empty TOML file", () => {
@@ -1117,8 +1124,7 @@ describe("M1: {{inject:state}} vs [rules.state] collision", () => {
     mkdirSync(testDir, { recursive: true });
 
     // Create a JSONL state file
-    const jsonlPath = join(testDir, "state.jsonl");
-    writeFileSync(jsonlPath, JSON.stringify({ iteration: 5, status: "done" }) + "\n");
+    writeFileSync(join(testDir, "state.jsonl"), JSON.stringify({ iteration: 5, status: "done" }) + "\n");
 
     // TOML defines [rules.state] — a conflicting section name
     const toml: RalphRulesToml = {
@@ -1130,7 +1136,7 @@ describe("M1: {{inject:state}} vs [rules.state] collision", () => {
         },
       },
       state_injection: {
-        source: jsonlPath,
+        source: "state.jsonl",
         max_next: 5,
         max_prev: 5,
         show_status: true,
@@ -1844,7 +1850,7 @@ describe("state injection — absolute source path", () => {
   beforeAll(() => ensureTmpDir());
   afterAll(() => cleanupTmpDir());
 
-  it("uses absolute source path as-is (Node resolve behavior)", () => {
+  it("rejects absolute source path (security: path traversal prevention)", () => {
     const dirName = "ralph-abs-source";
     const testDir = join(TMP_DIR, dirName);
     mkdirSync(testDir, { recursive: true });
@@ -1858,7 +1864,7 @@ describe("state injection — absolute source path", () => {
     const toml: RalphRulesToml = {
       rules: {},
       state_injection: {
-        source: externalFile, // absolute path
+        source: externalFile, // absolute path — now REJECTED
         max_next: 2,
         max_prev: 0,
         show_status: false,
@@ -1866,18 +1872,26 @@ describe("state injection — absolute source path", () => {
       },
     };
 
-    const result = resolveInjectPlaceholders(
-      "{{inject:state}}",
-      { iteration: 1 },
-      testDir,
-      toml,
-    );
+    const origWarn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+    try {
+      const result = resolveInjectPlaceholders(
+        "{{inject:state}}",
+        { iteration: 1 },
+        testDir,
+        toml,
+      );
 
-    expect(result).toContain("entry-alpha");
-    expect(result).toContain("entry-beta");
-
-    rmSync(testDir, { recursive: true, force: true });
-    rmSync(externalDir, { recursive: true, force: true });
+      // Absolute path is now rejected — should return empty
+      expect(result).not.toContain("entry-alpha");
+      expect(result).not.toContain("entry-beta");
+      expect(warnings.some(w => w.includes("unsafe path"))).toBe(true);
+    } finally {
+      console.warn = origWarn;
+      rmSync(testDir, { recursive: true, force: true });
+      rmSync(externalDir, { recursive: true, force: true });
+    }
   });
 
   it("resolves relative source path against stateDir", () => {
@@ -2741,7 +2755,7 @@ describe("loadRulesToml — corrupt/invalid TOML content", () => {
   beforeAll(() => ensureTmpDir());
   afterAll(() => cleanupTmpDir());
 
-  it("returns null for malformed TOML", () => {
+  it("calls process.exit(1) for malformed TOML", () => {
     const dirName = "ralph-corrupt";
     const testDir = join(TMP_DIR, dirName);
     mkdirSync(testDir, { recursive: true });
@@ -2749,10 +2763,16 @@ describe("loadRulesToml — corrupt/invalid TOML content", () => {
     const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
     writeFileSync(tomlPath, "this is [ not valid {{{ TOML");
 
-    const result = loadRulesToml(testDir);
-    expect(result).toBeNull();
-
-    rmSync(testDir, { recursive: true, force: true });
+    const origExit = process.exit;
+    const exitCodes: number[] = [];
+    process.exit = ((code: number) => { exitCodes.push(code); }) as never;
+    try {
+      loadRulesToml(testDir);
+      expect(exitCodes).toEqual([1]);
+    } finally {
+      process.exit = origExit;
+      rmSync(testDir, { recursive: true, force: true });
+    }
   });
 
   it("returns null for empty file", () => {
@@ -2778,10 +2798,16 @@ describe("loadRulesToml — corrupt/invalid TOML content", () => {
     const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
     writeFileSync(tomlPath, "[rules.test\nname = \"test\"");
 
-    const result = loadRulesToml(testDir);
-    expect(result).toBeNull();
-
-    rmSync(testDir, { recursive: true, force: true });
+    const origExit = process.exit;
+    const exitCodes: number[] = [];
+    process.exit = ((code: number) => { exitCodes.push(code); }) as never;
+    try {
+      loadRulesToml(testDir);
+      expect(exitCodes).toEqual([1]);
+    } finally {
+      process.exit = origExit;
+      rmSync(testDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -3441,11 +3467,11 @@ describe("resolveInjectPlaceholders — state injection with CRLF line endings",
     };
 
     const result = resolveInjectPlaceholders("{{inject:state}}", { iteration: 1 }, testDir, toml);
-    // Should contain the content — \r is preserved as-is in raw text
+    // Should contain the content — \\r is stripped by cross-platform split
     expect(result).toContain("line2");
     expect(result).toContain("line3");
-    // CRLF is preserved in raw text output (state injection reads raw, not parsed)
-    expect(result).toContain("\r");
+    // CRLF is properly handled by /\\r?\\n/ split — no \\r chars survive
+    expect(result).not.toContain("\r");
 
     rmSync(testDir, { recursive: true, force: true });
   });
@@ -5450,7 +5476,7 @@ describe("F2: loadRulesToml warns on corrupt TOML", () => {
   beforeAll(() => ensureTmpDir());
   afterAll(() => cleanupTmpDir());
 
-  it("emits console.warn when TOML file is corrupt", () => {
+  it("calls process.exit(1) and logs error for corrupt TOML", () => {
     const dirName = `ralph-f2-warn-${Date.now()}`;
     const testDir = join(TMP_DIR, dirName);
     mkdirSync(testDir, { recursive: true });
@@ -5458,18 +5484,21 @@ describe("F2: loadRulesToml warns on corrupt TOML", () => {
     const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
     writeFileSync(tomlPath, "this is [[[ not valid TOML");
 
-    // Capture console.warn
-    const warnings: string[] = [];
-    const origWarn = console.warn;
-    console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+    // Capture console.error
+    const errors: string[] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) => errors.push(args.map(String).join(" "));
+    const origExit = process.exit;
+    const exitCodes: number[] = [];
+    process.exit = ((code: number) => { exitCodes.push(code); }) as never;
     try {
-      const result = loadRulesToml(testDir);
-      expect(result).toBeNull();
-      expect(warnings.length).toBeGreaterThanOrEqual(1);
-      expect(warnings[0]).toContain("corrupt");
-      expect(warnings[0]).toContain(tomlPath);
+      loadRulesToml(testDir);
+      expect(exitCodes).toEqual([1]);
+      expect(errors.some(e => e.includes("corrupt"))).toBe(true);
+      expect(errors.some(e => e.includes(tomlPath))).toBe(true);
     } finally {
-      console.warn = origWarn;
+      console.error = origError;
+      process.exit = origExit;
       rmSync(testDir, { recursive: true, force: true });
     }
   });
@@ -6673,7 +6702,7 @@ describe("resolveInjectPlaceholders — state injection with .. path traversal",
   beforeAll(() => ensureTmpDir());
   afterAll(() => cleanupTmpDir());
 
-  it("reads state from parent directory via .. source", () => {
+  it("rejects .. path traversal (security: path containment)", () => {
     // Create parent dir with state file
     const parentDir = join(TMP_DIR, "ralph-parent");
     mkdirSync(parentDir, { recursive: true });
@@ -6693,9 +6722,18 @@ describe("resolveInjectPlaceholders — state injection with .. path traversal",
       },
     };
 
-    const result = resolveInjectPlaceholders("{{inject:state}}", { iteration: 1 }, nestedDir, toml);
-    expect(result).toContain("shared-line1");
-    expect(result).toContain("shared-line2");
+    const origWarn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+    try {
+      const result = resolveInjectPlaceholders("{{inject:state}}", { iteration: 1 }, nestedDir, toml);
+      // Path traversal is now blocked
+      expect(result).not.toContain("shared-line1");
+      expect(result).not.toContain("shared-line2");
+      expect(warnings.some(w => w.includes("unsafe path"))).toBe(true);
+    } finally {
+      console.warn = origWarn;
+    }
   });
 });
 
@@ -6944,8 +6982,8 @@ describe("validateRulesToml — state_injection as primitive", () => {
     expect(warnings).toEqual(
       expect.arrayContaining([
         expect.stringContaining("source must be a string"),
-        expect.stringContaining("max_next must be a non-negative number"),
-        expect.stringContaining("max_prev must be a non-negative number"),
+        expect.stringContaining("max_next must be a non-negative integer"),
+        expect.stringContaining("max_prev must be a non-negative integer"),
         expect.stringContaining("show_status must be a boolean"),
         expect.stringContaining("reminder must be a string"),
       ]),
@@ -6958,8 +6996,8 @@ describe("validateRulesToml — state_injection as primitive", () => {
     expect(warnings).toEqual(
       expect.arrayContaining([
         expect.stringContaining("source must be a string"),
-        expect.stringContaining("max_next must be a non-negative number"),
-        expect.stringContaining("max_prev must be a non-negative number"),
+        expect.stringContaining("max_next must be a non-negative integer"),
+        expect.stringContaining("max_prev must be a non-negative integer"),
         expect.stringContaining("show_status must be a boolean"),
         expect.stringContaining("reminder must be a string"),
       ]),
@@ -7040,7 +7078,7 @@ describe("resolveInjectPlaceholders — state_injection with source pointing to 
 });
 
 describe("validateRulesToml — entry with at as NaN", () => {
-  it("passes validation for NaN (typeof is number, documented gap)", () => {
+  it("warns on NaN (not a positive integer))", () => {
     const toml: RalphRulesToml = {
       rules: {
         nanrule: {
@@ -7051,17 +7089,13 @@ describe("validateRulesToml — entry with at as NaN", () => {
       },
     };
     const warnings = validateRulesToml(toml);
-    // typeof NaN === "number" so the type check passes, but NaN <= 0 is false
-    // Actually NaN fails the modulo check at runtime but validation only checks type + positivity
-    // NaN <= 0 is false, so no warning from the positivity check
-    // This is actually BY DESIGN — NaN passes type check but fails at runtime
-    // The test documents this behavior
-    expect(warnings.length).toBe(0);
+    // NaN fails Number.isInteger check
+    expect(warnings.some(w => w.includes("positive integer"))).toBe(true);
   });
 });
 
 describe("validateRulesToml — entry with at as Infinity", () => {
-  it("passes validation for Infinity (positive number, documented gap)", () => {
+  it("warns on Infinity (not a positive integer)", () => {
     const toml: RalphRulesToml = {
       rules: {
         infrule: {
@@ -7072,9 +7106,8 @@ describe("validateRulesToml — entry with at as Infinity", () => {
       },
     };
     const warnings = validateRulesToml(toml);
-    // typeof Infinity === "number" && Infinity > 0, so no warning
-    // This is BY DESIGN — the modulo check will never match in practice
-    expect(warnings.length).toBe(0);
+    // Infinity fails Number.isInteger check
+    expect(warnings.some(w => w.includes("positive integer"))).toBe(true);
   });
 });
 
@@ -7320,18 +7353,16 @@ describe("resolveInjectPlaceholders — state injection with CRLF line endings",
       },
     };
     const result = resolveInjectPlaceholders("{{inject:state}}", { iteration: 1 }, testDir, toml);
-    // CRLF → split by \n gives ["line1\r", "line2\r", "line3\r", ""]
-    // filter trim removes empty string but keeps \r-containing strings
-    // NOTE: \r chars survive — this documents current behavior
+    // CRLF is properly handled by /\\r?\\n/ split — no \\r chars survive
     expect(result).toContain("### Previous (1 entries)");
     expect(result).toContain("### Next (1 entries)");
-    expect(result).toContain("\r"); // Documents CRLF passthrough
+    expect(result).not.toContain("\r"); // CRLF stripped by cross-platform split
     rmSync(testDir, { recursive: true, force: true });
   });
 });
 
 describe("validateRulesToml — entry with at as float", () => {
-  it("accepts float at value (modulo with float is edge case)", () => {
+  it("warns on float at value (not a positive integer))", () => {
     const toml: RalphRulesToml = {
       rules: {
         floatrule: {
@@ -7342,7 +7373,8 @@ describe("validateRulesToml — entry with at as float", () => {
       },
     };
     const warnings = validateRulesToml(toml);
-    expect(warnings.length).toBe(0);
+    // 2.5 fails Number.isInteger check
+    expect(warnings.some(w => w.includes("positive integer"))).toBe(true);
   });
 
   it("float at value matches modulo at runtime", () => {
@@ -7709,7 +7741,7 @@ describe("validateRulesToml — negative max_prev/max_next", () => {
     };
     const warnings = validateRulesToml(toml);
     expect(warnings).toEqual([
-      "[state_injection].max_next must be a non-negative number",
+      "[state_injection].max_next must be a non-negative integer",
     ]);
   });
 
@@ -7726,7 +7758,7 @@ describe("validateRulesToml — negative max_prev/max_next", () => {
     };
     const warnings = validateRulesToml(toml);
     expect(warnings).toEqual([
-      "[state_injection].max_prev must be a non-negative number",
+      "[state_injection].max_prev must be a non-negative integer",
     ]);
   });
 
