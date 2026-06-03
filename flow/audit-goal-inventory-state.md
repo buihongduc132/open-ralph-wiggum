@@ -68,3 +68,37 @@
 **Findings:** 0 new findings. All previous M1–M8 resolved.
 
 **Test Status:** 1136 pass, 0 fail, 27 skip (1163 tests across 45 files)
+
+### Iteration 49 — BACKWARD General Audit (2026-06-03)
+
+**Type:** Read-only backward audit (I % 7 == 0)
+
+**Scope:** All 6 phases re-audited including 5 post-i14 commits:
+- `49b812d` em-dash multi-touch parsing + type narrowing
+- `e7b09a3` resolve all 7 verifier findings from round 1
+- `1f90d26` resolve B1 + notes from verifier round 2
+- `0d77c8a` preserve fenced code blocks in Facts section on round-trip
+- `c31a237` prefer stored goalSlug on resume over auto-selection from --goal-dir
+
+**Extended Checklist (12 items, expanded from i14's 6):**
+
+| # | Check | Result |
+|---|-------|--------|
+| 1 | `--goal` flag is opt-in — existing `--tasks` mode UNCHANGED | ✅ Pass |
+| 2 | Goal.md parser handles malformed files gracefully | ✅ Pass |
+| 3 | `RalphState` only has OPTIONAL new fields — old state files load fine | ✅ Pass |
+| 4 | No plannotator/browser dependency leaked in | ✅ Pass |
+| 5 | `goal.state.json` round-trips correctly (load→modify→save→load = same) | ✅ Pass |
+| 6 | Phase transitions one-way (planning→executing→verifying→done) | ✅ Pass |
+| 7 | Goal completion detection: all facts verified → auto-detects completion | ✅ Pass |
+| 8 | Fenced code blocks preserved in Facts section on round-trip | ✅ Pass |
+| 9 | `goal_promise` only applies when goal mode is active | ✅ Pass |
+| 10 | Goal mode supersedes tasks mode (checked first in prompt builder) | ✅ Pass |
+| 11 | Resume with --goal-dir prefers stored goalSlug over auto-selection | ✅ Pass |
+| 12 | Scaffold title sanitization prevents newline injection | ✅ Pass |
+
+**Findings:** 0 new findings. All previous M1–M8 resolved. No regressions.
+
+**Verifier:** Subagent reviewer (run 16f41636) — all 12 checks PASS.
+
+**Test Status:** 1148 pass, 0 fail, 27 skip (1175 tests across 45 files)
