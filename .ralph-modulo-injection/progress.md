@@ -1,4 +1,4 @@
-# Iteration 6 Progress (Forward)
+# Iteration 7 Progress (BACKWARD — READ-ONLY Audit)
 
 ## State Check
 - All 8 tasks (T1-T8) completed in iterations 1-2
@@ -6,61 +6,49 @@
 - Iteration 4a: 81 tests, 202 expect() calls, external review 8/10
 - Iteration 4b: 109 tests, 252 expect() calls, external review 7.5/10
 - Iteration 5: 137 tests, 318 expect() calls (SYNC checkpoint)
-- Iteration 6: 167 tests, 401 expect() calls
+- Iteration 6: 167 tests, 401 expect() calls, external review 8/10
+- Iteration 7: BACKWARD audit (I % 7 == 0)
 - No demoted tasks, no problem_notes
+
+## Modulo Checkpoint
+- **I % 7 == 0: BACKWARD Verifier Loop (READ-ONLY)**
+- No implementation changes this iteration
+- Full audit performed on all 5 areas
 
 ## Work Done (This Iteration)
 
-### Coverage Uplift: 30 new tests (137→167, 401 expect() calls)
-26 coverage tests + 4 security fix tests
+### BACKWARD Audit Results
+- `bun test tests/deterministic-injection.test.ts`: **167 pass, 0 fail**
+- Full suite: **1185 pass, 27 skip, 3 fail** (pre-existing stall-retry)
+- External review (claude -p): **8.6/10 overall**
+- 7 findings recorded (F1-F7), none critical, no demotions
+- All T1-T8 tasks remain completed
 
-### Bug Fixes from External Review (8/8/8/7)
-1. **Case-insensitive PLACEHOLDER detection** — `findPlaceholderRules` now uses
-   `/PLACEHOLDER/i` regex instead of `.includes("PLACEHOLDER")`. Catches all casings.
-2. **Prevent state re-injection** — `resolveInjectPlaceholders` now resolves rules
-   BEFORE state injection. State JSONL content containing `{{inject:*}}` is no longer
-   re-resolved as rule injection (was a recursive injection vector).
+### Audit Areas Checked
+1. TOML parsing correctness — 8/10
+2. Regex collision safety — 9/10
+3. Append-mode scaffolding — 8/10
+4. PLACEHOLDER gate — 9/10
+5. Plan compliance (T1-T8) — 9/10
 
-### Coverage Uplift Areas (26 new tests)
-1. Comments-only TOML parsing
-2. Extra unknown top-level keys (forward compat)
-3. CRLF line endings in JSONL state
-4. Multiline reminder rendering
-5. Multiple rules all disabled
-6. Empty string prompt substitution
-7. Concurrent rules with overlapping at values
-8. State-only template (no rules)
-9. Number.MAX_SAFE_INTEGER at values
-10. PLACEHOLDER in state_injection.reminder (not checked — correct)
-11. Spaces in directory names
-12. Full integration cycle: load → resolve → placeholder check (2 tests)
-13. Prev/next wrap-around with oversized max values
-14. Boundary split with exact max_prev+max_next lines
-15. Garbage/binary content in JSONL
-16. Default TOML PLACEHOLDER detection
-17. Rule with 10+ entries and divisor matching
-18. Scaffold return message format verification
-19. Empty JSONL file handling
-20. Whitespace-only JSONL filtering
-21. Entries with extra unknown fields
+### Findings Summary
+| ID | Severity | Description |
+|----|----------|-------------|
+| F1 | Medium | No runtime schema validation on parsed TOML (acceptable) |
+| F2 | Low | Silent catch on corrupt TOML (acceptable) |
+| F3 | Info | Injected rule content won't re-resolve (correct, untested edge) |
+| F4 | Low | Substring idempotency check in scaffold (low risk) |
+| F5 | Info | Leading newline on append to empty file (cosmetic) |
+| F6 | UX | Returns first PLACEHOLDER only (minor) |
+| F7 | Info | Gate only runs in custom template path (by design) |
 
-## Test Results
-- `tests/deterministic-injection.test.ts`: **167 pass, 0 fail, 401 expect() calls**
-- Full suite: **1185 pass, 27 skip, 3 fail** (pre-existing stall-retry), **2280 expect() calls**
-
-## External Review Score
-- Correctness: 8/10
-- Edge case handling: 8/10
-- Test coverage quality: 8/10
-- Code cleanliness: 7/10
-- All identified issues fixed
+## Demotions
+**NONE** — no tasks demoted.
 
 ## Modulo Checkpoints
-- I % 5 = 1: No SYNC
-- I % 7 = 6: No BACKWARD
-- I % 11 = 6: No mutation/CodeQL
+- I % 5 = 2: No SYNC
+- I % 7 = 0: ✅ BACKWARD Verifier Loop completed
+- I % 11 = 7: No mutation/CodeQL
 
 ## Commits
-- `515c480` test: coverage uplift iteration 6 — 26 new tests (137→163), 396 expect() calls
-- `e4c93db` fix: case-insensitive PLACEHOLDER detection + prevent state re-injection
-- `e53c455` chore: iteration 6 progress update
+- TBD: `chore: iteration 7 backward audit findings`
