@@ -49,3 +49,22 @@
 | M8 | ✅ Tested | Added tests for special-char-only titles; ralph.ts already rejects empty slugs |
 
 **Test Status:** 1136 pass, 0 fail, 27 skip (1163 tests across 45 files)
+
+### Iteration 14 — BACKWARD General Audit (2026-06-03)
+
+**Type:** Read-only backward audit (I % 7 == 0)
+
+**Checks:**
+
+| # | Check | Result |
+|---|-------|--------|
+| 1 | `--goal` flag is opt-in — existing `--tasks` mode UNCHANGED | ✅ Pass |
+| 2 | Goal.md parser handles malformed files gracefully | ✅ Pass |
+| 3 | `RalphState` only has OPTIONAL new fields | ✅ Pass |
+| 4 | No plannotator/browser dependency leaked in | ✅ Pass |
+| 5 | `goal.state.json` round-trips correctly (load→modify→save→load) | ✅ Pass |
+| 6 | Phase transitions one-way; goal completion detection works | ✅ Pass |
+
+**Findings:** 0 new findings. All previous M1–M8 resolved.
+
+**Test Status:** 1136 pass, 0 fail, 27 skip (1163 tests across 45 files)
