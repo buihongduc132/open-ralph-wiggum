@@ -83,7 +83,7 @@ function beautifyJsonLine(rawLine, cfg) {
     }
   }
   try {
-    return genericAdapter(record);
+    return genericAdapter(record, cfg);
   } catch {
     return [rawLine];
   }
@@ -308,15 +308,17 @@ function cursorAgentAdapter(p, cfg) {
       lines.push(ANSI.green(`\u2705 ${p.result.trim()}${subtype}`));
     }
   } else if (t === "error") {
-    let msg;
-    if (p.error && typeof p.error === "object") {
-      msg = typeof p.error.message === "string" ? p.error.message : String(p.error);
-    } else {
-      msg = String(p.error ?? "Unknown error");
+    if (cfg.showError) {
+      let msg;
+      if (p.error && typeof p.error === "object") {
+        msg = typeof p.error.message === "string" ? p.error.message : String(p.error);
+      } else {
+        msg = String(p.error ?? "Unknown error");
+      }
+      if (msg.length > cfg.maxErrorLength)
+        msg = msg.slice(0, cfg.maxErrorLength) + "...";
+      lines.push(ANSI.red(`\u274C ${msg}`));
     }
-    if (msg.length > cfg.maxErrorLength)
-      msg = msg.slice(0, cfg.maxErrorLength) + "...";
-    lines.push(ANSI.red(`\u274C ${msg}`));
   }
   return lines;
 }
@@ -359,6 +361,8 @@ function codexAdapter(p, cfg) {
     return [ANSI.green(`\u2705 ${output || "Done"}`)];
   }
   if (t === "error") {
+    if (!cfg.showError)
+      return [];
     let msg = typeof p.message === "string" ? p.message : String(p.error ?? "Unknown error");
     if (msg.length > cfg.maxErrorLength)
       msg = msg.slice(0, cfg.maxErrorLength) + "...";
@@ -382,6 +386,8 @@ function geminiAdapter(p, cfg) {
     return [ANSI.yellow(`\uD83D\uDD27 ${name}`)];
   }
   if (p.error) {
+    if (!cfg.showError)
+      return [];
     let msg;
     if (typeof p.error === "object") {
       msg = typeof p.error.message === "string" ? p.error.message : String(p.error);
@@ -397,18 +403,24 @@ function geminiAdapter(p, cfg) {
   }
   return [];
 }
-function genericAdapter(p) {
+function genericAdapter(p, cfg) {
   if (p.error && typeof p.error === "object") {
+    if (cfg && !cfg.showError)
+      return [];
     const err = p.error;
     if (typeof err.message === "string") {
-      return [ANSI.red(`\u274C ${err.message}`)];
+      const truncated = cfg && err.message.length > cfg.maxErrorLength ? err.message.slice(0, cfg.maxErrorLength) + "..." : err.message;
+      return [ANSI.red(`\u274C ${truncated}`)];
     }
   }
   if (typeof p.message === "string") {
     return [p.message];
   }
   if (typeof p.error === "string") {
-    return [ANSI.red(`\u274C ${p.error}`)];
+    if (cfg && !cfg.showError)
+      return [];
+    const truncated = cfg && p.error.length > cfg.maxErrorLength ? p.error.slice(0, cfg.maxErrorLength) + "..." : p.error;
+    return [ANSI.red(`\u274C ${truncated}`)];
   }
   return [JSON.stringify(p)];
 }
@@ -774,6 +786,7 @@ class StreamAccumulator {
   _errorSet = new Set;
   _totalBytes = 0;
   tailMaxBytes;
+  _errorLineBuffer = "";
   constructor(options) {
     this.tailMaxBytes = options?.tailMaxBytes ?? DEFAULT_TAIL_MAX_BYTES;
   }
@@ -793,6 +806,11 @@ class StreamAccumulator {
     return this._tail;
   }
   get errors() {
+    if (this._errorLineBuffer.length > 0 && this._errors.length < MAX_ERRORS) {
+      const line = this._errorLineBuffer;
+      this._errorLineBuffer = "";
+      this.scanLineForError(line);
+    }
     return this._errors;
   }
   get totalBytes() {
@@ -803,22 +821,28 @@ class StreamAccumulator {
     this._errors = [];
     this._errorSet.clear();
     this._totalBytes = 0;
+    this._errorLineBuffer = "";
   }
   extractErrorsFromChunk(chunk) {
-    const lines = chunk.split(`
+    const combined = this._errorLineBuffer + chunk;
+    const lines = combined.split(`
 `);
+    this._errorLineBuffer = lines.pop() ?? "";
     for (const line of lines) {
       if (this._errors.length >= MAX_ERRORS)
         break;
-      const lower = line.toLowerCase();
-      const isMatch = lower.includes("error:") || lower.includes("failed:") || lower.includes("exception:") || lower.includes("typeerror") || lower.includes("syntaxerror") || lower.includes("referenceerror") || lower.includes("test") && lower.includes("fail");
-      if (!isMatch)
-        continue;
-      const cleaned = line.trim().substring(0, MAX_ERROR_LINE_LENGTH);
-      if (cleaned && !this._errorSet.has(cleaned)) {
-        this._errorSet.add(cleaned);
-        this._errors.push(cleaned);
-      }
+      this.scanLineForError(line);
+    }
+  }
+  scanLineForError(line) {
+    const lower = line.toLowerCase();
+    const isMatch = lower.includes("error:") || lower.includes("failed:") || lower.includes("exception:") || lower.includes("typeerror") || lower.includes("syntaxerror") || lower.includes("referenceerror") || lower.includes("test") && lower.includes("fail");
+    if (!isMatch)
+      return;
+    const cleaned = line.trim().substring(0, MAX_ERROR_LINE_LENGTH);
+    if (cleaned && !this._errorSet.has(cleaned)) {
+      this._errorSet.add(cleaned);
+      this._errors.push(cleaned);
     }
   }
 }
@@ -3057,6 +3081,9 @@ Your answer: `, (answer) => {
       let completionPromiseSeen = false;
       if (!isError && promisePattern) {
         completionPromiseSeen = outputLines.some((outputLine) => promisePattern.test(outputLine.trim()));
+        if (!completionPromiseSeen && isJsonModeAgent(options.agent.type, options.extraFlags)) {
+          completionPromiseSeen = promisePattern.test(line.trim());
+        }
       }
       if (tool) {
         toolCounts.set(tool, (toolCounts.get(tool) ?? 0) + 1);

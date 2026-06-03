@@ -124,7 +124,7 @@ export function beautifyJsonLine(rawLine: string, cfg: BeautifierConfig): string
 
   // Generic adapter for unknown agents
   try {
-    return genericAdapter(record);
+    return genericAdapter(record, cfg);
   } catch {
     return [rawLine];
   }
@@ -372,16 +372,18 @@ function cursorAgentAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): 
       lines.push(ANSI.green(`✅ ${p.result.trim()}${subtype}`));
     }
   } else if (t === "error") {
-    let msg: string;
-    if (p.error && typeof p.error === "object") {
-      msg = typeof (p.error as Record<string, unknown>).message === "string"
-        ? (p.error as Record<string, unknown>).message as string
-        : String(p.error);
-    } else {
-      msg = String(p.error ?? "Unknown error");
+    if (cfg.showError) {
+      let msg: string;
+      if (p.error && typeof p.error === "object") {
+        msg = typeof (p.error as Record<string, unknown>).message === "string"
+          ? (p.error as Record<string, unknown>).message as string
+          : String(p.error);
+      } else {
+        msg = String(p.error ?? "Unknown error");
+      }
+      if (msg.length > cfg.maxErrorLength) msg = msg.slice(0, cfg.maxErrorLength) + "...";
+      lines.push(ANSI.red(`❌ ${msg}`));
     }
-    if (msg.length > cfg.maxErrorLength) msg = msg.slice(0, cfg.maxErrorLength) + "...";
-    lines.push(ANSI.red(`❌ ${msg}`));
   }
 
   return lines;
@@ -431,6 +433,7 @@ function codexAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string
   }
 
   if (t === "error") {
+    if (!cfg.showError) return [];
     let msg = typeof p.message === "string" ? p.message : String(p.error ?? "Unknown error");
     if (msg.length > cfg.maxErrorLength) msg = msg.slice(0, cfg.maxErrorLength) + "...";
     return [ANSI.red(`❌ ${msg}`)];
@@ -462,6 +465,7 @@ function geminiAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): strin
 
   // Error events
   if (p.error) {
+    if (!cfg.showError) return [];
     let msg: string;
     if (typeof p.error === "object") {
       msg = typeof (p.error as Record<string, unknown>).message === "string"
@@ -484,12 +488,14 @@ function geminiAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): strin
 
 // ─── Generic Adapter ────────────────────────────────────────────────────────
 
-function genericAdapter(p: Record<string, unknown>): string[] {
+function genericAdapter(p: Record<string, unknown>, cfg?: BeautifierConfig): string[] {
   // Try to extract error.message
   if (p.error && typeof p.error === "object") {
+    if (cfg && !cfg.showError) return [];
     const err = p.error as Record<string, unknown>;
     if (typeof err.message === "string") {
-      return [ANSI.red(`❌ ${err.message}`)];
+      const truncated = cfg && err.message.length > cfg.maxErrorLength ? err.message.slice(0, cfg.maxErrorLength) + "..." : err.message;
+      return [ANSI.red(`❌ ${truncated}`)];
     }
   }
 
@@ -500,7 +506,9 @@ function genericAdapter(p: Record<string, unknown>): string[] {
 
   // String error
   if (typeof p.error === "string") {
-    return [ANSI.red(`❌ ${p.error}`)];
+    if (cfg && !cfg.showError) return [];
+    const truncated = cfg && p.error.length > cfg.maxErrorLength ? p.error.slice(0, cfg.maxErrorLength) + "..." : p.error;
+    return [ANSI.red(`❌ ${truncated}`)];
   }
 
   // Nothing useful → return raw

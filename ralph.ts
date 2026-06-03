@@ -3120,7 +3120,12 @@ Unable to read ${currentTasksFileLabel()}
          }
          let completionPromiseSeen = false;
          if (!isError && promisePattern) {
+            // Check beautified output lines first
             completionPromiseSeen = outputLines.some(outputLine => promisePattern.test(outputLine.trim()));
+            // For JSON-mode agents, also check the raw line (beautified output may wrap the promise tag with prefix/suffix)
+            if (!completionPromiseSeen && isJsonModeAgent(options.agent.type, options.extraFlags)) {
+               completionPromiseSeen = promisePattern.test(line.trim());
+            }
          }
          if (tool) {
             toolCounts.set(tool, (toolCounts.get(tool) ?? 0) + 1);

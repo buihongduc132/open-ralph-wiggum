@@ -23,6 +23,7 @@ export class StreamAccumulator {
    private _errorSet: Set<string> = new Set();
    private _totalBytes: number = 0;
    private readonly tailMaxBytes: number;
+   private _errorLineBuffer: string = "";
 
    constructor(options?: Partial<StreamAccumulatorOptions>) {
       this.tailMaxBytes = options?.tailMaxBytes ?? DEFAULT_TAIL_MAX_BYTES;
@@ -59,6 +60,12 @@ export class StreamAccumulator {
 
    /** Up to 10 unique error lines (max 200 chars each). */
    get errors(): string[] {
+      // Flush any remaining partial line in the error buffer
+      if (this._errorLineBuffer.length > 0 && this._errors.length < MAX_ERRORS) {
+         const line = this._errorLineBuffer;
+         this._errorLineBuffer = "";
+         this.scanLineForError(line);
+      }
       return this._errors;
    }
 
@@ -73,6 +80,7 @@ export class StreamAccumulator {
       this._errors = [];
       this._errorSet.clear();
       this._totalBytes = 0;
+      this._errorLineBuffer = "";
    }
 
    // ---------------------------------------------------------------------------
@@ -81,31 +89,39 @@ export class StreamAccumulator {
 
    /**
     * Scan a chunk for error patterns, same logic as extractErrors() in ralph.ts.
-    * Only adds new unique errors while under the MAX_ERRORS cap.
+    * Buffers the trailing partial line across calls to handle error patterns
+    * split across chunk boundaries.
     */
    private extractErrorsFromChunk(chunk: string): void {
-      const lines = chunk.split("\n");
+      const combined = this._errorLineBuffer + chunk;
+      const lines = combined.split("\n");
+      // Keep the last (potentially partial) line in the buffer for next call
+      this._errorLineBuffer = lines.pop() ?? "";
 
       for (const line of lines) {
          if (this._errors.length >= MAX_ERRORS) break;
+         this.scanLineForError(line);
+      }
+   }
 
-         const lower = line.toLowerCase();
-         const isMatch =
-            lower.includes("error:") ||
-            lower.includes("failed:") ||
-            lower.includes("exception:") ||
-            lower.includes("typeerror") ||
-            lower.includes("syntaxerror") ||
-            lower.includes("referenceerror") ||
-            (lower.includes("test") && lower.includes("fail"));
+   /** Check a single line for error patterns and add to errors if matched. */
+   private scanLineForError(line: string): void {
+      const lower = line.toLowerCase();
+      const isMatch =
+         lower.includes("error:") ||
+         lower.includes("failed:") ||
+         lower.includes("exception:") ||
+         lower.includes("typeerror") ||
+         lower.includes("syntaxerror") ||
+         lower.includes("referenceerror") ||
+         (lower.includes("test") && lower.includes("fail"));
 
-         if (!isMatch) continue;
+      if (!isMatch) return;
 
-         const cleaned = line.trim().substring(0, MAX_ERROR_LINE_LENGTH);
-         if (cleaned && !this._errorSet.has(cleaned)) {
-            this._errorSet.add(cleaned);
-            this._errors.push(cleaned);
-         }
+      const cleaned = line.trim().substring(0, MAX_ERROR_LINE_LENGTH);
+      if (cleaned && !this._errorSet.has(cleaned)) {
+         this._errorSet.add(cleaned);
+         this._errors.push(cleaned);
       }
    }
 }
