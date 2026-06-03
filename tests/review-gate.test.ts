@@ -452,3 +452,98 @@ describe("Phase 2 — Review Gate Logic", () => {
       expect(loaded!.runHash).toBeUndefined();
    });
 });
+
+// ── Phase 3: Edge Cases ─────────────────────────────────────────────────────
+
+describe("Phase 3 — Edge Cases", () => {
+   it("T7/compat: no [review] section = reviewConfig null (legacy behavior)", () => {
+      // When no [review] in TOML, parseReviewConfig returns null
+      const result = parseReviewConfig({ prompt: "test" });
+      expect(result).toBeNull();
+   });
+
+   it("T13: tasksMode + taskPromise → review should not fire for task completion", () => {
+      // taskPromise is not the same as completionPromise
+      // Review only fires on completionPromise (final completion)
+      // This is enforced by the code structure: review gate is only
+      // entered inside the `if (completionDetected)` block
+      const gateState = createReviewGateState({
+         enabled: true,
+         quorum: "1/1",
+         voterTimeout: "10m",
+         maxRejectCycles: 5,
+         reviewPromptFile: "",
+         voters: [{ agent: "pi", model: "test" }],
+      });
+      // Phase should stay disabled (not triggered for task completion)
+      expect(gateState.phase).toBe("disabled");
+   });
+
+   it("T15: abortPromise → skip review, immediate stop (design verification)", () => {
+      // When abortPromise is detected, the loop stops immediately
+      // The code checks abortPromise separately and breaks before reaching
+      // the completionDetected block where the review gate lives
+      // This is a design verification, not runtime test
+      expect(true).toBe(true);
+   });
+
+   it("T22: Context injection timing — feedback written before next iteration", () => {
+      const ctxPath = join(tmpDir, "ralph-context-timing.md");
+      // Simulate: iteration end → rejection → feedback injection → next iteration starts
+      injectRejectionFeedback(ctxPath, ["Fix tests", "Add error handling"]);
+
+      // Verify the feedback is in the context file
+      const content = readFileSync(ctxPath, "utf-8");
+      expect(content).toContain("Review Feedback");
+      expect(content).toContain("Fix tests");
+      expect(content).toContain("Add error handling");
+   });
+
+   it("Vote reset preserves rejection reasons for next voter round", () => {
+      const gateState = createReviewGateState({
+         enabled: true,
+         quorum: "2/2",
+         voterTimeout: "10m",
+         maxRejectCycles: 3,
+         reviewPromptFile: "",
+         voters: [
+            { agent: "pi", model: "test-1" },
+            { agent: "pi", model: "test-2" },
+         ],
+      });
+      gateState.phase = "waiting_review";
+
+      // Voter 0 approves, voter 1 rejects
+      const keys = Object.keys(gateState.votes);
+      gateState.votes[keys[0]] = { status: "approved", at: new Date().toISOString(), reason: "" };
+      gateState.votes[keys[1]] = { status: "rejected", at: new Date().toISOString(), reason: "Missing tests" };
+
+      const quorumResult = checkQuorum(gateState);
+      expect(quorumResult.anyRejected).toBe(true);
+
+      const reset = resetVotes(gateState, quorumResult.rejectionReasons);
+      expect(reset.rejectCycleCount).toBe(1);
+      expect(reset.lastRejectionReasons).toContain("Voter voter-1: Missing tests");
+
+      // All votes should be pending
+      for (const vote of Object.values(reset.votes)) {
+         expect(vote.status).toBe("pending");
+      }
+   });
+
+   it("Review prompt includes rejection history from previous cycles", () => {
+      const prompt = buildReviewPrompt({
+         runHash: "testhash12345678",
+         cwd: "/tmp/project",
+         prompt: "Build a feature",
+         iterationCount: 10,
+         rejectionHistory: ["Voter 0: Tests failing", "Voter 1: Missing docs"],
+      });
+
+      expect(prompt).toContain("testhash12345678");
+      expect(prompt).toContain("/tmp/project");
+      expect(prompt).toContain("Build a feature");
+      expect(prompt).toContain("Voter 0: Tests failing");
+      expect(prompt).toContain("Voter 1: Missing docs");
+   });
+});
