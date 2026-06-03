@@ -811,7 +811,7 @@ export function findPlaceholderRules(toml: RalphRulesToml | null): string | null
    for (const [sectionName, section] of Object.entries(toml.rules)) {
       if (section?.entries && Array.isArray(section.entries)) {
          for (const entry of section.entries) {
-            if (typeof entry.prompt === "string" && entry.prompt.includes("PLACEHOLDER")) {
+            if (typeof entry.prompt === "string" && /PLACEHOLDER/i.test(entry.prompt)) {
                return sectionName;
             }
          }
@@ -834,38 +834,18 @@ export function resolveInjectPlaceholders(
    currentStateDir: string,
    toml: RalphRulesToml | null,
 ): string {
-   // Resolve {{inject:state}}
-   template = template.replace(/\{\{inject:state\}\}/g, () => {
-      if (!toml?.state_injection) return "";
-      const cfg = toml.state_injection;
-      const sourcePath = cfg.source ? resolve(currentStateDir, cfg.source) : "";
-      if (!sourcePath || !existsSync(sourcePath)) return "";
-      try {
-         const raw = readFileSync(sourcePath, "utf-8");
-         const lines = raw.split("\n").filter(l => l.trim());
-         const prev = cfg.max_prev > 0
-            ? (cfg.max_next > 0 ? lines.slice(-cfg.max_prev - cfg.max_next, -cfg.max_next) : lines.slice(-cfg.max_prev))
-            : [];
-         const next = cfg.max_next > 0 ? lines.slice(-cfg.max_next) : [];
-         let result = "## State Context\n\n";
-         if (prev.length) result += `### Previous (${prev.length} entries)\n\n${prev.join("\n")}\n\n`;
-         if (next.length) result += `### Next (${next.length} entries)\n\n${next.join("\n")}\n\n`;
-         if (cfg.show_status) result += `> ${cfg.reminder}\n`;
-         return result;
-      } catch {
-         return "";
-      }
-   });
-
-   // Resolve {{inject:<name>}} for rule sections
+   // Resolve {{inject:<name>}} for rule sections FIRST
+   // This prevents state-injected content from being re-resolved as rules.
+   // State content may contain {{inject:*}} text that should stay literal.
    const injectRegex = /\{\{inject:([a-zA-Z0-9_-]+)\}\}/g;
+   // Capture matches before mutation
    const matches = [...template.matchAll(injectRegex)];
 
    for (const match of matches) {
       const full = match[0];
       const name = match[1];
 
-      if (name === "state") continue; // already handled above
+      if (name === "state") continue; // handled below
 
       const rule = toml?.rules?.[name];
       if (!rule) {
@@ -891,6 +871,29 @@ export function resolveInjectPlaceholders(
          template = template.replaceAll(full, activePrompts.join("\n\n"));
       }
    }
+
+   // Resolve {{inject:state}} AFTER rules — state content won't be re-scanned
+   template = template.replace(/\{\{inject:state\}\}/g, () => {
+      if (!toml?.state_injection) return "";
+      const cfg = toml.state_injection;
+      const sourcePath = cfg.source ? resolve(currentStateDir, cfg.source) : "";
+      if (!sourcePath || !existsSync(sourcePath)) return "";
+      try {
+         const raw = readFileSync(sourcePath, "utf-8");
+         const lines = raw.split("\n").filter(l => l.trim());
+         const prev = cfg.max_prev > 0
+            ? (cfg.max_next > 0 ? lines.slice(-cfg.max_prev - cfg.max_next, -cfg.max_next) : lines.slice(-cfg.max_prev))
+            : [];
+         const next = cfg.max_next > 0 ? lines.slice(-cfg.max_next) : [];
+         let result = "## State Context\n\n";
+         if (prev.length) result += `### Previous (${prev.length} entries)\n\n${prev.join("\n")}\n\n`;
+         if (next.length) result += `### Next (${next.length} entries)\n\n${next.join("\n")}\n\n`;
+         if (cfg.show_status) result += `> ${cfg.reminder}\n`;
+         return result;
+      } catch {
+         return "";
+      }
+   });
 
    return template;
 }

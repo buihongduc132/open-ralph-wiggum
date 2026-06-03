@@ -2483,7 +2483,7 @@ describe("findPlaceholderRules — partial word match", () => {
     expect(findPlaceholderRules(toml)).toBe("partial");
   });
 
-  it("matches lowercase 'placeholder' due to case sensitivity", () => {
+  it("matches lowercase 'placeholder' (case-insensitive)", () => {
     const toml: RalphRulesToml = {
       rules: {
         lower: {
@@ -2495,8 +2495,8 @@ describe("findPlaceholderRules — partial word match", () => {
         },
       },
     };
-    // .includes("PLACEHOLDER") is case-sensitive → does NOT match
-    expect(findPlaceholderRules(toml)).toBeNull();
+    // Case-insensitive detection catches lowercase 'placeholder'
+    expect(findPlaceholderRules(toml)).toBe("lower");
   });
 });
 
@@ -3791,6 +3791,70 @@ describe("resolveInjectPlaceholders — state injection with whitespace-only JSO
     expect(result).toContain("## State Context");
     expect(result).not.toContain("### Previous");
     expect(result).not.toContain("### Next");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+describe("findPlaceholderRules — case-insensitive PLACEHOLDER detection", () => {
+  it("detects lowercase 'placeholder' in prompt", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        lower: { name: "lower", enabled: true, entries: [{ at: 1, prompt: "placeholder: fill in" }] },
+      },
+    };
+    expect(findPlaceholderRules(toml)).toBe("lower");
+  });
+
+  it("detects mixed case 'PlaceHolder' in prompt", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        mixed: { name: "mixed", enabled: true, entries: [{ at: 1, prompt: "PlaceHolder: stuff" }] },
+      },
+    };
+    expect(findPlaceholderRules(toml)).toBe("mixed");
+  });
+
+  it("detects 'Placeholder' (title case) in prompt", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        title: { name: "title", enabled: true, entries: [{ at: 1, prompt: "Placeholder: configure me" }] },
+      },
+    };
+    expect(findPlaceholderRules(toml)).toBe("title");
+  });
+});
+
+describe("resolveInjectPlaceholders — state content with {{inject:*}} is not re-resolved", () => {
+  it("does not resolve inject anchors from state file content", () => {
+    const testDir = join(TMP_DIR, "ralph-no-reinject");
+    mkdirSync(testDir, { recursive: true });
+    // State file contains {{inject:fake_rule}} — should NOT be resolved
+    writeFileSync(join(testDir, "state.jsonl"), '{{inject:fake_rule}}\n');
+
+    const toml: RalphRulesToml = {
+      rules: {
+        real: { name: "real", enabled: true, entries: [{ at: 1, prompt: "REAL" }] },
+      },
+      state_injection: {
+        source: "state.jsonl",
+        max_next: 1,
+        max_prev: 0,
+        show_status: false,
+        reminder: "",
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:state}}",
+      { iteration: 1 },
+      testDir,
+      toml,
+    );
+
+    // The state content should be included as raw text, not resolved
+    expect(result).toContain("{{inject:fake_rule}}");
+    expect(result).not.toContain("SCAFFOLDED");
 
     rmSync(testDir, { recursive: true, force: true });
   });
