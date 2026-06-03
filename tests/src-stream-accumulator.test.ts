@@ -484,4 +484,26 @@ describe("StreamAccumulator — edge cases", () => {
       expect(acc.errors).toEqual([]);
       expect(acc.totalBytes).toBe(0);
    });
+
+   it("deduplicates errors across streams (simulated stdout+stderr merge)", () => {
+      const stdoutAcc = new StreamAccumulator();
+      const stderrAcc = new StreamAccumulator();
+
+      // Same error in both streams
+      stdoutAcc.append("error: something went wrong\n");
+      stderrAcc.append("error: something went wrong\n");
+
+      // Different error in stderr
+      stderrAcc.append("TypeError: cannot read null\n");
+
+      // Simulate the merge logic from ralph.ts
+      const allErrors: string[] = [];
+      const errorSet = new Set<string>();
+      for (const e of stdoutAcc.errors) { if (!errorSet.has(e)) { errorSet.add(e); allErrors.push(e); } }
+      for (const e of stderrAcc.errors) { if (!errorSet.has(e)) { errorSet.add(e); allErrors.push(e); } }
+
+      expect(allErrors).toHaveLength(2);
+      expect(allErrors[0]).toBe("error: something went wrong");
+      expect(allErrors[1]).toBe("TypeError: cannot read null");
+   });
 });

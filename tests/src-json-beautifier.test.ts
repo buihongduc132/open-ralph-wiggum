@@ -145,6 +145,15 @@ describe("beautifyJsonLine — mode=text", () => {
     const result = beautifyJsonLine(line, config({ mode: "text", agentType: "gemini" }));
     expect(result.some(r => r.includes("Gemini text here"))).toBe(true);
   });
+
+  it("extracts thinking from content_block_delta thinking_delta in text mode", () => {
+    const line = JSON.stringify({
+      type: "content_block_delta",
+      delta: { type: "thinking_delta", thinking: "deep thoughts" },
+    });
+    const result = beautifyJsonLine(line, config({ mode: "text" }));
+    expect(result.some(r => r.includes("deep thoughts"))).toBe(true);
+  });
 });
 
 // ─── beautifyJsonLine — non-JSON passthrough ────────────────────────────────
