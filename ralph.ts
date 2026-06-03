@@ -859,7 +859,7 @@ export function validateRulesToml(toml: RalphRulesToml | null): string[] {
    if (toml.rules !== undefined && toml.rules !== null) {
       if (typeof toml.rules !== "object" || Array.isArray(toml.rules)) {
          warnings.push("[rules] must be an object, got " + typeof toml.rules);
-         return warnings; // Can't validate further
+         // Continue to validate state_injection even if rules is malformed
       }
       for (const [key, section] of Object.entries(toml.rules)) {
          if (!section || typeof section !== "object") {
