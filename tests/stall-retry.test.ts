@@ -79,6 +79,7 @@ describe("stall retries", () => {
     cleanupPath(tempDir);
   });
 
+  // Spawns real bin/ralph binary (~4.5s observed, flaky at default 5s bun:test timeout)
   it("stalls, clears the fallback blacklist, and restarts the rotation cycle after all fallbacks are exhausted", async () => {
     writeFileSync(
       join(stateDir, "config.toml"),
@@ -104,7 +105,7 @@ describe("stall retries", () => {
     expect(result.output).toContain("Cleared fallback blacklist. Restarting fallback cycle.");
     expect(countMatches(result.output, "(opencode / alpha)")).toBeGreaterThanOrEqual(2);
     expect(result.output).toContain("(codex / beta)");
-  });
+  }, { timeout: 30_000 });
 
   // Spawns real bin/ralph binary (~4.5s observed, flaky at default 5s bun:test timeout)
   it("keeps immediate rotation wraparound behavior when stall retries are disabled", async () => {
