@@ -6,7 +6,7 @@
 - No inventory problems, no failing tests
 
 ## Modulo Checkpoint
-- I % 5 = 0: **SYNC — Lateral Alignment** (git pull, push, retain)
+- I % 5 = 0: **SYNC — Lateral Alignment** (git pull, push, retain hindsight)
 - I % 7 = 1: No backward audit
 - I % 11 = 4: No mutation audit
 
@@ -31,10 +31,21 @@
 - Only adds separator newline if file doesn't already end with one
 - 4 new tests
 
+### 4. Coverage Uplift — validateRulesToml state_injection fields
+- Negative `max_next` warning
+- Non-string `reminder` warning
+- Non-boolean `show_status` warning
+- 3 new tests, fills last gaps in schema validation coverage
+
+## SYNC Ceremony
+- ✅ `git pull --rebase` — already up to date
+- ✅ Hindsight retain — stored iteration 15 progress
+- ✅ `git push` — to origin/feat/deterministic-modulo-injection
+
 ## Test Results
-- `tests/deterministic-injection.test.ts`: **263 pass, 0 fail, 607 expect() calls** (up from 244/577)
-- Full suite: **1284 pass, 27 skip, 0 fail** (up from 1265)
-- 19 new tests added
+- `tests/deterministic-injection.test.ts`: **266 pass, 0 fail, 610 expect() calls** (up from 244/577)
+- Full suite: **1287 pass, 27 skip, 0 fail** (up from 1265)
+- 22 new tests added this iteration
 
 ## Findings Status
 | ID | Status | Notes |
@@ -50,3 +61,4 @@
 
 ## Commits
 - `cb3b815` feat: harden F1/F2/F5 — schema validation, corrupt TOML warning, no double newlines
+- `81d4980` test: validateRulesToml coverage — negative max_next, non-string reminder, non-boolean show_status
