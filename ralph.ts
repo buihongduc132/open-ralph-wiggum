@@ -3450,6 +3450,7 @@ Unable to read ${currentTasksFileLabel()}
 
       // Set up signal handler for graceful shutdown
       let stopping = false;
+      let inReviewGate = false; // Set to true during review gate dispatch
       process.on("SIGINT", () => {
          if (stopping) {
             console.log("\nForce stopping...");
@@ -3457,6 +3458,13 @@ Unable to read ${currentTasksFileLabel()}
          }
          stopping = true;
          console.log("\nGracefully stopping Ralph loop...");
+
+         // If we're in the review gate, preserve state with interrupted phase
+         if (inReviewGate && state.reviewGate) {
+            state.reviewGate.phase = "interrupted";
+            try { saveState(state); } catch { /* best-effort */ }
+            console.log("📋 Review gate interrupted — state preserved for manual review.");
+         }
 
          // Abort any pending stream operations
          if (currentAbortController) {
@@ -3483,8 +3491,10 @@ Unable to read ${currentTasksFileLabel()}
             }
          }
 
-         clearState();
-         clearPendingQuestions();
+         if (!inReviewGate) {
+            clearState();
+            clearPendingQuestions();
+         }
          console.log("Loop cancelled.");
 
          // Use setImmediate to allow the abort event to propagate
@@ -3998,6 +4008,7 @@ Unable to read ${currentTasksFileLabel()}
                       saveState(state);
 
                       // Dispatch voters
+                      inReviewGate = true;
                       const reviewResult = await dispatchVoters({
                          state: state.reviewGate,
                          config: reviewConfig,
@@ -4016,6 +4027,7 @@ Unable to read ${currentTasksFileLabel()}
 
                       state.reviewGate = reviewResult.state;
                       saveState(state);
+                      inReviewGate = false;
 
                       if (reviewResult.approved) {
                          // QUORUM MET: now do cleanup and break (same as legacy)
