@@ -3362,10 +3362,10 @@ Unable to read ${currentTasksFileLabel()}
       const allErrors: string[] = [];
       const errorSet = new Set<string>();
       if (stdoutAcc) {
-         for (const e of stdoutAcc.errors) { if (errorSet.add(e)) allErrors.push(e); }
+         for (const e of stdoutAcc.errors) { if (!errorSet.has(e)) { errorSet.add(e); allErrors.push(e); } }
       }
       if (stderrAcc) {
-         for (const e of stderrAcc.errors) { if (errorSet.add(e)) allErrors.push(e); }
+         for (const e of stderrAcc.errors) { if (!errorSet.has(e)) { errorSet.add(e); allErrors.push(e); } }
       }
       const finalErrors = allErrors;
       const finalBytes = stdoutAcc ? stdoutAcc.totalBytes : stdoutText.length;
@@ -3938,6 +3938,7 @@ Unable to read ${currentTasksFileLabel()}
             let stderr = "";
             let toolCounts = new Map<string, number>();
             let terminatedAfterPromise = false;
+            let streamedErrors: string[] | undefined;
 
             if (streamOutput) {
                // Create AbortController for this iteration
@@ -3969,6 +3970,7 @@ Unable to read ${currentTasksFileLabel()}
                stderr = streamed.stderrText;
                toolCounts = streamed.toolCounts;
                terminatedAfterPromise = streamed.terminatedAfterPromise;
+               streamedErrors = streamed.errors;
 
                // Handle stalling detection
                const isPreStartStalled = streamed.preStartStalled;
@@ -4214,6 +4216,7 @@ Unable to read ${currentTasksFileLabel()}
                exitCode,
                completionDetected,
                snapshotBefore,
+               preExtractedErrors: streamedErrors,
             });
 
             // Show struggle warning if detected

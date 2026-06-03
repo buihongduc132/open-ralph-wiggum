@@ -549,7 +549,13 @@ function textExtract(p: Record<string, unknown>, agentType: string): string[] {
     }
   } else if (t === "content_block_delta") {
     if (p.delta && typeof p.delta === "object") {
-      addText((p.delta as Record<string, unknown>).text);
+      const delta = p.delta as Record<string, unknown>;
+      const deltaType = typeof delta.type === "string" ? delta.type : "";
+      if (deltaType === "thinking_delta") {
+        addText(delta.thinking);
+      } else {
+        addText(delta.text);
+      }
     }
   } else if (t === "stream_event") {
     // Nested event with delta — extract text_delta content

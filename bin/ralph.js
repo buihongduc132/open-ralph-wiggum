@@ -455,7 +455,13 @@ function textExtract(p, agentType) {
     }
   } else if (t === "content_block_delta") {
     if (p.delta && typeof p.delta === "object") {
-      addText(p.delta.text);
+      const delta = p.delta;
+      const deltaType = typeof delta.type === "string" ? delta.type : "";
+      if (deltaType === "thinking_delta") {
+        addText(delta.thinking);
+      } else {
+        addText(delta.text);
+      }
     }
   } else if (t === "stream_event") {
     if (p.event && typeof p.event === "object") {
@@ -3249,14 +3255,18 @@ Your answer: `, (answer) => {
     const errorSet = new Set;
     if (stdoutAcc) {
       for (const e of stdoutAcc.errors) {
-        if (errorSet.add(e))
+        if (!errorSet.has(e)) {
+          errorSet.add(e);
           allErrors.push(e);
+        }
       }
     }
     if (stderrAcc) {
       for (const e of stderrAcc.errors) {
-        if (errorSet.add(e))
+        if (!errorSet.has(e)) {
+          errorSet.add(e);
           allErrors.push(e);
+        }
       }
     }
     const finalErrors = allErrors;
@@ -3702,6 +3712,7 @@ Gracefully stopping Ralph loop...`);
         let stderr = "";
         let toolCounts = new Map;
         let terminatedAfterPromise = false;
+        let streamedErrors;
         if (streamOutput) {
           const abortController = new AbortController;
           currentAbortController = abortController;
@@ -3730,6 +3741,7 @@ Gracefully stopping Ralph loop...`);
           stderr = streamed2.stderrText;
           toolCounts = streamed2.toolCounts;
           terminatedAfterPromise = streamed2.terminatedAfterPromise;
+          streamedErrors = streamed2.errors;
           const isPreStartStalled = streamed2.preStartStalled;
           if (streamed2.stalled || isPreStartStalled) {
             const stallType = isPreStartStalled ? "Pre-start" : "";
@@ -3940,7 +3952,8 @@ ${stderr}`;
           stderr,
           exitCode,
           completionDetected,
-          snapshotBefore
+          snapshotBefore,
+          preExtractedErrors: streamedErrors
         });
         const struggle = history.struggleIndicators;
         if (state.iteration > 2 && (struggle.noProgressIterations >= 3 || struggle.shortIterations >= 3)) {
