@@ -7367,3 +7367,399 @@ describe("validateRulesToml — entry with at as float", () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 });
+
+// ─── Iteration 46 — Coverage Uplift ─────────────────────────────────
+
+describe("extractStateDirBasename — root path edge case", () => {
+  it("returns fallback path for root path input (no basename)", () => {
+    // extractStateDirBasename("/") → strip trailing slashes → "" → strip path → "" || "/"
+    // The || fallback returns "/" when the result is empty
+    const result = resolveRulesTomlPath("/");
+    // Produces .ralph-/.toml (the "/" becomes part of the filename)
+    expect(result).toContain(".ralph-");
+    expect(result).toContain(".toml");
+  });
+
+  it("returns the last component for deeply nested path", () => {
+    const result = resolveRulesTomlPath("/a/b/c/d/my-state");
+    expect(result).toContain(".ralph-my-state.toml");
+  });
+});
+
+describe("loadRulesToml — stateDir does not exist", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("returns null when stateDir path does not exist", () => {
+    const nonexistent = join(TMP_DIR, "ralph-nonexistent-dir-" + Date.now());
+    const result = loadRulesToml(nonexistent);
+    expect(result).toBeNull();
+  });
+});
+
+describe("resolveInjectPlaceholders — entries with non-number at values", () => {
+  it("skips entries where at is a string instead of number", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        mixed: {
+          name: "mixed",
+          enabled: true,
+          entries: [
+            { at: "bad" as unknown as number, prompt: "SHOULD NOT APPEAR" },
+            { at: 2, prompt: "VALID ENTRY" },
+          ],
+        },
+      },
+    };
+    const result = resolveInjectPlaceholders("{{inject:mixed}}", { iteration: 4 }, ".", toml);
+    expect(result).toContain("VALID ENTRY");
+    expect(result).not.toContain("SHOULD NOT APPEAR");
+  });
+
+  it("shows no active entries when ALL entries have non-number at", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        allbad: {
+          name: "allbad",
+          enabled: true,
+          entries: [
+            { at: null as unknown as number, prompt: "NULL" },
+            { at: undefined as unknown as number, prompt: "UNDEF" },
+            { at: "string" as unknown as number, prompt: "STRING" },
+          ],
+        },
+      },
+    };
+    const result = resolveInjectPlaceholders("{{inject:allbad}}", { iteration: 1 }, ".", toml);
+    expect(result).toContain("no active entries");
+    expect(result).not.toContain("NULL");
+    expect(result).not.toContain("UNDEF");
+    expect(result).not.toContain("STRING");
+  });
+});
+
+describe("findPlaceholderRules — non-string prompt entries", () => {
+  it("skips entries with non-string prompt", () => {
+    const toml = {
+      rules: {
+        nonstr: {
+          name: "nonstr",
+          enabled: true,
+          entries: [
+            { at: 1, prompt: null },
+            { at: 2, prompt: undefined },
+            { at: 3, prompt: 42 },
+          ],
+      },
+    }} as unknown as RalphRulesToml;
+    // typeof prompt !== "string" → all skipped → no placeholders found
+    expect(findPlaceholderRules(toml)).toEqual([]);
+  });
+
+  it("detects PLACEHOLDER only in string entries", () => {
+    const toml = {
+      rules: {
+        mixed: {
+          name: "mixed",
+          enabled: true,
+          entries: [
+            { at: 1, prompt: null },
+            { at: 2, prompt: "PLACEHOLDER: real" },
+          ],
+      },
+    }} as unknown as RalphRulesToml;
+    const found = findPlaceholderRules(toml);
+    expect(found).toContain("mixed");
+  });
+});
+
+describe("resolveInjectPlaceholders — iteration boundary modulo 1", () => {
+  it("at=1 fires at iteration 0", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        always: { name: "always", enabled: true, entries: [{ at: 1, prompt: "EVERY" }] },
+      },
+    };
+    const result = resolveInjectPlaceholders("{{inject:always}}", { iteration: 0 }, ".", toml);
+    expect(result).toContain("EVERY");
+  });
+
+  it("at=1 fires at iteration 100", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        always: { name: "always", enabled: true, entries: [{ at: 1, prompt: "EVERY" }] },
+      },
+    };
+    const result = resolveInjectPlaceholders("{{inject:always}}", { iteration: 100 }, ".", toml);
+    expect(result).toContain("EVERY");
+  });
+
+  it("at=1 fires at negative iteration", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        always: { name: "always", enabled: true, entries: [{ at: 1, prompt: "EVERY" }] },
+      },
+    };
+    const result = resolveInjectPlaceholders("{{inject:always}}", { iteration: -3 }, ".", toml);
+    // -3 % 1 === 0 → fires
+    expect(result).toContain("EVERY");
+  });
+});
+
+describe("validateRulesToml — multiple entries with mixed valid/invalid", () => {
+  it("reports warnings for each invalid entry in a single rule", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        mixed: {
+          name: "mixed",
+          enabled: true,
+          entries: [
+            { at: 1, prompt: "valid" },
+            { at: 0, prompt: "zero-at" },
+            { at: -2, prompt: "neg-at" },
+            { at: 3, prompt: 42 as unknown as string },
+          ],
+        },
+      },
+    };
+    const warnings = validateRulesToml(toml);
+    expect(warnings.some(w => w.includes("must be positive"))).toBe(true);
+    expect(warnings.some(w => w.includes("must be a string"))).toBe(true);
+    // Should have exactly 3 warnings (at=0, at=-2, prompt=42)
+    expect(warnings.length).toBe(3);
+  });
+
+  it("reports entry object warning for null entry", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        nullEntry: {
+          name: "nullEntry",
+          enabled: true,
+          entries: [null as unknown as { at: number; prompt: string }, { at: 1, prompt: "ok" }],
+        },
+      },
+    };
+    const warnings = validateRulesToml(toml);
+    expect(warnings.some(w => w.includes("must be an object"))).toBe(true);
+  });
+});
+
+describe("loadRulesToml — TOML with rules containing non-object section", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("emits schema warnings for string rule sections", () => {
+    const dirName = "ralph-string-section";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+    const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
+    // Valid TOML but rules.broken is a string, not an object
+    writeFileSync(tomlPath, '[rules.ok]\nname = "ok"\nenabled = true\n\n[[rules.ok.entries]]\nat = 1\nprompt = "fine"\n\n[rules.broken]\nname = "broken"\nenabled = true\n');
+    // This TOML has rules.broken with no entries array
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+    try {
+      const result = loadRulesToml(testDir);
+      expect(result).not.toBeNull();
+      // rules.broken.entries is undefined → validation warns about missing entries array
+      expect(warnings.some(w => w.includes("entries"))).toBe(true);
+    } finally {
+      console.warn = origWarn;
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("scaffoldRulesToml — appending to file ending with multiple newlines", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("does not add extra blank line when file ends with multiple newlines", () => {
+    const dirName = "ralph-multi-newline";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+    const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
+    writeFileSync(tomlPath, '[rules.existing]\nname = "existing"\nenabled = true\n\n');
+    // File ends with double newline
+    scaffoldRulesToml("newrule", testDir);
+    const content = readFileSync(tomlPath, "utf-8");
+    // Should have no leading newline since file ends with \n
+    const idx = content.indexOf("[rules.newrule]");
+    expect(idx).toBeGreaterThan(0);
+    // Character before [rules.newrule] should be \n, not content from the section
+    expect(content[idx - 1]).toBe("\n");
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+describe("resolveInjectPlaceholders — rule with single entry at boundary iteration", () => {
+  it("fires at exact boundary iteration", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        boundary: { name: "boundary", enabled: true, entries: [{ at: 10, prompt: "BOUNDARY" }] },
+      },
+    };
+    const result = resolveInjectPlaceholders("{{inject:boundary}}", { iteration: 10 }, ".", toml);
+    expect(result).toContain("BOUNDARY");
+  });
+
+  it("does not fire at boundary-1", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        boundary: { name: "boundary", enabled: true, entries: [{ at: 10, prompt: "BOUNDARY" }] },
+      },
+    };
+    const result = resolveInjectPlaceholders("{{inject:boundary}}", { iteration: 9 }, ".", toml);
+    expect(result).toContain("no active entries");
+  });
+
+  it("fires at 2x boundary", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        boundary: { name: "boundary", enabled: true, entries: [{ at: 10, prompt: "BOUNDARY" }] },
+      },
+    };
+    const result = resolveInjectPlaceholders("{{inject:boundary}}", { iteration: 20 }, ".", toml);
+    expect(result).toContain("BOUNDARY");
+  });
+});
+
+// ─── Cross-anchor bleed prevention (I46 review recommendation #1) ──
+
+describe("resolveInjectPlaceholders — cross-anchor bleed prevention", () => {
+  it("does not re-resolve {{inject:other}} in a rule's resolved prompt", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        first: {
+          name: "first",
+          enabled: true,
+          entries: [{ at: 1, prompt: "Resolved FIRST with {{inject:second}} inside" }],
+        },
+        second: {
+          name: "second",
+          enabled: true,
+          entries: [{ at: 1, prompt: "LEAKED_SECOND_SHOULD_NOT_APPEAR" }],
+        },
+      },
+    };
+    // If cross-anchor bleed exists, {{inject:second}} inside first's prompt would be resolved
+    const result = resolveInjectPlaceholders(
+      "Start {{inject:first}} End",
+      { iteration: 1 },
+      ".",
+      toml,
+    );
+    expect(result).toContain("Resolved FIRST");
+    // The literal text "{{inject:second}}" should survive in the output
+    expect(result).toContain("{{inject:second}}");
+    expect(result).not.toContain("LEAKED_SECOND");
+    expect(result).toContain("End");
+  });
+
+  it("state anchor in a rule's prompt IS resolved (by-design two-pass)", () => {
+    // State resolution uses .replace() on the entire template AFTER rules.
+    // This means {{inject:state}} in a rule's prompt IS resolved.
+    // This is BY DESIGN — state injection is a global pass.
+    const toml: RalphRulesToml = {
+      rules: {
+        trick: {
+          name: "trick",
+          enabled: true,
+          entries: [{ at: 1, prompt: "Trick: {{inject:state}} gets resolved" }],
+        },
+      },
+      state_injection: {
+        source: "state.jsonl",
+        max_next: 1,
+        max_prev: 0,
+        show_status: false,
+        reminder: "",
+      },
+    };
+    const testDir = join(TMP_DIR, `bleed-state-${Date.now()}`);
+    mkdirSync(testDir, { recursive: true });
+    writeFileSync(join(testDir, "state.jsonl"), "STATE_DATA\n");
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:trick}}",
+      { iteration: 1 },
+      testDir,
+      toml,
+    );
+    // State anchor in rule prompt IS resolved (two-pass design)
+    expect(result).toContain("STATE_DATA");
+    expect(result).not.toContain("{{inject:state}}");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+describe("validateRulesToml — negative max_prev/max_next", () => {
+  it("warns on negative max_next", () => {
+    const toml: RalphRulesToml = {
+      rules: {},
+      state_injection: {
+        source: "state.jsonl",
+        max_next: -1,
+        max_prev: 1,
+        show_status: true,
+        reminder: "ok",
+      },
+    };
+    const warnings = validateRulesToml(toml);
+    expect(warnings).toEqual([
+      "[state_injection].max_next must be a non-negative number",
+    ]);
+  });
+
+  it("warns on negative max_prev", () => {
+    const toml: RalphRulesToml = {
+      rules: {},
+      state_injection: {
+        source: "state.jsonl",
+        max_next: 1,
+        max_prev: -5,
+        show_status: true,
+        reminder: "ok",
+      },
+    };
+    const warnings = validateRulesToml(toml);
+    expect(warnings).toEqual([
+      "[state_injection].max_prev must be a non-negative number",
+    ]);
+  });
+
+  it("warns on both negative max_next and max_prev", () => {
+    const toml: RalphRulesToml = {
+      rules: {},
+      state_injection: {
+        source: "state.jsonl",
+        max_next: -3,
+        max_prev: -2,
+        show_status: true,
+        reminder: "ok",
+      },
+    };
+    const warnings = validateRulesToml(toml);
+    expect(warnings.length).toBe(2);
+    expect(warnings[0]).toContain("max_next");
+    expect(warnings[1]).toContain("max_prev");
+  });
+});
+
+describe("loadRulesToml — whitespace-only file (no TOML content)", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("returns null for file with only spaces and tabs", () => {
+    const dirName = "ralph-whitespace-only";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+    const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
+    writeFileSync(tomlPath, "   \t  \n  \t  ");
+    const result = loadRulesToml(testDir);
+    expect(result).toBeNull();
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
