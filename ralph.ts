@@ -806,7 +806,7 @@ export function scaffoldRulesToml(rulesName: string, currentStateDir: string): s
 
 /**
  * Scan a parsed TOML for any rule entry whose prompt contains "PLACEHOLDER".
- * Returns the first offending section name, or null if all clean.
+ * Returns all offending section names, or empty array if all clean.
  */
 export function findPlaceholderRules(toml: RalphRulesToml | null): string[] {
    if (!toml || !toml.rules) return [];
