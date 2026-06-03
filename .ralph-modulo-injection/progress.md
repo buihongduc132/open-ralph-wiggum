@@ -1,3 +1,28 @@
+# Iteration 113 Progress (FORWARD — hold)
+
+No modulo checkpoints (113%5=3, 113%7=1, 113%11=3). All T1-T8 completed. 1384 pass, 0 fail, git clean. No new work available.
+
+**Transient**: Pre-existing concurrent state-dir race (not related to deterministic-injection) still present — flaked once in I111 full-suite run, passes in isolation and re-run.
+
+## Next Checkpoints
+- **I115** (I%5==0): SYNC — lateral alignment
+- **I119** (I%7==0): BACKWARD — verifier loop (READ-ONLY)
+- **I121** (I%11==0): BACKWARD — mutation + CodeQL (READ-ONLY)
+
+---
+
+# Iteration 111 Progress (FORWARD — hold)
+
+No modulo checkpoints (111%5=1, 111%7=6, 111%11=1). All T1-T8 completed. 1384 pass, 0 fail, git clean. No new work available.
+
+**Transient**: I-1 full-suite run had 1 flaky test (state-dir concurrent race: `handles concurrent --add-task to different directories without data loss`) — passed in isolation and on re-run. Known pre-existing race in concurrent state-dir tests, not related to deterministic-injection.
+
+## Next Checkpoints
+- **I112** (I%7==0): BACKWARD — verifier loop (READ-ONLY)
+- **I115** (I%5==0): SYNC — lateral alignment
+
+---
+
 # Iteration 109 Progress (FORWARD — hold)
 
 No modulo checkpoints (109%5=4, 109%7=4, 109%11=10). All T1-T8 completed. 1384 pass, 0 fail, git clean. No new work available.
