@@ -1,46 +1,54 @@
-# Iteration 19 Progress (FORWARD — Coverage Uplift)
+# Iteration 20 Progress (SYNC — I % 5 == 0)
 
 ## State Check
 - All 8 tasks (T1-T8) completed since iteration 4
 - No inventory problems, no failing tests
-- External review 8/10 on I19 (up from 9/10 on I18 due to stricter reviewer)
+- External review 8/10 on I20
 
 ## Modulo Checkpoint
-- I % 5 = 4: No SYNC
-- I % 7 = 5: No backward audit
-- I % 11 = 8: No mutation audit
+- I % 5 = 0: ✅ SYNC — git pull --rebase, commit, retain hindsight
+- I % 7 = 6: No backward audit
+- I % 11 = 9: No mutation audit
+
+## SYNC Activities
+- ✅ `git pull --rebase` — already up to date
+- ✅ Retained progress into hindsight
+- ✅ Coverage uplift committed and pushed
 
 ## Work Done (This Iteration)
 
-### Coverage Uplift (285→296 tests, +11 tests)
+### Coverage Uplift (296→312 tests, +16 tests)
 
-Added 7 new describe blocks covering edge cases identified by external reviewer:
+Added 16 new tests across 14 describe blocks:
 
-1. **State injection `show_status=true` with `max_prev=0, max_next=0`** — verifies header + reminder emit without Previous/Next sections (2 tests)
-2. **`validateRulesToml` with `rules: null`** — verifies null/undefined guards return empty warnings (2 tests)
-3. **State injection slicing overflow** — `max_next + max_prev > total lines` and `max_next === line count` (2 tests)
-4. **`{{inject:state}}` without config** — undefined state_injection and null TOML (2 tests)
-5. **Integration F9 re-load pattern** — full load → scaffold → re-load → find PLACEHOLDER cycle (1 test)
-6. **`at=0` and `at=-1` at non-zero iteration** — verifies filter blocks invalid at values during resolution (2 tests)
-
-### Reviewer Feedback Addressed
-- ✅ Added test for `at=0` entry at non-zero iteration (reviewer gap #4)
-- ✅ Added test for `at=-1` entry (negative at filter)
-- ℹ️ Iteration 0 fires all modulo rules — already tested, design decision
-- ℹ️ `show_status=true` with empty file emits header — intentional, now explicitly tested
-- ℹ️ `extractStateDirBasename` root path edge case — unlikely in practice
+1. **Duplicate `at` values** — two entries with same at both fire, concatenated in order (2 tests)
+2. **Case-sensitive anchor names** — `{{inject:Sync}}` vs `{{inject:sync}}`, uppercase rule names (2 tests)
+3. **`enabled: undefined`** — treated as falsy, shows disabled comment (1 test)
+4. **State injection `..` path traversal** — reads from parent directory via relative source (1 test)
+5. **Scaffold with uppercase rulesName** — creates valid TOML section (1 test)
+6. **Numeric-looking rule names** — `rule123` resolves correctly (1 test)
+7. **Whitespace-only template** — anchor surrounded by only whitespace (1 test)
+8. **State injection trailing newline** — file ending with exactly one `\n` (1 test)
+9. **BOM handling** — UTF-8 BOM in TOML file parsed without crash (1 test)
+10. **State injection 2-line exact split** — 2 lines with max_prev=1, max_next=1 (1 test)
+11. **Scaffold reparse idempotency** — scaffold, parse, rewrite, scaffold again still idempotent (1 test)
+12. **Empty rules object validation** — returns empty warnings (2 tests)
+13. **Rule prompt with regex special chars** — `$`, `[]`, `()`, `*`, `^` handled correctly (1 test)
 
 ## Test Results
-- `tests/deterministic-injection.test.ts`: **296 pass, 0 fail, 693 expect() calls**
-- Full suite: **1317 pass, 27 skip, 0 fail** (up from 1306)
-- 11 new tests, 26 new expect() calls
+- `tests/deterministic-injection.test.ts`: **312 pass, 0 fail, 729 expect() calls**
+- Full suite: **1333 pass, 27 skip, 0 fail** (up from 1317)
+- 16 new tests, 36 new expect() calls
 
 ## External Review (claude -p)
-- **Score: 8/10**, all 10 functional checklist points PASS
+- **Score: 8/10**, all 6 findings are INFO/LOW severity
 - Findings:
-  - All new tests rated Good/Excellent
-  - F9 re-load integration test rated "particularly valuable"
-  - Minor design notes on iteration-0 modulo behavior and content-free headers
+  - Float `at` values pass modulo filter (by design, TOML allows floats)
+  - Non-string prompt values coerced by `.join()` (caught by validateRulesToml at load)
+  - BOM not stripped before parse (edge case, no crash)
+  - Negative iteration values (documented, tested)
+  - Path traversal in source (by design, user-authored TOML)
+  - Misleading test name for null TOML (cosmetic)
 
 ## Findings Status
 | ID | Status | Notes |
@@ -56,7 +64,7 @@ Added 7 new describe blocks covering edge cases identified by external reviewer:
 | F9 | ✅ Fixed (I16) | Gate re-loads TOML after injection |
 
 ## Commits
-- `70b69af` test: 11 new coverage tests — show_status=true empty slice, rules=null validation, F9 integration, state injection edge cases, at=0/-1 filter (285→296, 1306→1317 total)
+- `36b8636` test: 16 new coverage tests — duplicate at, case-sensitive anchors, BOM, path traversal, reparse idempotency (296→312, 1333 total)
 
 ## Pushed
 - ✅ `git push --force-with-lease` — to origin/feat/deterministic-modulo-injection
