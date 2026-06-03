@@ -6,19 +6,25 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { join } from "path";
 import { existsSync, writeFileSync, mkdirSync, rmSync } from "fs";
+import { randomUUID } from "crypto";
 
 let tmpDir: string;
 
 beforeAll(() => {
-   tmpDir = join(process.cwd(), ".test-runtime-config-tmp");
-   if (!existsSync(tmpDir)) mkdirSync(tmpDir, { recursive: true });
+   tmpDir = join(process.cwd(), `.test-runtime-config-tmp-${randomUUID()}`);
+   mkdirSync(tmpDir, { recursive: true });
 });
 
 afterAll(() => {
    try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
 });
 
+function ensureTmpDir(): void {
+   if (!existsSync(tmpDir)) mkdirSync(tmpDir, { recursive: true });
+}
+
 function spawnRalphWithToml(tomlContent: string): { exitCode: number; stderr: string; stdout: string } {
+   ensureTmpDir();
    const tomlPath = join(tmpDir, `test-${Date.now()}.toml`);
    writeFileSync(tomlPath, tomlContent);
 
@@ -82,6 +88,7 @@ describe("runtime-config error paths (subprocess)", () => {
    });
 
    it("exits with error when explicit TOML path does not exist", () => {
+      ensureTmpDir();
       const tomlPath = join(tmpDir, "nonexistent-" + Date.now() + ".toml");
       const proc = Bun.spawnSync([
          "bun", "run", "ralph.ts",
