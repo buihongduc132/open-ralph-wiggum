@@ -845,13 +845,21 @@ export function resolveInjectPlaceholders(
    // Resolve {{inject:<name>}} for rule sections FIRST
    // This prevents state-injected content from being re-resolved as rules.
    // State content may contain {{inject:*}} text that should stay literal.
+   //
+   // IMPORTANT: We use positional replacement (reverse-order slicing) instead of
+   // replaceAll to prevent cross-anchor bleed — where one anchor's resolved prompt
+   // text contains another anchor's pattern and gets incorrectly replaced.
    const injectRegex = /\{\{inject:([a-zA-Z0-9_-]+)\}\}/g;
    // Capture matches before mutation
    const matches = [...template.matchAll(injectRegex)];
 
+   // Build a list of (position, replacement) for rule anchors (skip state)
+   const replacements: { pos: number; len: number; text: string }[] = [];
+
    for (const match of matches) {
       const full = match[0];
       const name = match[1];
+      const pos = match.index!;
 
       if (name === "state") continue; // handled below
 
@@ -859,12 +867,12 @@ export function resolveInjectPlaceholders(
       if (!rule) {
          // Scaffold missing section
          const placeholder = scaffoldRulesToml(name, currentStateDir);
-         template = template.replaceAll(full, placeholder);
+         replacements.push({ pos, len: full.length, text: placeholder });
          continue;
       }
 
       if (!rule.enabled || !Array.isArray(rule.entries) || !rule.entries.length) {
-         template = template.replaceAll(full, `<!-- inject:${name} disabled or empty -->`);
+         replacements.push({ pos, len: full.length, text: `<!-- inject:${name} disabled or empty -->` });
          continue;
       }
 
@@ -874,10 +882,16 @@ export function resolveInjectPlaceholders(
          .map(e => e.prompt);
 
       if (activePrompts.length === 0) {
-         template = template.replaceAll(full, `<!-- inject:${name} no active entries at iteration ${state.iteration} -->`);
+         replacements.push({ pos, len: full.length, text: `<!-- inject:${name} no active entries at iteration ${state.iteration} -->` });
       } else {
-         template = template.replaceAll(full, activePrompts.join("\n\n"));
+         replacements.push({ pos, len: full.length, text: activePrompts.join("\n\n") });
       }
+   }
+
+   // Apply replacements in reverse position order so indices stay valid
+   for (let i = replacements.length - 1; i >= 0; i--) {
+      const { pos, len, text } = replacements[i];
+      template = template.slice(0, pos) + text + template.slice(pos + len);
    }
 
    // Resolve {{inject:state}} AFTER rules — state content won't be re-scanned
