@@ -457,10 +457,8 @@ describe("resolveInjectPlaceholders", () => {
       toml,
     );
 
-    // With both max at 0, should have the header but no sections
-    expect(result).toContain("## State Context");
-    expect(result).not.toContain("### Previous");
-    expect(result).not.toContain("### Next");
+    // With both max at 0 and no show_status, returns empty string (no content-free header)
+    expect(result).toBe("");
 
     rmSync(testDir, { recursive: true, force: true });
   });
@@ -2953,6 +2951,38 @@ describe("resolveInjectPlaceholders — state injection with both max_prev=0 and
   });
 });
 
+describe("resolveInjectPlaceholders — state injection with both max_prev=0, max_next=0, show_status=false", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("returns empty string when no prev/next and no show_status", () => {
+    const testDir = join(TMP_DIR, "ralph-zero-no-status");
+    mkdirSync(testDir, { recursive: true });
+    writeFileSync(join(testDir, "state.jsonl"), "line1\nline2\nline3\n");
+
+    const toml: RalphRulesToml = {
+      state_injection: {
+        source: "state.jsonl",
+        max_next: 0,
+        max_prev: 0,
+        show_status: false,
+        reminder: "",
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:state}}",
+      { iteration: 1 },
+      testDir,
+      toml,
+    );
+
+    expect(result).toBe("");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
 describe("resolveInjectPlaceholders — state injection with source pointing to nonexistent file", () => {
   it("returns empty string when source file does not exist", () => {
     const toml: RalphRulesToml = {
@@ -3882,9 +3912,8 @@ describe("resolveInjectPlaceholders — state injection with whitespace-only JSO
     };
 
     const result = resolveInjectPlaceholders("{{inject:state}}", { iteration: 1 }, testDir, toml);
-    expect(result).toContain("## State Context");
-    expect(result).not.toContain("### Previous");
-    expect(result).not.toContain("### Next");
+    // All lines filtered → no content → empty string (no content-free header)
+    expect(result).toBe("");
 
     rmSync(testDir, { recursive: true, force: true });
   });
@@ -4702,7 +4731,7 @@ describe("resolveInjectPlaceholders — prime iteration modulo check", () => {
 // Iteration 9 — Bug fix + F6 improvement + F3 coverage
 // ────────────────────────────────────────────────────────────────
 
-describe("loadRulesToml — whitespace-only TOML file", () => {
+describe("loadRulesToml — whitespace/edge-case TOML content", () => {
   beforeAll(() => ensureTmpDir());
   afterAll(() => cleanupTmpDir());
 

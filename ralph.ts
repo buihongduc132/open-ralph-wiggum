@@ -995,6 +995,7 @@ export function resolveInjectPlaceholders(
             ? (cfg.max_next > 0 ? lines.slice(-cfg.max_prev - cfg.max_next, -cfg.max_next) : lines.slice(-cfg.max_prev))
             : [];
          const next = cfg.max_next > 0 ? lines.slice(-cfg.max_next) : [];
+         if (!prev.length && !next.length && !cfg.show_status) return "";
          let result = "## State Context\n\n";
          if (prev.length) result += `### Previous (${prev.length} entries)\n\n${prev.join("\n")}\n\n`;
          if (next.length) result += `### Next (${next.length} entries)\n\n${next.join("\n")}\n\n`;
