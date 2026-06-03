@@ -1106,6 +1106,56 @@ describe("resolveInjectPlaceholders — state injection slicing", () => {
   });
 });
 
+// M1 fix: {{inject:state}} / [rules.state] collision test
+describe("M1: {{inject:state}} vs [rules.state] collision", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("resolves {{inject:state}} as state injection ONLY, ignoring [rules.state] TOML entries", () => {
+    const dirName = `ralph-m1-collision-${Date.now()}`;
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    // Create a JSONL state file
+    const jsonlPath = join(testDir, "state.jsonl");
+    writeFileSync(jsonlPath, JSON.stringify({ iteration: 5, status: "done" }) + "\n");
+
+    // TOML defines [rules.state] — a conflicting section name
+    const toml: RalphRulesToml = {
+      rules: {
+        state: {
+          name: "state",
+          enabled: true,
+          entries: [{ at: 1, prompt: "RULE_STATE_PROMPT_SHOULD_NOT_APPEAR" }],
+        },
+      },
+      state_injection: {
+        source: jsonlPath,
+        max_next: 5,
+        max_prev: 5,
+        show_status: true,
+        reminder: "Check state",
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "Start\n{{inject:state}}\nEnd",
+      { iteration: 5 },
+      testDir,
+      toml,
+    );
+
+    // State injection should resolve from JSONL, NOT from [rules.state] entries
+    expect(result).not.toContain("RULE_STATE_PROMPT_SHOULD_NOT_APPEAR");
+    expect(result).toContain("Check state"); // from state_injection.reminder
+    expect(result).toContain("Start");
+    expect(result).toContain("End");
+    expect(result).not.toContain("{{inject:state}}");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
 // ──────────────────────────────────────────────────────────────
 // Coverage uplift — iteration 4
 // Target: cwd fallback with real files, special chars, idempotency,
@@ -5523,7 +5573,8 @@ describe("F5: scaffoldRulesToml — no leading newline on append", () => {
 
     const content = readFileSync(tomlPath, "utf-8");
     // For a new file, should start with [rules.first] directly (no leading newline)
-    expect(content.trim()).toContain("[rules.first]");
+    expect(content.startsWith("[rules.first]")).toBe(true);
+    expect(content).not.toContain("\n[rules");
 
     rmSync(testDir, { recursive: true, force: true });
   });

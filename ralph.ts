@@ -814,10 +814,10 @@ export function scaffoldRulesToml(rulesName: string, currentStateDir: string): s
       }
    }
 
-   // F5 hardening: only add separator newline if file doesn't already end with one
-   let separator = "\n";
-   if (existingContent.length > 0 && existingContent.endsWith("\n")) {
-      separator = ""; // File already ends with newline
+   // F5 hardening: only add separator newline if file has content AND doesn't end with one
+   let separator = "";
+   if (existingContent.length > 0 && !existingContent.endsWith("\n")) {
+      separator = "\n"; // Existing content needs a newline separator
    }
 
    const section = `${separator}[rules.${rulesName}]\nname = "${rulesName}"\nenabled = true\n\n[[rules.${rulesName}.entries]]\nat = 1\nprompt = "PLACEHOLDER: configure rules.${rulesName} entries"\n`;
