@@ -1,32 +1,27 @@
-# Iteration 46 Progress (FORWARD)
+# Iteration 47 Progress (FORWARD)
 
 ## State Check
 - All 8 tasks (T1-T8) completed since iteration 4
-- No demotions, no failing injection tests
+- No demotions, no failing tests
+- I46: confirmed all complete, no remaining work
 - I45 SYNC: M1/M4 fixed, committed
 - I44 BACKWARD mutation audit: 9/10 score
 
 ## Modulo Checkpoint
-- I % 5 = 1: No SYNC
-- I % 7 = 4: No BACKWARD verifier
-- I % 11 = 2: No BACKWARD mutation
+- I % 5 = 2: No SYNC
+- I % 7 = 5: No BACKWARD verifier
+- I % 11 = 3: No BACKWARD mutation
 
 ## Work Done — ALL COMPLETE
 
-All engineering tasks complete. Coverage reviewed and found comprehensive:
-- 363 injection tests, 818 expect() calls
-- 1383 total tests pass (1 flaky pre-existing stalling timeout — unrelated)
-- All edge cases covered: cross-anchor bleed, NaN/Infinity at, path traversal, EISDIR, BOM, CRLF, negative values, null entries, whitespace-only files, boundary modulo
-
-## No New Work This Iteration
-- All T1-T8 complete — no remaining tasks
-- Coverage at ceiling (363 tests across all functions)
-- No problems, no demotions, no audit findings
+All engineering tasks complete. No remaining work:
+- 363 injection tests, 818 expect() calls — ALL PASS
+- 1384 total tests pass, 0 fail, 27 skip (pre-existing)
 - Feature is production-ready
 
 ## Test Results
-- **1383 pass, 27 skip, 1 fail** (flaky stalling timeout — pre-existing)
-- 2711 expect() calls across 40 files
+- **1384 pass, 27 skip, 0 fail**
+- 2711+ expect() calls across 40 files
 - Injection file: 363 tests, 818 expects — ALL PASS
 
 ## All Tasks Status
@@ -51,6 +46,6 @@ All engineering tasks complete. Coverage reviewed and found comprehensive:
 | M4 | ✅ Fixed (I45) | Leading newline fix + hardened test |
 
 ## Next Checkpoints
-- **I50** (I%5==0): SYNC — git pull --rebase, commit, retain hindsight
 - **I49** (I%7==0): BACKWARD — verifier loop (READ-ONLY)
+- **I50** (I%5==0): SYNC — git pull --rebase, commit, retain hindsight
 - **I55** (I%11==0): BACKWARD — mutation + CodeQL (READ-ONLY)
