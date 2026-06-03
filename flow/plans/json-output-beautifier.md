@@ -1,7 +1,7 @@
 # Plan: JSON Output Beautifier for Ralph Wiggum Streaming
 
 **Date**: 2026-05-29
-**Status**: REVISED (post verifier loops #1, #2, #3 — all issues resolved, performance & memory optimized)
+**Status**: COMPLETE (T1–T22 done, T23 manual smoke pending) — all tests pass (1055/0), integrated into ralph.ts, completion.ts
 
 ---
 
@@ -468,28 +468,28 @@ The beautifier MUST NOT change:
 
 ## Checklist (Tasks)
 
-- [ ] **T1**: Create `src/json-beautifier.ts` — core types, `BeautifierConfig`, `beautifyJsonLine()` with `charCodeAt(0) === 0x7B` fast path, `isJsonModeAgent()`, `hasJsonAdapter()`, adapter registry
-- [ ] **T2**: Implement `claudeCodeAdapter` — all event types from completion.ts (most complete version), including `auto_retry_start` (new capability)
-- [ ] **T3**: Implement `cursorAgentAdapter` — migrate from `completion.ts:extractCursorAgentStreamDisplayLines`
-- [ ] **T4**: Implement `codexAdapter` — parse codex JSONL events
-- [ ] **T5**: Implement `geminiAdapter` — parse gemini stream-json events (only fires when user adds `--output-format stream-json` to extra_agent_flags)
-- [ ] **T6**: Implement `genericAdapter` — fallback for unknown JSON (extract type + message/error)
-- [ ] **T7**: Implement `extractJsonCompletionText()` and `hasJsonAdapter()` — shared parse logic for completion detection
-- [ ] **T8**: Add `json_display` and `output_buffer_bytes` to `RalphRuntimeConfig` in `src/types.ts`
-- [ ] **T9**: Add `--json-display` and `--output-buffer-bytes` CLI flags + TOML config parsing in `ralph.ts`
-- [ ] **T10**: Create `src/stream-accumulator.ts` — `StreamAccumulator` class with rolling tail buffer + incremental error extraction
-- [ ] **T11**: Replace `stdoutText += chunk` / `stderrText += chunk` in `streamProcessOutput` with `StreamAccumulator`
-- [ ] **T12**: Update `streamProcessOutput` return type — add `errors: string[]`, `totalOutputBytes: number`, keep `stdoutText`/`stderrText` as tail-only
-- [ ] **T13**: Replace `extractClaudeStreamDisplayLines()` in `handleLine()` (ralph.ts:2617) with `beautifyJsonLine()`
-- [ ] **T14**: Fix `flushPartialLines` guard — replace `!== "claude-code"` with `!isJsonModeAgent(agentType, extraFlags)` (ralph.ts:2719), pipe `extraFlags` into `streamProcessOutput` options
-- [ ] **T15**: Wire `BeautifierConfig` + `StreamAccumulator` options through `streamProcessOutput()` options
-- [ ] **T16**: Update post-iteration code — use `streamed.errors` instead of `extractErrors(result + stderr)` full scan
-- [ ] **T17**: Update `completion.ts:extractAgentCompletionText()` — replace ternary with `hasJsonAdapter()` + `extractJsonCompletionText()` import, non-JSON agents return raw output
-- [ ] **T18**: Remove old copies — ralph.ts inline `extractClaudeStreamDisplayLines`, src/display.ts export, completion.ts `extractClaudeStreamDisplayLines` + `extractCursorAgentStreamDisplayLines` + `addNonEmptyTextLines`
-- [ ] **T19**: Update `tests/src-display.test.ts` — remove old `extractClaudeStreamDisplayLines` tests
-- [ ] **T20**: Write `tests/src-json-beautifier.test.ts` — full test suite (happy path, parse errors, config modes, compactTools interaction, `isJsonModeAgent`, `hasJsonAdapter`, edge cases, non-JSON agent passthrough)
-- [ ] **T21**: Write `tests/src-stream-accumulator.test.ts` — rolling buffer trimming, error extraction, boundary conditions
-- [ ] **T22**: Run full test suite — verify activity tracker / heartbeat / stalling still pass
+- [x] **T1**: Create `src/json-beautifier.ts` — core types, `BeautifierConfig`, `beautifyJsonLine()` with `charCodeAt(0) === 0x7B` fast path, `isJsonModeAgent()`, `hasJsonAdapter()`, adapter registry
+- [x] **T2**: Implement `claudeCodeAdapter` — all event types from completion.ts (most complete version), including `auto_retry_start` (new capability)
+- [x] **T3**: Implement `cursorAgentAdapter` — migrate from `completion.ts:extractCursorAgentStreamDisplayLines`
+- [x] **T4**: Implement `codexAdapter` — parse codex JSONL events
+- [x] **T5**: Implement `geminiAdapter` — parse gemini stream-json events (only fires when user adds `--output-format stream-json` to extra_agent_flags)
+- [x] **T6**: Implement `genericAdapter` — fallback for unknown JSON (extract type + message/error)
+- [x] **T7**: Implement `extractJsonCompletionText()` and `hasJsonAdapter()` — shared parse logic for completion detection
+- [x] **T8**: Add `json_display` and `output_buffer_bytes` to `RalphRuntimeConfig` in `src/types.ts`
+- [x] **T9**: Add `--json-display` and `--output-buffer-bytes` CLI flags + TOML config parsing in `ralph.ts`
+- [x] **T10**: Create `src/stream-accumulator.ts` — `StreamAccumulator` class with rolling tail buffer + incremental error extraction
+- [x] **T11**: Replace `stdoutText += chunk` / `stderrText += chunk` in `streamProcessOutput` with `StreamAccumulator`
+- [x] **T12**: Update `streamProcessOutput` return type — add `errors: string[]`, `totalOutputBytes: number`, keep `stdoutText`/`stderrText` as tail-only
+- [x] **T13**: Replace `extractClaudeStreamDisplayLines()` in `handleLine()` (ralph.ts:2617) with `beautifyJsonLine()`
+- [x] **T14**: Fix `flushPartialLines` guard — replace `!== "claude-code"` with `!isJsonModeAgent(agentType, extraFlags)` (ralph.ts:2719), pipe `extraFlags` into `streamProcessOutput` options
+- [x] **T15**: Wire `BeautifierConfig` + `StreamAccumulator` options through `streamProcessOutput()` options
+- [x] **T16**: Update post-iteration code — use `streamed.errors` instead of `extractErrors(result + stderr)` full scan
+- [x] **T17**: Update `completion.ts:extractAgentCompletionText()` — replace ternary with `hasJsonAdapter()` + `extractJsonCompletionText()` import, non-JSON agents return raw output
+- [x] **T18**: Remove old copies — ralph.ts inline `extractClaudeStreamDisplayLines`, src/display.ts export, completion.ts `extractClaudeStreamDisplayLines` + `extractCursorAgentStreamDisplayLines` + `addNonEmptyTextLines`
+- [x] **T19**: Update `tests/src-display.test.ts` — remove old `extractClaudeStreamDisplayLines` tests
+- [x] **T20**: Write `tests/src-json-beautifier.test.ts` — full test suite (happy path, parse errors, config modes, compactTools interaction, `isJsonModeAgent`, `hasJsonAdapter`, edge cases, non-JSON agent passthrough)
+- [x] **T21**: Write `tests/src-stream-accumulator.test.ts` — rolling buffer trimming, error extraction, boundary conditions
+- [x] **T22**: Run full test suite — verify activity tracker / heartbeat / stalling still pass
 - [ ] **T23**: Manual smoke test with `claude --output-format stream-json`
 
 ---
