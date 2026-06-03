@@ -3387,14 +3387,24 @@ Unable to read ${currentTasksFileLabel()}
 `);
 
       // Auto-select next actionable goal from --goal-dir if --goal not specified
+      // When resuming, prefer the goal stored in existing state to avoid switching goals mid-loop
       if (!goalPath && goalDir) {
-         const inv = buildInventory(goalDir);
-         const next = findNextActionableGoal(inv);
-         if (next) {
-            goalPath = join(goalDir, next.slug, "goal.md");
-            console.log(`📋 Auto-selected goal: ${next.slug} (${next.phase})`);
-         } else {
-            console.warn("Warning: No actionable goals found in " + goalDir);
+         if (resuming && existingState?.goalSlug) {
+            const resumedGoalPath = join(goalDir, existingState.goalSlug, "goal.md");
+            if (existsSync(resumedGoalPath)) {
+               goalPath = resumedGoalPath;
+               console.log(`📋 Resuming goal: ${existingState.goalSlug} (from previous session)`);
+            }
+         }
+         if (!goalPath) {
+            const inv = buildInventory(goalDir);
+            const next = findNextActionableGoal(inv);
+            if (next) {
+               goalPath = join(goalDir, next.slug, "goal.md");
+               console.log(`📋 Auto-selected goal: ${next.slug} (${next.phase})`);
+            } else {
+               console.warn("Warning: No actionable goals found in " + goalDir);
+            }
          }
       }
 
