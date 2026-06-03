@@ -130,3 +130,5 @@ build/
 .fusion
 .pi
 tests/fixtures/goal-parser/
+.codeql-databases/
+package-lock.json
