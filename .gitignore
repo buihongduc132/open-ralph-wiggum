@@ -101,6 +101,7 @@ ralph/
 ralph-history.json
 ralph-loop.state.json
 ralph-opencode.config.json
+.ralph-*.toml
 
 # Ralph workspace cache / memory
 .cachebro/
