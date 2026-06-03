@@ -10,12 +10,13 @@ Current Ralph completion is **self-declared**: the inner loop agent emits `<prom
 
 ## Desired State
 
-1. **Each Ralph run gets a unique hash** (run-hash) — stable across iterations, stored in state file
-2. **Completion requires external approval** — instead of inner self-declaration, the inner agent emits a review request; external CLI agents (pi, claude, codex, etc.) review and vote approve/reject
-3. **CLI for external voters:** `ralph as-review {approve|reject} --hash <run-hash> [--reason "..."]`
-4. **Quorum rule:** X-of-Y approvals required (configurable, default: all voters must approve). Single reject = reset all votes + continue iterating
-5. **Voter configuration hierarchy:** PROJECT > RALPH > GLOBAL > DEFAULT (like existing config layers)
-6. **Voters are CLI agents** — same agents that launch Ralph, but with different instruction prompts telling them how to review
+1. **Each Ralph run gets a unique hash** (run-hash) — stable across iterations, stored in state file. 16 hex chars (64 bits) with random component.
+2. **Completion requires external approval** — inner agent emits `<promise>COMPLETED</promise>` as before; Ralph intercepts at the break point and redirects to review gate instead of stopping.
+3. **External voters are separate CLI agent processes** — same agent types (pi, claude) but spawned as separate processes with review-specific prompts. NOT the same running sessions.
+4. **CLI for external voters:** `ralph as-review {approve|reject} --hash <run-hash> [--reason "..."]`
+5. **Quorum rule:** X-of-Y approvals required (configurable, default: all voters must approve). Single reject = reset all votes + continue iterating.
+6. **Rejection feedback loop** — rejection reasons appended to `ralph-context.md` so the inner agent learns what to fix.
+7. **Ralph IS the loop controller** — it dispatches separate CLI agent processes as external voters. The "external runner" from the user's words refers to these voter processes.
 
 ## Scope
 
@@ -23,7 +24,7 @@ Current Ralph completion is **self-declared**: the inner loop agent emits `<prom
 - New CLI subcommand: `ralph as-review`
 - New config section in TOML: `[review]`
 - State file changes: new fields for run-hash, review votes
-- No changes to agent builders or rotation logic
+- No changes to inner agent behavior (still emits COMPLETED)
 
 ## Out of Scope
 
@@ -31,12 +32,19 @@ Current Ralph completion is **self-declared**: the inner loop agent emits `<prom
 - Remote/network-based voters
 - Partial approval (e.g., "approve with changes")
 - Review of individual iterations (only final completion review)
+- Multi-level prompt hierarchy
+- Parallel voter dispatch
 
 ## Dependencies
 
 - Existing Ralph state management
-- Existing completion promise detection
-- CLI agent spawning infrastructure (already in `agent-builders.ts`)
+- Existing completion promise detection (`checkTerminalPromise`)
+- CLI agent spawning infrastructure
+
+## Pre-requisites (Blocking)
+
+1. **Unify dual RalphState interface copies** — `ralph.ts` and `src/loop-helpers.ts` have identical but duplicated interfaces. Unify before adding fields.
+2. **Fix `saveState` to atomic write** — current `writeFileSync` is NOT atomic. Must use temp file + rename.
 
 ## Risks
 
@@ -44,5 +52,10 @@ Current Ralph completion is **self-declared**: the inner loop agent emits `<prom
 |------|------------|
 | Voter agents crash or hang | Timeout per voter + fallback to "reject" |
 | All voters reject forever | Max reject counter → force stop with warning |
-| State file corruption during concurrent votes | Atomic file writes (already used) |
-| Backward compat break for existing loops | Review gate is opt-in via config; default = legacy behavior |
+| State file corruption | Fix `saveState` to atomic temp file + rename (PREREQ) |
+| Backward compat break | Review gate is opt-in via config; default = legacy |
+| Rejection reason not reaching inner agent | Single mechanism: append to `ralph-context.md` |
+| Sequential voter latency (3×10m = 30min/cycle) | Acceptable for completion gate |
+| Ctrl+C during review | Graceful shutdown preserves vote state |
+| Voter output false positives | Strict `<promise>` tag parsing |
+| Dual RalphState copies diverging | Unify as PREREQ |
