@@ -758,9 +758,16 @@ export function loadRulesToml(currentStateDir: string): RalphRulesToml | null {
             // Whitespace-only content (no comments, no keys) — treat as missing
             if (raw.trim().length === 0) return null;
             const parsed = Bun.TOML.parse(raw) as Record<string, unknown>;
-            return parsed as unknown as RalphRulesToml;
-         } catch {
-            // Corrupt file — treat as not found
+            const toml = parsed as unknown as RalphRulesToml;
+            // Runtime schema validation — warn but don't reject
+            const schemaWarnings = validateRulesToml(toml);
+            for (const w of schemaWarnings) {
+               console.warn(`⚠️ Ralph: schema warning in ${path}: ${w}`);
+            }
+            return toml;
+         } catch (err) {
+            // Corrupt file — warn and treat as not found
+            console.warn(`⚠️ Ralph: corrupt TOML file ${path}: ${err instanceof Error ? err.message : String(err)}`);
             return null;
          }
       }
@@ -790,20 +797,30 @@ export function scaffoldRulesToml(rulesName: string, currentStateDir: string): s
    const tomlDir = dirname(tomlPath);
    if (!existsSync(tomlDir)) mkdirSync(tomlDir, { recursive: true });
 
+   // Read existing file once — used for idempotency check AND separator logic
+   let existingContent = "";
+   if (existsSync(tomlPath)) {
+      existingContent = readFileSync(tomlPath, "utf-8");
+   }
+
    // Idempotency: skip if section already exists as an actual TOML header
    // Use regex to avoid false-positives from comments like "# See [rules.sync] for details"
    // or from section names that are substrings of other sections (e.g., [rules.sync-backward])
-   if (existsSync(tomlPath)) {
-      const existing = readFileSync(tomlPath, "utf-8");
+   if (existingContent) {
       // Match [rules.X] at line start, not inside comments or other sections
-      // \n ensures we match the section header boundary, [^\n\]] ensures exact name match
-      const headerRegex = new RegExp(`(?<=^|\n)\\[rules\\.${rulesName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\](?=\\n|$)`);
-      if (headerRegex.test(existing)) {
+      const headerRegex = new RegExp(`(?<=^|\n)\\[rules\\.${rulesName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\](?=\n|$)`);
+      if (headerRegex.test(existingContent)) {
          return `⚠️ Section [rules.${rulesName}] already exists in ${tomlPath} — not appending duplicate.`;
       }
    }
 
-   const section = `\n[rules.${rulesName}]\nname = "${rulesName}"\nenabled = true\n\n[[rules.${rulesName}.entries]]\nat = 1\nprompt = "PLACEHOLDER: configure rules.${rulesName} entries"\n`;
+   // F5 hardening: only add separator newline if file doesn't already end with one
+   let separator = "\n";
+   if (existingContent.length > 0 && existingContent.endsWith("\n")) {
+      separator = ""; // File already ends with newline
+   }
+
+   const section = `${separator}[rules.${rulesName}]\nname = "${rulesName}"\nenabled = true\n\n[[rules.${rulesName}.entries]]\nat = 1\nprompt = "PLACEHOLDER: configure rules.${rulesName} entries"\n`;
 
    writeFileSync(tomlPath, section, { flag: "a" });
    return `⚠️ SCAFFOLDED [rules.${rulesName}] — PLACEHOLDER detected. Configure your rules in ${tomlPath} before continuing.\n\n[rules.${rulesName}]\nname = "${rulesName}"\nenabled = true\n\n[[rules.${rulesName}.entries]]\nat = 1\nprompt = "PLACEHOLDER: configure rules.${rulesName} entries"`;
@@ -826,6 +843,77 @@ export function findPlaceholderRules(toml: RalphRulesToml | null): string[] {
       }
    }
    return found;
+}
+
+/**
+ * Runtime schema validation for parsed TOML.
+ * Returns an array of warning strings — empty if valid.
+ * Non-throwing: all errors are collected, never raised.
+ */
+export function validateRulesToml(toml: RalphRulesToml | null): string[] {
+   if (!toml) return [];
+   const warnings: string[] = [];
+
+   // Validate rules sections
+   if (toml.rules !== undefined && toml.rules !== null) {
+      if (typeof toml.rules !== "object" || Array.isArray(toml.rules)) {
+         warnings.push("[rules] must be an object, got " + typeof toml.rules);
+         return warnings; // Can't validate further
+      }
+      for (const [key, section] of Object.entries(toml.rules)) {
+         if (!section || typeof section !== "object") {
+            warnings.push(`[rules.${key}] must be an object`);
+            continue;
+         }
+         if (typeof section.name !== "string") {
+            warnings.push(`[rules.${key}].name must be a string`);
+         }
+         if (typeof section.enabled !== "boolean") {
+            warnings.push(`[rules.${key}].enabled must be a boolean`);
+         }
+         if (!Array.isArray(section.entries)) {
+            warnings.push(`[rules.${key}].entries must be an array`);
+         } else {
+            for (let i = 0; i < section.entries.length; i++) {
+               const entry = section.entries[i];
+               if (!entry || typeof entry !== "object") {
+                  warnings.push(`[rules.${key}].entries[${i}] must be an object`);
+                  continue;
+               }
+               if (typeof entry.at !== "number") {
+                  warnings.push(`[rules.${key}].entries[${i}].at must be a number`);
+               } else if (entry.at <= 0) {
+                  warnings.push(`[rules.${key}].entries[${i}].at must be positive, got ${entry.at}`);
+               }
+               if (typeof entry.prompt !== "string") {
+                  warnings.push(`[rules.${key}].entries[${i}].prompt must be a string`);
+               }
+            }
+         }
+      }
+   }
+
+   // Validate state_injection
+   if (toml.state_injection !== undefined && toml.state_injection !== null) {
+      const si = toml.state_injection;
+      if (typeof si.source !== "string") {
+         warnings.push("[state_injection].source must be a string");
+      }
+      if (typeof si.max_next !== "number" || si.max_next < 0) {
+         warnings.push("[state_injection].max_next must be a non-negative number");
+      }
+      if (typeof si.max_prev !== "number" || si.max_prev < 0) {
+         warnings.push("[state_injection].max_prev must be a non-negative number");
+      }
+      if (typeof si.show_status !== "boolean") {
+         warnings.push("[state_injection].show_status must be a boolean");
+      }
+      if (typeof si.reminder !== "string") {
+         warnings.push("[state_injection].reminder must be a string");
+      }
+   }
+
+   return warnings;
 }
 
 /**

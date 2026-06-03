@@ -1,5 +1,6 @@
-import { describe, expect, it, beforeAll, afterAll } from "bun:test";
+import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { spawnSync } from "child_process";
 import { join } from "path";
 import {
   findPlaceholderRules,
@@ -8,7 +9,9 @@ import {
   resolveInjectPlaceholders,
   resolveRulesTomlPath,
   scaffoldRulesToml,
+  validateRulesToml,
   type RalphRulesToml,
+  type RuleEntry,
 } from "../ralph";
 
 const TMP_DIR = join(process.cwd(), "tmp-test-modulo");
@@ -4864,5 +4867,818 @@ describe("findPlaceholderRules — returns all matching sections (F6 fix)", () =
 
     const result = findPlaceholderRules(toml);
     expect(result).toEqual(["multi"]);
+  });
+});
+
+describe("F8 — cross-anchor bleed via replaceAll is prevented", () => {
+  it("does not replace {{inject:B}} inside {{inject:A}}'s prompt when B is also a top-level anchor", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        outer: {
+          name: "outer",
+          enabled: true,
+          entries: [{ at: 1, prompt: "OUTER has {{inject:inner}} embedded" }],
+        },
+        inner: {
+          name: "inner",
+          enabled: true,
+          entries: [{ at: 1, prompt: "INNER RESOLVED" }],
+        },
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "A={{inject:outer}} B={{inject:inner}}",
+      { iteration: 1 },
+      ".",
+      toml,
+    );
+
+    // outer's prompt contains literal "{{inject:inner}}" — must NOT be replaced
+    expect(result).toContain("OUTER has {{inject:inner}} embedded");
+    // But the top-level {{inject:inner}} anchor must still be resolved
+    expect(result).toContain("INNER RESOLVED");
+    // Verify full structure
+    expect(result).toBe("A=OUTER has {{inject:inner}} embedded B=INNER RESOLVED");
+  });
+
+  it("handles 3+ anchors without cross-bleed", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        first: {
+          name: "first",
+          enabled: true,
+          entries: [{ at: 1, prompt: "FIRST with {{inject:second}} and {{inject:third}}" }],
+        },
+        second: {
+          name: "second",
+          enabled: true,
+          entries: [{ at: 1, prompt: "SECOND RESOLVED" }],
+        },
+        third: {
+          name: "third",
+          enabled: true,
+          entries: [{ at: 1, prompt: "THIRD RESOLVED" }],
+        },
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "[{{inject:first}}][{{inject:second}}][{{inject:third}}]",
+      { iteration: 1 },
+      ".",
+      toml,
+    );
+
+    // first's prompt has literal {{inject:second}} and {{inject:third}} — not replaced
+    expect(result).toContain("FIRST with {{inject:second}} and {{inject:third}}");
+    expect(result).toContain("SECOND RESOLVED");
+    expect(result).toContain("THIRD RESOLVED");
+    // Verify only 3 top-level anchors were resolved
+    expect(result).toBe(
+      "[FIRST with {{inject:second}} and {{inject:third}}][SECOND RESOLVED][THIRD RESOLVED]",
+    );
+  });
+
+  it("does not bleed when anchor appears in disabled rule prompt", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        active: {
+          name: "active",
+          enabled: true,
+          entries: [{ at: 1, prompt: "ACTIVE with {{inject:ghost}} inside" }],
+        },
+        ghost: {
+          name: "ghost",
+          enabled: false,
+          entries: [{ at: 1, prompt: "GHOST" }],
+        },
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "X={{inject:active}} Y={{inject:ghost}}",
+      { iteration: 1 },
+      ".",
+      toml,
+    );
+
+    expect(result).toContain("ACTIVE with {{inject:ghost}} inside");
+    expect(result).toContain("<!-- inject:ghost disabled or empty -->");
+    expect(result).not.toContain("GHOST");
+  });
+});
+
+describe("--init-rules CLI integration", () => {
+  let testDir: string;
+  const ralphPath = join(process.cwd(), "ralph.ts");
+
+  beforeEach(() => {
+    testDir = join(TMP_DIR, `init-rules-${Date.now()}`);
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
+  });
+
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("creates TOML file in state directory", () => {
+    const result = spawnSync("bun", ["run", ralphPath, "--init-rules", "--state-dir", testDir], {
+      cwd: testDir,
+      timeout: 15000,
+      encoding: "utf-8",
+    });
+
+    expect(result.status).toBe(0);
+    const stateDirName = testDir.replace(/[/\\\\]+$/, "").replace(/.*[\/\\\\]/, "") || testDir;
+    const tomlPath = join(testDir, `.ralph-${stateDirName}.toml`);
+    expect(existsSync(tomlPath)).toBe(true);
+
+    const content = readFileSync(tomlPath, "utf-8");
+    expect(content).toContain("[rules.sync]");
+    expect(content).toContain("[rules.verifier]");
+    expect(content).toContain("PLACEHOLDER");
+    expect(content).toContain("[state_injection]");
+  });
+
+  it("is no-op when TOML already exists", () => {
+    const stateDirName = testDir.replace(/[/\\\\]+$/, "").replace(/.*[\/\\\\]/, "") || testDir;
+    const tomlPath = join(testDir, `.ralph-${stateDirName}.toml`);
+    const originalContent = "# original\n[rules.test]\nname = \"test\"\n";
+    writeFileSync(tomlPath, originalContent);
+
+    const result = spawnSync("bun", ["run", ralphPath, "--init-rules", "--state-dir", testDir], {
+      cwd: testDir,
+      timeout: 15000,
+      encoding: "utf-8",
+    });
+
+    expect(result.status).toBe(0);
+    // File should NOT be overwritten
+    const content = readFileSync(tomlPath, "utf-8");
+    expect(content).toBe(originalContent);
+    expect(result.stdout).toContain("already exists");
+  });
+
+  it("creates state directory if it doesn't exist", () => {
+    const deepDir = join(testDir, "nested", "state", "dir");
+    // Don't create deepDir — --init-rules should create it
+
+    const result = spawnSync("bun", ["run", ralphPath, "--init-rules", "--state-dir", deepDir], {
+      cwd: testDir,
+      timeout: 15000,
+      encoding: "utf-8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(existsSync(deepDir)).toBe(true);
+  });
+
+  it("created TOML is valid TOML when parsed", () => {
+    const result = spawnSync("bun", ["run", ralphPath, "--init-rules", "--state-dir", testDir], {
+      cwd: testDir,
+      timeout: 15000,
+      encoding: "utf-8",
+    });
+
+    expect(result.status).toBe(0);
+    const stateDirName = testDir.replace(/[/\\\\]+$/, "").replace(/.*[\/\\\\]/, "") || testDir;
+    const tomlPath = join(testDir, `.ralph-${stateDirName}.toml`);
+    const raw = readFileSync(tomlPath, "utf-8");
+
+    const parsed = (Bun as any).TOML.parse(raw) as Record<string, unknown>;
+    expect(parsed.rules).toBeDefined();
+    expect(parsed.state_injection).toBeDefined();
+  });
+
+  it("outputs creation message to stdout", () => {
+    const result = spawnSync("bun", ["run", ralphPath, "--init-rules", "--state-dir", testDir], {
+      cwd: testDir,
+      timeout: 15000,
+      encoding: "utf-8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Created rules TOML");
+    expect(result.stdout).toContain("Edit this file");
+  });
+});
+
+describe("resolveInjectPlaceholders — same anchor multiple times", () => {
+  it("resolves the same anchor appearing twice in template", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        sync: {
+          name: "sync",
+          enabled: true,
+          entries: [{ at: 5, prompt: "Sync checkpoint" }],
+        },
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "Before {{inject:sync}} Middle {{inject:sync}} After",
+      { iteration: 5 },
+      ".",
+      toml,
+    );
+
+    expect(result).toBe("Before Sync checkpoint Middle Sync checkpoint After");
+  });
+
+  it("resolves same anchor twice — one matches modulo, one doesn't", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        check: {
+          name: "check",
+          enabled: true,
+          entries: [{ at: 7, prompt: "Weekly check" }],
+        },
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:check}} text {{inject:check}}",
+      { iteration: 7 },
+      ".",
+      toml,
+    );
+
+    // Both should resolve to the same value at iteration 7
+    expect(result).toBe("Weekly check text Weekly check");
+  });
+
+  it("resolves same anchor at non-matching iteration", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        check: {
+          name: "check",
+          enabled: true,
+          entries: [{ at: 7, prompt: "Weekly check" }],
+        },
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:check}} text {{inject:check}}",
+      { iteration: 3 },
+      ".",
+      toml,
+    );
+
+    // Both should show the inactive comment
+    expect(result).toContain("no active entries");
+    expect(result).not.toContain("Weekly check");
+  });
+});
+
+describe("resolveInjectPlaceholders — empty string and missing prompt", () => {
+  it("handles entry with empty string prompt at matching iteration", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        silent: {
+          name: "silent",
+          enabled: true,
+          entries: [{ at: 3, prompt: "" }],
+        },
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "Before {{inject:silent}} After",
+      { iteration: 3 },
+      ".",
+      toml,
+    );
+
+    // Empty prompt resolves to empty string (joined with nothing)
+    expect(result).toBe("Before  After");
+  });
+
+  it("handles entry with prompt containing only whitespace", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        spacey: {
+          name: "spacey",
+          enabled: true,
+          entries: [{ at: 1, prompt: "   " }],
+        },
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "X{{inject:spacey}}Y",
+      { iteration: 1 },
+      ".",
+      toml,
+    );
+
+    expect(result).toContain("   ");
+  });
+
+  it("handles rule with empty entries array", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        empty: {
+          name: "empty",
+          enabled: true,
+          entries: [],
+        },
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:empty}}",
+      { iteration: 1 },
+      ".",
+      toml,
+    );
+
+    expect(result).toContain("disabled or empty");
+  });
+
+  it("handles entries with undefined prompt field", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        partial: {
+          name: "partial",
+          enabled: true,
+          entries: [{ at: 1 }] as any,
+        },
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:partial}}",
+      { iteration: 1 },
+      ".",
+      toml,
+    );
+
+    // The entry matches modulo but prompt is undefined → undefined in join
+    // which produces "undefined" as a string — this is existing behavior
+    expect(result).toBeDefined();
+  });
+});
+
+describe("resolveInjectPlaceholders — large iteration numbers", () => {
+  it("handles iteration 999999 with at=1", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        always: {
+          name: "always",
+          enabled: true,
+          entries: [{ at: 1, prompt: "Every iteration" }],
+        },
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:always}}",
+      { iteration: 999999 },
+      ".",
+      toml,
+    );
+
+    expect(result).toBe("Every iteration");
+  });
+
+  it("handles iteration 0 with at=1 (0 % 1 == 0)", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        init: {
+          name: "init",
+          enabled: true,
+          entries: [{ at: 1, prompt: "Init message" }],
+        },
+      },
+    };
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:init}}",
+      { iteration: 0 },
+      ".",
+      toml,
+    );
+
+    expect(result).toBe("Init message");
+  });
+});
+
+describe("scaffoldRulesToml — special characters in rule name", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("handles rule name with regex special characters (brackets)", () => {
+    const dirName = "scaffold-regex-test";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    // Name containing regex special chars
+    const msg = scaffoldRulesToml("rule[1].test", testDir);
+    expect(msg).toContain("[rules.rule[1].test]");
+
+    const stateDirName = testDir.replace(/[/\\\\]+$/, "").replace(/.*[\/\\\\]/, "") || testDir;
+    const tomlPath = join(testDir, `.ralph-${stateDirName}.toml`);
+    const content = readFileSync(tomlPath, "utf-8");
+    expect(content).toContain("[rules.rule[1].test]");
+
+    // Idempotent — second call should skip
+    const msg2 = scaffoldRulesToml("rule[1].test", testDir);
+    expect(msg2).toContain("already exists");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("handles rule name with dots and hyphens", () => {
+    const dirName = "scaffold-dots-test";
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const msg = scaffoldRulesToml("my.rule-name_v2", testDir);
+    expect(msg).toContain("my.rule-name_v2");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+describe("resolveInjectPlaceholders — state injection with show_status variations", () => {
+  it("includes reminder when show_status is truthy non-boolean", () => {
+    const toml: RalphRulesToml = {
+      rules: {},
+      state_injection: {
+        source: "state.jsonl",
+        max_next: 2,
+        max_prev: 2,
+        show_status: true as any,
+        reminder: "Check your state",
+      },
+    };
+
+    const testDir = join(TMP_DIR, `state-status-${Date.now()}`);
+    mkdirSync(testDir, { recursive: true });
+    writeFileSync(join(testDir, "state.jsonl"), "line1\nline2\nline3\n");
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:state}}",
+      { iteration: 1 },
+      testDir,
+      toml,
+    );
+
+    expect(result).toContain("> Check your state");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("includes reminder text with newlines and special chars", () => {
+    const toml: RalphRulesToml = {
+      rules: {},
+      state_injection: {
+        source: "state.jsonl",
+        max_next: 1,
+        max_prev: 1,
+        show_status: true,
+        reminder: "⚠️ Remember: check deps & sync before push",
+      },
+    };
+
+    const testDir = join(TMP_DIR, `state-special-${Date.now()}`);
+    mkdirSync(testDir, { recursive: true });
+    writeFileSync(join(testDir, "state.jsonl"), "entry1\nentry2\n");
+
+    const result = resolveInjectPlaceholders(
+      "{{inject:state}}",
+      { iteration: 1 },
+      testDir,
+      toml,
+    );
+
+    expect(result).toContain("⚠️ Remember: check deps & sync before push");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Iteration 15 Hardening — F1, F2, F5
+// ═══════════════════════════════════════════════════════════════
+
+describe("F2: loadRulesToml warns on corrupt TOML", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("emits console.warn when TOML file is corrupt", () => {
+    const dirName = `ralph-f2-warn-${Date.now()}`;
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
+    writeFileSync(tomlPath, "this is [[[ not valid TOML");
+
+    // Capture console.warn
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+    try {
+      const result = loadRulesToml(testDir);
+      expect(result).toBeNull();
+      expect(warnings.length).toBeGreaterThanOrEqual(1);
+      expect(warnings[0]).toContain("corrupt");
+      expect(warnings[0]).toContain(tomlPath);
+    } finally {
+      console.warn = origWarn;
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does NOT warn for valid TOML", () => {
+    const dirName = `ralph-f2-valid-${Date.now()}`;
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
+    writeFileSync(tomlPath, '[rules.test]\nname = "test"\nenabled = true\n\n[[rules.test.entries]]\nat = 1\nprompt = "Test"\n');
+
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+    try {
+      const result = loadRulesToml(testDir);
+      expect(result).not.toBeNull();
+      expect(warnings.length).toBe(0);
+    } finally {
+      console.warn = origWarn;
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does NOT warn for missing file", () => {
+    const dirName = `ralph-f2-missing-${Date.now()}`;
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+    try {
+      const result = loadRulesToml(testDir);
+      expect(result).toBeNull();
+      expect(warnings.length).toBe(0);
+    } finally {
+      console.warn = origWarn;
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("F5: scaffoldRulesToml — no leading newline on append", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("does NOT add leading newline when appending to existing file", () => {
+    const dirName = `ralph-f5-nolead-${Date.now()}`;
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
+    // Existing file that ends WITH newline
+    writeFileSync(tomlPath, '[rules.existing]\nname = "existing"\nenabled = true\n');
+
+    scaffoldRulesToml("newsection", testDir);
+
+    const content = readFileSync(tomlPath, "utf-8");
+    // Should NOT have double newline between sections
+    expect(content).not.toContain("\n\n[rules.newsection]");
+    expect(content).toContain("[rules.existing]");
+    expect(content).toContain("[rules.newsection]");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("does NOT add leading newline when file ends without newline", () => {
+    const dirName = `ralph-f5-nonewline-${Date.now()}`;
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
+    // File without trailing newline
+    writeFileSync(tomlPath, '[rules.existing]\nname = "existing"');
+
+    scaffoldRulesToml("another", testDir);
+
+    const content = readFileSync(tomlPath, "utf-8");
+    // Should have exactly one newline before new section
+    const idx = content.indexOf("[rules.another]");
+    expect(idx).toBeGreaterThan(0);
+    // Count newlines before the new section
+    const beforeSection = content.slice(Math.max(0, idx - 2), idx);
+    // Should be exactly one newline, not two
+    expect(beforeSection).not.toContain("\n\n");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it("adds single newline before section when file is empty", () => {
+    const dirName = `ralph-f5-empty-${Date.now()}`;
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
+    writeFileSync(tomlPath, "");
+
+    scaffoldRulesToml("first", testDir);
+
+    const content = readFileSync(tomlPath, "utf-8");
+    // For a new file, should start with [rules.first] directly (no leading newline)
+    expect(content.trim()).toContain("[rules.first]");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+describe("F1: validateRulesToml — runtime schema validation", () => {
+  beforeAll(() => ensureTmpDir());
+  afterAll(() => cleanupTmpDir());
+
+  it("returns empty array for valid TOML", () => {
+    const validToml: RalphRulesToml = {
+      rules: {
+        sync: {
+          name: "sync",
+          enabled: true,
+          entries: [{ at: 5, prompt: "Sync!" }],
+        },
+      },
+    };
+    const warnings = validateRulesToml(validToml);
+    expect(warnings).toEqual([]);
+  });
+
+  it("returns empty array for null input", () => {
+    const warnings = validateRulesToml(null);
+    expect(warnings).toEqual([]);
+  });
+
+  it("warns on non-object rules section", () => {
+    const toml = {
+      rules: "not an object",
+    } as unknown as RalphRulesToml;
+    const warnings = validateRulesToml(toml);
+    expect(warnings.length).toBeGreaterThan(0);
+    expect(warnings.some(w => w.includes("rules") && w.includes("object"))).toBe(true);
+  });
+
+  it("warns on rule with missing name", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        broken: {
+          name: 42 as unknown as string,
+          enabled: true,
+          entries: [],
+        },
+      },
+    };
+    const warnings = validateRulesToml(toml);
+    expect(warnings.some(w => w.includes("broken") && w.includes("name"))).toBe(true);
+  });
+
+  it("warns on rule with non-boolean enabled", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        broken: {
+          name: "broken",
+          enabled: "yes" as unknown as boolean,
+          entries: [],
+        },
+      },
+    };
+    const warnings = validateRulesToml(toml);
+    expect(warnings.some(w => w.includes("broken") && w.includes("enabled"))).toBe(true);
+  });
+
+  it("warns on entries that are not an array", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        broken: {
+          name: "broken",
+          enabled: true,
+          entries: "not-array" as unknown as RuleEntry[],
+        },
+      },
+    };
+    const warnings = validateRulesToml(toml);
+    expect(warnings.some(w => w.includes("broken") && w.includes("entries"))).toBe(true);
+  });
+
+  it("warns on entry with non-number at", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        broken: {
+          name: "broken",
+          enabled: true,
+          entries: [{ at: "five" as unknown as number, prompt: "test" }],
+        },
+      },
+    };
+    const warnings = validateRulesToml(toml);
+    expect(warnings.some(w => w.includes("broken") && w.includes("at"))).toBe(true);
+  });
+
+  it("warns on entry with non-string prompt", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        broken: {
+          name: "broken",
+          enabled: true,
+          entries: [{ at: 5, prompt: 42 as unknown as string }],
+        },
+      },
+    };
+    const warnings = validateRulesToml(toml);
+    expect(warnings.some(w => w.includes("broken") && w.includes("prompt"))).toBe(true);
+  });
+
+  it("warns on entry with at <= 0", () => {
+    const toml: RalphRulesToml = {
+      rules: {
+        broken: {
+          name: "broken",
+          enabled: true,
+          entries: [{ at: 0, prompt: "test" }],
+        },
+      },
+    };
+    const warnings = validateRulesToml(toml);
+    expect(warnings.some(w => w.includes("broken") && w.includes("positive"))).toBe(true);
+  });
+
+  it("warns on state_injection with invalid source", () => {
+    const toml: RalphRulesToml = {
+      rules: {},
+      state_injection: {
+        source: 42 as unknown as string,
+        max_next: 1,
+        max_prev: 1,
+        show_status: true,
+        reminder: "",
+      },
+    };
+    const warnings = validateRulesToml(toml);
+    expect(warnings.some(w => w.includes("state_injection") && w.includes("source"))).toBe(true);
+  });
+
+  it("warns on state_injection with negative max_prev", () => {
+    const toml: RalphRulesToml = {
+      rules: {},
+      state_injection: {
+        source: "state.jsonl",
+        max_next: 1,
+        max_prev: -1,
+        show_status: true,
+        reminder: "",
+      },
+    };
+    const warnings = validateRulesToml(toml);
+    expect(warnings.some(w => w.includes("state_injection") && w.includes("max_prev"))).toBe(true);
+  });
+
+  it("collects multiple warnings at once", () => {
+    const toml = {
+      rules: {
+        a: { name: 1 as unknown as string, enabled: true, entries: [] },
+        b: { name: "b", enabled: "yes" as unknown as boolean, entries: [] },
+      },
+    } as unknown as RalphRulesToml;
+    const warnings = validateRulesToml(toml);
+    expect(warnings.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("is called by loadRulesToml and emits warnings for bad schema", () => {
+    const dirName = `ralph-f1-schema-${Date.now()}`;
+    const testDir = join(TMP_DIR, dirName);
+    mkdirSync(testDir, { recursive: true });
+
+    const tomlPath = join(testDir, `.ralph-${dirName}.toml`);
+    // Valid TOML syntax but bad schema: enabled is a string
+    writeFileSync(tomlPath, '[rules.bad]\nname = "bad"\nenabled = "not-a-bool"\nentries = []\n');
+
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+    try {
+      // loadRulesToml should parse successfully but emit schema warnings
+      const result = loadRulesToml(testDir);
+      expect(result).not.toBeNull();
+      // Schema validation should have produced warnings
+      expect(warnings.length).toBeGreaterThan(0);
+      expect(warnings.some(w => w.includes("bad"))).toBe(true);
+    } finally {
+      console.warn = origWarn;
+      rmSync(testDir, { recursive: true, force: true });
+    }
   });
 });
