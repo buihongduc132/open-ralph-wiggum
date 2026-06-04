@@ -219,7 +219,7 @@ function claudeResult(p, cfg) {
   const result = typeof p.result === "string" ? p.result : "";
   if (cfg.showCost) {
     const durationMs = typeof p.duration_ms === "number" ? p.duration_ms : 0;
-    const costUsd = typeof p.cost_usd === "number" ? p.cost_usd : 0;
+    const costUsd = typeof p.total_cost_usd === "number" ? p.total_cost_usd : typeof p.cost_usd === "number" ? p.cost_usd : 0;
     const seconds = (durationMs / 1000).toFixed(1);
     const costStr = costUsd < 0.01 ? `$${costUsd.toFixed(4)}` : `$${costUsd.toFixed(2)}`;
     const lines = [];
@@ -254,7 +254,7 @@ function claudeRetry(p, cfg) {
   let lastError = rawError;
   if (lastError.length > 40)
     lastError = lastError.slice(0, 40) + "...";
-  const delayStr = delayMs < 60000 ? `${Math.round(delayMs / 1000)}s` : `${Math.round(delayMs / 60000)}m`;
+  const delayStr = delayMs < 60000 ? `${Math.round(delayMs / 1000)}s` : delayMs < 3600000 ? `${Math.round(delayMs / 60000)}m` : `${Math.round(delayMs / 3600000)}h`;
   const parts = [`\uD83D\uDD04 Retry ${attempt}/${maxAttempts} in ${delayStr}`];
   if (lastError)
     parts.push(`(${lastError})`);
@@ -398,6 +398,13 @@ function geminiAdapter(p, cfg) {
       msg = msg.slice(0, cfg.maxErrorLength) + "...";
     return [ANSI.red(`\u274C ${msg}`)];
   }
+  const t = typeof p.type === "string" ? p.type : "";
+  if (t === "result" || t === "complete") {
+    const output = typeof p.result === "string" ? p.result : typeof p.output === "string" ? p.output : "";
+    if (output.trim())
+      return [ANSI.green(`\u2705 ${output.trim()}`)];
+    return [];
+  }
   if (typeof p.content === "string" && p.content.trim()) {
     return [p.content.trim()];
   }
@@ -504,6 +511,30 @@ function textExtract(p, agentType) {
       addText(p.content);
   }
   return lines;
+}
+function extractJsonCompletionText(rawLine, agentType) {
+  const firstChar = rawLine.charCodeAt(0);
+  let line = rawLine;
+  if (firstChar === 123) {} else if (firstChar === 27) {
+    const stripped = stripAnsi(rawLine).trim();
+    if (stripped.charCodeAt(0) === 123) {
+      line = stripped;
+    } else {
+      return [rawLine];
+    }
+  } else {
+    return [rawLine];
+  }
+  let payload;
+  try {
+    payload = JSON.parse(line);
+  } catch {
+    return [rawLine];
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return [rawLine];
+  }
+  return textExtract(payload, agentType);
 }
 
 // completion.ts
@@ -3082,7 +3113,8 @@ Your answer: `, (answer) => {
       if (!isError && promisePattern) {
         completionPromiseSeen = outputLines.some((outputLine) => promisePattern.test(outputLine.trim()));
         if (!completionPromiseSeen && isJsonModeAgent(options.agent.type, options.extraFlags)) {
-          completionPromiseSeen = promisePattern.test(line.trim());
+          const extracted = extractJsonCompletionText(line, options.agent.type);
+          completionPromiseSeen = extracted.some((el) => promisePattern.test(el.trim()));
         }
       }
       if (tool) {
