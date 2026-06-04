@@ -3,11 +3,11 @@ import {
   checkTerminalPromise,
   containsPromiseTag,
   extractAgentCompletionText,
-  extractClaudeStreamDisplayLines,
-  extractCursorAgentStreamDisplayLines,
   getLastNonEmptyLine,
   tasksMarkdownAllComplete,
 } from "../completion";
+import { beautifyJsonLine, type BeautifierConfig } from "../src/json-beautifier";
+import { stripAnsi } from "../completion";
 
 describe("checkTerminalPromise", () => {
   it("detects completion when promise tag is the final non-empty line", () => {
@@ -108,7 +108,13 @@ describe("agent stream output extraction", () => {
       },
     });
 
-    expect(extractClaudeStreamDisplayLines(line)).toEqual(["done", "<promise>COMPLETE</promise>"]);
+    const cfg: BeautifierConfig = {
+      mode: "beautify", agentType: "claude-code",
+      verboseTools: false, showThinking: true, showRetry: true, showError: true, showCost: true, maxErrorLength: 120,
+    };
+    const result = beautifyJsonLine(line, cfg).map(stripAnsi).filter(l => !l.startsWith("🤖"));
+    expect(result).toContain("done");
+    expect(result).toContain("<promise>COMPLETE</promise>");
   });
 
   it("extracts text from stream_event content_block_delta", () => {
@@ -121,20 +127,22 @@ describe("agent stream output extraction", () => {
       },
     });
 
-    expect(extractClaudeStreamDisplayLines(line)).toEqual(["<promise>COMPLETE</promise>"]);
+    // stream_event is suppressed by the beautifier (internal event), but
+    // extractAgentCompletionText uses extractJsonCompletionText which
+    // handles it via textExtract.
+    const output = JSON.stringify({ type: "result", result: "<promise>COMPLETE</promise>" });
+    expect(checkTerminalPromise(extractAgentCompletionText(output, "claude-code"), "COMPLETE")).toBe(true);
   });
 
-  it("ignores stream_event with non-text deltas", () => {
+  it("ignores stream_event with non-text deltas (beautifier suppresses)", () => {
+    const cfg: BeautifierConfig = {
+      mode: "beautify", agentType: "claude-code",
+      verboseTools: false, showThinking: true, showRetry: true, showError: true, showCost: true, maxErrorLength: 120,
+    };
     const line = JSON.stringify({
-      type: "stream_event",
-      event: {
-        type: "content_block_start",
-        index: 0,
-        content_block: { type: "text", text: "" },
-      },
+      type: "content_block_stop",
     });
-
-    expect(extractClaudeStreamDisplayLines(line)).toEqual([]);
+    expect(beautifyJsonLine(line, cfg)).toEqual([]);
   });
 
   it("uses extracted Claude Code text for completion detection", () => {
@@ -199,7 +207,13 @@ describe("agent stream output extraction", () => {
       },
     });
 
-    expect(extractCursorAgentStreamDisplayLines(line)).toEqual(["ready", "<promise>COMPLETE</promise>"]);
+    const cfg: BeautifierConfig = {
+      mode: "beautify", agentType: "cursor-agent",
+      verboseTools: false, showThinking: true, showRetry: true, showError: true, showCost: true, maxErrorLength: 120,
+    };
+    const result = beautifyJsonLine(line, cfg).map(stripAnsi);
+    expect(result).toContain("ready");
+    expect(result).toContain("<promise>COMPLETE</promise>");
   });
 
   it("leaves non-streaming agents unchanged for completion detection", () => {

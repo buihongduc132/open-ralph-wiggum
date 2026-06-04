@@ -2,7 +2,8 @@
 
 Iteration {{iteration}}
 
-You are working in `/home/bhd/Documents/Projects/bhd/open-ralph-wiggum`.
+You are working in `/home/bhd/Documents/Projects/bhd/open-ralph-wiggum-wt-json-beautifier`.
+Branch: `feat/json-output-beautifier`
 
 ## Goal
 
