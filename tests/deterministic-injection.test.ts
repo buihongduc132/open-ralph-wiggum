@@ -7795,3 +7795,27 @@ describe("loadRulesToml — whitespace-only file (no TOML content)", () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 });
+
+describe("F10: validateRulesToml — no per-character noise when rules is malformed", () => {
+  it("returns only the top-level warning when rules is a string (no per-character noise)", () => {
+    const toml = {
+      rules: "hello",
+    } as unknown as RalphRulesToml;
+    const warnings = validateRulesToml(toml);
+    // Should have exactly 1 warning — the top-level "[rules] must be an object"
+    // NOT 6 additional per-character warnings like [rules.h] must be an object
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("[rules] must be an object");
+  });
+
+  it("returns only the top-level warning when rules is an array (no per-element noise)", () => {
+    const toml = {
+      rules: ["a", "b", "c"],
+    } as unknown as RalphRulesToml;
+    const warnings = validateRulesToml(toml);
+    // Should have exactly 1 warning — the top-level "[rules] must be an object"
+    // NOT 3 additional per-element warnings
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("[rules] must be an object");
+  });
+});
