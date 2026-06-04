@@ -31,13 +31,16 @@
 - **I63**: Backward audit — all phases pass, 0 new findings
 - **I66**: I%11 Mutation+CodeQL — 0 HIGH/CRITICAL, 1 LOW (escapeRegex accepted), 2 INFO
 
-## Iteration 2 (current)
+## Iteration 3 (current)
 
-- External review (claude -p) found `buildInventory` using raw `JSON.parse` instead of `loadGoalState()`
-- Fixed: now uses validated `loadGoalState()` for consistent error handling
-- Added 2 new tests for malformed state file handling
-- Total tests: 1150 pass, 0 fail, 27 skip (1177 across 45 files)
+- External review (claude -p) found 3 medium issues + 4 low issues
+- **Fix 1**: Missing `basename` import in ralph.ts — caused `--goal-status` crash
+- **Fix 2**: `--goal-status` now falls back to TOML config when no CLI flag provided
+- **Doc**: Documented cascade behavior in `syncGoalStateAfterIteration` (planning→done fast-forward)
+- **False positive**: Reviewer claimed `extractSection` regex fails on last-section-before-EOF — verified working correctly with multi-paragraph content
+- Added 3 subprocess tests for goal mode CLI behavior
+- Total tests: 1153 pass, 0 fail, 27 skip (1180 across 45 files)
 
-## Commits on Branch: 30
+## Commits on Branch: 31
 
 All work committed to `feat/goal-inventory-state`.
