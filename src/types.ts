@@ -78,6 +78,7 @@ export interface ReviewConfig {
    quorum: string;          // "X/Y" format
    voterTimeout: string;    // Duration string ("10m")
    maxRejectCycles: number; // Max consecutive rejections before force-stop
+   batchSize: number;       // Voters dispatched in parallel batches (default: 3)
    reviewPromptFile: string; // Optional: path to custom review prompt file
    voters: ReviewVoter[];
 }
@@ -103,6 +104,7 @@ export interface ReviewGateState {
    quorum: string;
    quorumRequired: number;
    quorumTotal: number;
+   batchSize: number;
    phase: ReviewGatePhase;
    rejectCycleCount: number;
    lastRejectionReasons: string[];

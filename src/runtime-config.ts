@@ -126,6 +126,7 @@ export function parseReviewConfig(parsed: Record<string, unknown>): ReviewConfig
 
    const voterTimeout = (normalizeRuntimeConfigValue("review.voter_timeout", review.voter_timeout, "string") as string | undefined) || "10m";
    const maxRejectCycles = (normalizeRuntimeConfigValue("review.max_reject_cycles", review.max_reject_cycles, "number") as number | undefined) ?? 5;
+   const batchSize = (normalizeRuntimeConfigValue("review.batch_size", review.batch_size, "number") as number | undefined) ?? 3;
    const reviewPromptFile = (normalizeRuntimeConfigValue("review.review_prompt_file", review.review_prompt_file, "string") as string | undefined) || "";
 
    // Parse voters from [[review.voter]] array
@@ -159,6 +160,7 @@ export function parseReviewConfig(parsed: Record<string, unknown>): ReviewConfig
       quorum,
       voterTimeout,
       maxRejectCycles,
+      batchSize,
       reviewPromptFile,
       voters,
    };

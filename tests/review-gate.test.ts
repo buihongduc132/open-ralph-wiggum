@@ -309,6 +309,7 @@ const TEST_CONFIG: ReviewConfig = {
    quorum: "3/3",
    voterTimeout: "10m",
    maxRejectCycles: 5,
+   batchSize: 3,
    reviewPromptFile: "",
    voters: [
       { agent: "pi", model: "test-model-1" },
@@ -444,6 +445,7 @@ describe("Phase 2 — Review Gate Logic", () => {
          quorum: "3/3",
          voterTimeout: "10m",
          maxRejectCycles: 5,
+         batchSize: 3,
          reviewPromptFile: "",
          voters: [
             { agent: "pi", model: "test-1" },
@@ -778,6 +780,7 @@ describe("dispatchVoters integration", () => {
          quorum: "1/1",
          voterTimeout: "30s",
          maxRejectCycles: 3,
+         batchSize: 3,
          reviewPromptFile: "",
          voters: [{ agent: "echo", model: "", promptFlag: "-e" }],
       };
@@ -791,6 +794,7 @@ describe("dispatchVoters integration", () => {
          quorum: "1/1",
          voterTimeout: "30s",
          maxRejectCycles: 3,
+         batchSize: 3,
          reviewPromptFile: "",
          voters: [{ agent: "printf", model: "", promptFlag: "<promise>APPROVE</promise>" }],
       };
@@ -807,6 +811,7 @@ describe("dispatchVoters integration", () => {
          quorum: "1/1",
          voterTimeout: "30s",
          maxRejectCycles: 3,
+         batchSize: 3,
          reviewPromptFile: "",
          voters: [{ agent: approveScript, model: "" }],
       };
@@ -845,6 +850,7 @@ describe("dispatchVoters integration", () => {
          quorum: "1/1",
          voterTimeout: "30s",
          maxRejectCycles: 3,
+         batchSize: 3,
          reviewPromptFile: "",
          voters: [{ agent: rejectScript, model: "" }],
       };
@@ -885,6 +891,7 @@ describe("dispatchVoters integration", () => {
          quorum: "1/1",
          voterTimeout: "1s",
          maxRejectCycles: 3,
+         batchSize: 3,
          reviewPromptFile: "",
          voters: [{ agent: sleepScript, model: "" }],
       };

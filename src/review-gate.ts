@@ -125,6 +125,7 @@ export function createReviewGateState(config: ReviewConfig): ReviewGateState {
       quorum: config.quorum,
       quorumRequired: quorum.required,
       quorumTotal: quorum.total,
+      batchSize: config.batchSize,
       phase: "disabled",
       rejectCycleCount: 0,
       lastRejectionReasons: [],
@@ -241,7 +242,9 @@ export interface VoterDispatchResult {
 }
 
 /**
- * Dispatch voters sequentially and check quorum after each vote.
+ * Dispatch voters in parallel batches and check quorum after each batch.
+ * Batch size is configurable (default: 3). If ANY voter in a batch rejects,
+ * stop immediately — no more batches dispatched.
  * Returns the updated review gate state and whether quorum was met.
  */
 export async function dispatchVoters(params: {
@@ -271,27 +274,19 @@ export async function dispatchVoters(params: {
    });
 
    const timeoutMs = parseVoterTimeout(config.voterTimeout);
+   const batchSize = config.batchSize;
    let currentState = { ...state, phase: "waiting_review" as ReviewGatePhase };
 
-   // Dispatch voters sequentially
-   for (let i = 0; i < config.voters.length; i++) {
-      const voter = config.voters[i];
-      const voterKey = `voter-${i}`;
-
-      console.log(`📋 Dispatching voter ${i + 1}/${config.voters.length}: ${voter.agent} (${voter.model})`);
-
+   /** Spawn a single voter and return its vote result. */
+   async function runVoter(voter: ReviewVoter, voterIndex: number): Promise<{ key: string; vote: ReviewVote }> {
+      const voterKey = `voter-${voterIndex}`;
       let voterOutput = "";
-      let voterError = "";
       let timedOut = false;
 
       try {
-         // Build spawn args — support agent-specific flags
-         // pi/claude use -p, codex uses -q, opencode uses -p
-         // If voter has argsTemplate, use it; otherwise default to -p
          const promptFlag = voter.promptFlag || "-p";
          const spawnArgs = [voter.agent, promptFlag, reviewPrompt];
 
-         // Only add --model if voter specifies one (not empty/default)
          if (voter.model && voter.model !== "default" && voter.model !== "") {
             spawnArgs.push("--model", voter.model);
          }
@@ -313,12 +308,10 @@ export async function dispatchVoters(params: {
          });
 
          const exitPromise = proc.exited.then(() => {});
-
          await Promise.race([exitPromise, timeoutPromise]);
          if (timerId !== undefined) clearTimeout(timerId);
 
          voterOutput = timedOut ? "" : await new Response(proc.stdout).text();
-         voterError = timedOut ? "" : await new Response(proc.stderr).text();
       } catch (err) {
          console.warn(`⚠️ Voter ${voterKey} failed: ${err}`);
          voterOutput = "";
@@ -327,37 +320,60 @@ export async function dispatchVoters(params: {
       // Parse voter output
       const now = new Date().toISOString();
       if (timedOut) {
-         // Voter timed out → auto-reject
          console.warn(`⚠️ Voter ${voterKey} timed out after ${config.voterTimeout}`);
-         currentState.votes[voterKey] = { status: "timeout", at: now, reason: "voter timeout" };
-      } else {
-         const isApprove = checkTerminalPromise(voterOutput, "APPROVE");
-         const isReject = checkTerminalPromise(voterOutput, "REJECT");
+         return { key: voterKey, vote: { status: "timeout", at: now, reason: "voter timeout" } };
+      }
 
-         if (isApprove) {
-            currentState.votes[voterKey] = { status: "approved", at: now, reason: "" };
-            console.log(`✅ Voter ${voterKey} approved`);
-         } else if (isReject) {
-            // Extract reason from output — capture multi-line (up to 500 chars)
-            const reasonMatch = voterOutput.match(/REASON:\s*([\s\S]{1,500}?)(?=\n<promise>|$)/i);
-            const reason = reasonMatch ? reasonMatch[1].trim() : "No reason provided";
-            currentState.votes[voterKey] = { status: "rejected", at: now, reason };
-            console.log(`❌ Voter ${voterKey} rejected: ${reason}`);
+      const isApprove = checkTerminalPromise(voterOutput, "APPROVE");
+      const isReject = checkTerminalPromise(voterOutput, "REJECT");
+
+      if (isApprove) {
+         return { key: voterKey, vote: { status: "approved", at: now, reason: "" } };
+      } else if (isReject) {
+         const reasonMatch = voterOutput.match(/REASON:\s*([\s\S]{1,500}?)(?=\n<promise>|$)/i);
+         const reason = reasonMatch ? reasonMatch[1].trim() : "No reason provided";
+         return { key: voterKey, vote: { status: "rejected", at: now, reason } };
+      } else {
+         console.warn(`⚠️ Voter ${voterKey} output unrecognized (no <promise> tag found)`);
+         return { key: voterKey, vote: { status: "rejected", at: now, reason: "voter output unrecognized" } };
+      }
+   }
+
+   // Dispatch voters in batches
+   for (let batchStart = 0; batchStart < config.voters.length; batchStart += batchSize) {
+      const batchEnd = Math.min(batchStart + batchSize, config.voters.length);
+      const batchIndices = [];
+      for (let i = batchStart; i < batchEnd; i++) batchIndices.push(i);
+
+      const batchLabel = batchIndices.length === 1
+         ? `Dispatching voter ${batchStart + 1}/${config.voters.length}`
+         : `Dispatching batch ${Math.floor(batchStart / batchSize) + 1}: voters ${batchStart + 1}-${batchEnd}/${config.voters.length}`;
+      console.log(`📋 ${batchLabel}`);
+
+      // Spawn all voters in this batch in parallel
+      const batchPromises = batchIndices.map(i => runVoter(config.voters[i], i));
+      const batchResults = await Promise.all(batchPromises);
+
+      // Process results
+      for (const { key, vote } of batchResults) {
+         currentState.votes[key] = vote;
+         if (vote.status === "approved") {
+            console.log(`✅ ${key} approved`);
+         } else if (vote.status === "rejected") {
+            console.log(`❌ ${key} rejected: ${vote.reason}`);
          } else {
-            // No parseable promise tag → auto-reject
-            console.warn(`⚠️ Voter ${voterKey} output unrecognized (no <promise> tag found)`);
-            currentState.votes[voterKey] = { status: "rejected", at: now, reason: "voter output unrecognized" };
+            console.log(`⏱️ ${key} timed out`);
          }
       }
 
-      // Save state after each vote
+      // Save state after each batch
       saveStateFn(currentState);
 
-      // Check quorum after each vote
+      // Check quorum after each batch
       const result = checkQuorum(currentState);
 
       if (result.anyRejected) {
-         // Any rejection → reset all votes and continue loop
+         // Any rejection in this batch → reset all votes and continue loop
          console.log(`\n❌ Review rejected. Resetting votes for retry.`);
          const allReasons = result.rejectionReasons;
          currentState = resetVotes(currentState, allReasons);
@@ -378,9 +394,7 @@ export async function dispatchVoters(params: {
       }
    }
 
-   // All voters dispatched but quorum not met yet (some pending)
-   // This shouldn't happen in sequential dispatch since we check after each,
-   // but handle it defensively
+   // All voters dispatched but quorum not met yet (shouldn't happen with correct quorum config)
    return { state: currentState, approved: false };
 }
 
