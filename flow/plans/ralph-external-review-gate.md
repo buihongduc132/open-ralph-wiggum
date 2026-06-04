@@ -33,12 +33,12 @@ The user's words distinguish two roles:
 
 | # | User Requirement | Plan Section | Implementation |
 |---|-----------------|--------------|----------------|
-| R1 | "each ralph will have it specific id / hash" | §2 | run-hash: SHA-256(cwd + stateDir + pid + timestamp + randomBytes(8)) → 16 hex chars |
+| R1 | "each ralph will have it specific id / hash" | §2 | run-hash: 8 random hex chars + runCwd for cross-contamination guard |
 | R2 | "there is ANOTHER / external runner (outside for the ralph)" | §4.3 | Ralph dispatches separate CLI agent processes as voters (not itself) |
 | R3 | "instead of the INNER saying COMPLETED, INNER will ask OUTER for REVIEW" | §4.2 | Inner agent still emits `<promise>COMPLETED</promise>` (unchanged). Ralph intercepts at the break point and redirects to review gate. The "ask for review" IS the COMPLETED signal — Ralph treats it as a review request rather than a final declaration. |
 | R4 | "they will CONFIRM the completion" | §6.2, §4.3 | Voters cast APPROVE/REJECT votes. Quorum of APPROVEs = confirmed completion. |
 
-**No inner agent changes.** The inner agent's behavior is unchanged — it emits `<promise>COMPLETED</promise>` as before. Ralph intercepts this at the break point and redirects to the review gate. This avoids tight coupling between inner agent and review system.
+**No inner agent changes.** The inner agent's behavior is completely unchanged — it emits `<promise>COMPLETED</promise>` as before. It has NO knowledge of the review gate, the voter system, or the `[review]` config. The review prompt and voter instructions are **invisible to the inner agent**. Ralph intercepts the COMPLETED promise at its own break point and redirects to voter dispatch. The inner agent never knows its completion was "second-guessed" — from its perspective, it declared completion and the loop eventually stopped (just with extra iterations if voters rejected).
 
 ---
 
@@ -46,7 +46,8 @@ The user's words distinguish two roles:
 
 | Term | Definition |
 |------|-----------|
-| **run-hash** | Unique identifier for a Ralph loop run. Generated at loop start from `(cwd, stateDir, pid, timestamp, randomBytes(8))` → SHA-256 first 16 hex chars. Stable across iterations. 64 bits — negligible birthday collision. |
+| **run-hash** | 8 random hex characters generated at loop start. Simple, short, unique per run. Used to validate that `as-review` CLI votes target the correct Ralph instance. |
+| **runCwd** | The working directory captured at loop start. Stored alongside `runHash` to prevent cross-directory contamination (§2.2). |
 | **review gate** | The phase after inner-agent `COMPLETED` promise detection where Ralph redirects to voter dispatch instead of breaking the loop |
 | **voter** | A CLI agent configured to review and approve/reject a Ralph run. Runs as a separate process. |
 | **quorum** | Required approval count: `X-of-Y` (e.g., `3/3` = all 3 voters must approve) |
@@ -56,32 +57,56 @@ The user's words distinguish two roles:
 
 ---
 
-## §2. Run Hash
+## §2. Run Hash + Run CWD
 
-### §2.1 Generation
+### §2.1 Hash Generation
 
 ```typescript
-import { randomBytes, createHash } from "crypto";
+import { randomBytes } from "crypto";
 
-// 16 hex chars = 64 bits. Birthday collision at 10M runs: ~2.7×10⁻⁶ (negligible)
-// randomBytes(8) = 64 bits of entropy — dominates over PID/timestamp
-const raw = `${cwd}:${stateDir}:${process.pid}:${Date.now()}:${randomBytes(8).toString("hex")}`;
-const hash = createHash("sha256").update(raw).digest("hex").slice(0, 16);
+// 8 random hex chars = 32 bits of entropy.
+// Simple. Short enough to type in CLI. Unique enough per machine.
+// Collision risk: ~65K possible values. Only 1-2 simultaneous Ralphs per machine in practice.
+const runHash = randomBytes(4).toString("hex");  // e.g. "a1b2c3d4"
 ```
 
-### §2.2 Storage
+Why simple random, not SHA-256 of inputs:
+- No need for deterministic derivation — the hash just needs to be unique per run
+- 8 chars is short enough to pass in CLI without copy-paste fatigue
+- If collision ever happens in practice, bump to `randomBytes(6)` (12 hex chars)
+
+### §2.2 Run CWD (Cross-Contamination Guard)
+
+At loop start, the current working directory is captured:
+
+```typescript
+const runCwd = process.cwd();
+```
+
+**Purpose:** Prevents a vote intended for Ralph-A from accidentally being recorded against Ralph-B's state. The `as-review` CLI validates BOTH hash AND cwd:
+
+```typescript
+// as-review validation
+const state = loadState(statePath);
+if (state.runHash !== providedHash) throw new Error("Hash mismatch");
+if (state.runCwd !== process.cwd()) throw new Error("CWD mismatch — run from the same directory as the Ralph loop");
+```
+
+This closes the edge case where someone copies a state file from `/project-a/.ralph/` to `/project-b/.ralph/` and votes against the wrong Ralph.
+
+### §2.3 Storage
 
 Stored in `ralph-loop.state.json`:
 ```json
-{ "active": true, "runHash": "a1b2c3d4e5f67890", "iteration": 42 }
+{ "active": true, "runHash": "a1b2c3d4", "runCwd": "/home/bhd/project-a", "iteration": 42 }
 ```
 
-### §2.3 CLI Usage
+### §2.4 CLI Usage
 
 ```bash
-ralph as-review approve --hash a1b2c3d4e5f67890
-ralph as-review reject --hash a1b2c3d4e5f67890 --reason "Tests failing on line 42"
-ralph as-review status --hash a1b2c3d4e5f67890
+ralph as-review approve --hash a1b2c3d4
+ralph as-review reject --hash a1b2c3d4 --reason "Tests failing on line 42"
+ralph as-review status --hash a1b2c3d4
 ```
 
 ---
@@ -264,7 +289,8 @@ ONE mechanism: Ralph calls `saveState()` with the vote recorded in `state.review
 
 - New entry point branch in `ralph.ts` main arg parsing (before loop start)
 - Reads state file from CWD's `.ralph/` dir (or `--state-dir`)
-- Validates hash matches `state.runHash` (mismatch = error)
+- Validates hash matches `state.runHash` AND cwd matches `state.runCwd` (mismatch = error)
+- CWD validation prevents cross-directory contamination (copying state file to wrong project)
 - Writes vote to state file via same atomic `saveState()` function
 - Returns JSON output
 - If `state.active = true` but no process with `state.pid` exists → warn but allow vote
@@ -287,7 +313,8 @@ The `as-review` CLI is for:
 ```jsonc
 {
   // ... existing fields ...
-  "runHash": "a1b2c3d4e5f67890",
+  "runHash": "a1b2c3d4",
+  "runCwd": "/home/bhd/project-a",
   "reviewGate": {
     "enabled": true,
     "quorum": "3/3",
@@ -336,6 +363,38 @@ Fix the above before claiming completion again.
 
 These are NOT dual injection paths for the same data. They serve different purposes for different consumers.
 
+### §6.4 State Evolution (Old State Files)
+
+When loading a state file that lacks `runHash`, `runCwd`, or `reviewGate` fields (pre-review-gate state files):
+
+```typescript
+export function loadState(statePath: string): RalphState | null {
+    if (!existsSync(statePath)) return null;
+    try {
+        const raw = JSON.parse(readFileSync(statePath, "utf-8"));
+        return {
+            ...raw,
+            runHash: raw.runHash ?? "",
+            runCwd: raw.runCwd ?? "",
+            reviewGate: raw.reviewGate ?? {
+                enabled: false,
+                phase: "disabled",
+                quorum: "",
+                quorumRequired: 0,
+                quorumTotal: 0,
+                rejectCycleCount: 0,
+                lastRejectionReasons: [],
+                votes: {},
+            },
+        };
+    } catch {
+        return null;
+    }
+}
+```
+
+This is part of the §8 prerequisites — `loadState` is modified alongside `saveState`.
+
 ---
 
 ## §7. Pre-requisite: RalphState Interface Unification
@@ -352,7 +411,7 @@ Both are currently identical (verified: both have `blacklistedAgents`, `stallRet
 1. Make `src/loop-helpers.ts` the single source of truth for `RalphState`
 2. Import in `ralph.ts`: `import { RalphState } from "./src/loop-helpers"`
 3. Remove local interface definition from `ralph.ts`
-4. Add `runHash` and `reviewGate` to the unified interface
+4. Add `runHash`, `runCwd`, and `reviewGate` to the unified interface
 
 ---
 
@@ -389,7 +448,8 @@ renameSync(tmpPath, statePath);
 | G7 | **Rejection reason not injected** | CRITICAL | Single mechanism: append to `ralph-context.md` (§6.3). No dual paths. |
 | G8 | **Ctrl+C during review** | HIGH | Graceful shutdown sets `phase = "interrupted"`, preserves vote state. |
 | G9 | **Auto-commit + rejection** | MEDIUM | Auto-committed work stays in git. Agent can rewrite. Document. |
-| G10 | **run-hash collision** | LOW | 64 bits + randomBytes(8). Negligible. |
+| G10 | **run-hash collision** | LOW | 8 hex chars (32 bits). Only 1-2 simultaneous Ralphs per machine in practice. If collision becomes real, bump to 12 chars. |
+| G22 | **Cross-directory vote contamination** | HIGH | `as-review` validates BOTH `runHash` AND `runCwd`. State file copy to different directory = rejected. See §2.2. |
 | G11 | **Voter output parsing ambiguity** | HIGH | Strict `<promise>` tag via `checkTerminalPromise`. No tag → auto-reject. |
 | G12 | **Struggle detection during review** | MEDIUM | Review wait NOT counted toward stalling. |
 | G13 | **`as-review` when loop is dead** | MEDIUM | Warn but allow vote. PID check is informational. |
@@ -430,7 +490,7 @@ renameSync(tmpPath, statePath);
 
 | # | Test Case | Input | Expected |
 |---|-----------|-------|----------|
-| T1 | Generate run-hash | `{cwd, stateDir, pid, ts, random}` | 16-char hex, unique |
+| T1 | Generate run-hash | `randomBytes(4)` | 8-char hex, unique |
 | T2 | Quorum met: 3/3 approve | 3 approve votes | `phase = "approved"` |
 | T3 | Quorum not met: 2/3 | 2 approve, 1 pending | `phase = "waiting_review"` |
 | T4 | Single reject resets all | 2 approve + 1 reject | All votes reset, reasons collected |
@@ -461,6 +521,7 @@ renameSync(tmpPath, statePath);
 | I2 | Reject via CLI | `ralph as-review reject --hash X --reason "Y"` | State updated, reason stored |
 | I3 | Status via CLI | `ralph as-review status --hash X` | JSON with vote breakdown |
 | I4 | Invalid hash | `ralph as-review approve --hash BAD` | Exit 1 |
+| I7 | CWD mismatch | State file copied to different dir, vote attempted | Exit 1, "CWD mismatch" |
 | I5 | Missing state dir | Wrong CWD | Exit 1 |
 | I6 | Dead loop vote | PID not running | Warning, vote recorded |
 
@@ -486,10 +547,11 @@ renameSync(tmpPath, statePath);
 
 - [ ] RalphState unified (single source in `src/loop-helpers.ts`, imported in `ralph.ts`)
 - [ ] `saveState` uses atomic write (temp file + rename)
-- [ ] Run-hash is 16 hex chars (64 bits) with randomBytes(8)
+- [ ] Run-hash is 8 random hex chars (simple, short for CLI)
+- [ ] Run CWD captured at loop start, validated in `as-review` (cross-contamination guard)
 - [ ] Legacy behavior preserved when `[review]` absent (inner agent unchanged)
 - [ ] Review gate intercepts at existing break point — does NOT break when review enabled
-- [ ] Inner agent NOT modified — still emits `<promise>COMPLETED</promise>`
+- [ ] Inner agent has ZERO knowledge of review gate — its prompt is never modified, it still emits `<promise>COMPLETED</promise>`
 - [ ] `as-review` CLI works from any CWD with `--state-dir`
 - [ ] Vote reset clears ALL votes + collects rejection reasons
 - [ ] Rejection feedback: single mechanism via `ralph-context.md` (inner agent only)
@@ -502,6 +564,7 @@ renameSync(tmpPath, statePath);
 - [ ] TOML `[review]` parsing in `src/runtime-config.ts`
 - [ ] CLI args in `src/parse-args.ts`
 - [ ] `review_prompt_file` custom override: file not found → warning + built-in
+- [ ] `as-review` CLI validates BOTH hash AND cwd (prevents cross-directory contamination)
 - [ ] Invalid quorum config validated at load time
 - [ ] tasksMode: review fires only on final completion
 - [ ] abortPromise: no review, immediate stop

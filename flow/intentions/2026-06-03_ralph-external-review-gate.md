@@ -10,8 +10,8 @@ Current Ralph completion is **self-declared**: the inner loop agent emits `<prom
 
 ## Desired State
 
-1. **Each Ralph run gets a unique hash** (run-hash) — stable across iterations, stored in state file. 16 hex chars (64 bits) with random component.
-2. **Completion requires external approval** — inner agent emits `<promise>COMPLETED</promise>` as before; Ralph intercepts at the break point and redirects to review gate instead of stopping.
+1. **Each Ralph run gets a unique hash** (run-hash) — stable across iterations, stored in state file. 8 random hex chars (simple, short for CLI). Plus `runCwd` guard to prevent cross-directory contamination.
+2. **Completion requires external approval** — inner agent emits `<promise>COMPLETED</promise>` as before; Ralph intercepts at the break point and redirects to review gate instead of stopping. The inner agent has ZERO knowledge of the review system — its prompt is never modified.
 3. **External voters are separate CLI agent processes** — same agent types (pi, claude) but spawned as separate processes with review-specific prompts. NOT the same running sessions.
 4. **CLI for external voters:** `ralph as-review {approve|reject} --hash <run-hash> [--reason "..."]`
 5. **Quorum rule:** X-of-Y approvals required (configurable, default: all voters must approve). Single reject = reset all votes + continue iterating.
