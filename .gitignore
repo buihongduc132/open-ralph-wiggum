@@ -132,3 +132,4 @@ build/
 tests/fixtures/goal-parser/
 .codeql-databases/
 package-lock.json
+goals/

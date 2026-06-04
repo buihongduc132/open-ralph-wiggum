@@ -916,7 +916,23 @@ Learn more: https://ghuntley.com/ralph/
    // Goal mode early-exit handlers
    if (args.includes("--list-goals")) {
       const nextArg = args[args.indexOf("--list-goals") + 1];
-      const dir = nextArg && !nextArg.startsWith("--") ? nextArg : join(process.cwd(), "goals");
+      let dir = nextArg && !nextArg.startsWith("--") ? nextArg : "";
+      // Fallback: check --goal-dir CLI flag, then TOML config
+      if (!dir) {
+         const goalDirIdx = args.indexOf("--goal-dir");
+         if (goalDirIdx !== -1 && args[goalDirIdx + 1] && !args[goalDirIdx + 1].startsWith("--")) {
+            dir = args[goalDirIdx + 1];
+         }
+      }
+      if (!dir) {
+         const tomlCfg = loadRuntimeTomlConfig(tomlConfigPath, explicitTomlConfigPath);
+         if (tomlCfg?.goal_dir) {
+            dir = tomlCfg.goal_dir;
+         }
+      }
+      if (!dir) {
+         dir = join(process.cwd(), "goals");
+      }
       const inv = buildInventory(dir);
       console.log(formatGoalInventory(inv.goals));
       process.exit(0);
