@@ -61,6 +61,8 @@ export interface RalphRuntimeConfig {
    extra_agent_flags?: string[];
    stall_retries?: boolean;
    stall_retry_minutes?: number;
+   json_display?: "beautify" | "raw" | "text";
+   output_buffer_bytes?: number;
 }
 
 // ── Review Gate Types ────────────────────────────────────────────────────────

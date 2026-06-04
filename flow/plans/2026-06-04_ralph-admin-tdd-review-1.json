@@ -1,0 +1,252 @@
+{
+  "suites": [
+    {
+      "name": "Config (Task 3)",
+      "file": "tests/config.test.ts",
+      "test_count": 3,
+      "sufficient": false,
+      "missing_cases": [
+        "Empty string name — should it throw or produce degenerate paths like 'ralph-' / '.ralph-/'?",
+        "Name with underscores vs hyphens — does 'my_feature' become '.ralph-my_feature' or '.ralph-my-feature'? Convention is hyphens but not validated",
+        "Multiple _GOAL files in worktree — readdirSync finds first match; no test verifies which one wins or that only one is returned",
+        "Nonexistent worktree path — goalFile should resolve to null; tested implicitly but not asserted in 'resolves convention' test",
+        "Partial overrides — e.g., only stateDir provided but worktree uses convention; only all-or-nothing override tested",
+        "inventoryFile and rulesFile path correctness — test checks stateFile but not inventoryFile/rulesFile"
+      ],
+      "weak_assertions": [
+        "resolves convention: expect(config.stateFile).toContain('.ralph-my-feature/ralph-loop.state.json') — uses toContain not toBe/toEqual; could match a longer string incorrectly",
+        "derives worktree: expect(config.worktreePath).toContain('pi-plugins-wt-acp-alias') — toContain is a substring match, not exact path assertion"
+      ],
+      "error_paths_missing": [
+        "No test for null/undefined projectRoot",
+        "No test for relative vs absolute path handling in overrides"
+      ]
+    },
+    {
+      "name": "StateReader (Task 4)",
+      "file": "tests/state-reader.test.ts",
+      "test_count": 4,
+      "sufficient": false,
+      "missing_cases": [
+        "State with all optional fields absent (no noProgress, no pid, no reviewGate, no completionPromise) — only the 'healthy' fixture which has pid and noProgress=0 is tested",
+        "State with reviewGate populated — the schema defines it but no fixture or test covers it",
+        "Empty JSON file '{}' — valid JSON but missing required fields like active, iteration, model; what does StateReader do? Returns the partial object with undefined fields",
+        "State with unknown/extra fields (forward compatibility) — should still parse successfully",
+        "elapsedHours with invalid startedAt string (e.g., 'not-a-date') — implementation catches but no test verifies",
+        "elapsedHours with future startedAt — should return negative value but test only checks > 0",
+        "File permission denied (unreadable file) — implementation will throw, not return null"
+      ],
+      "weak_assertions": [
+        "reads healthy state: checks iteration=39, model, active but NOT minIterations, maxIterations, pid=523645, startedAt value, noProgress=0",
+        "computes elapsed hours: only toBeGreaterThan(0) — no upper bound, no verification of actual computation. Test is time-dependent (depends on when it runs relative to fixture date 2026-06-04)"
+      ],
+      "error_paths_missing": [
+        "No test for empty file (0 bytes) — JSON.parse('') throws, caught by try/catch → null. But not verified",
+        "No test for file that is a directory path",
+        "No test for EACCES permission error — implementation uses readFileSync which throws, not caught in the catch block (catch only handles JSON.parse errors because existsSync passes)"
+      ]
+    },
+    {
+      "name": "InventoryReader (Task 4)",
+      "file": "tests/inventory-reader.test.ts",
+      "test_count": 5,
+      "sufficient": false,
+      "missing_cases": [
+        "formatProgress() method — has implementation but ZERO tests cover it",
+        "Empty inventory with phases: {} — completionPercentage would return 0 but not tested",
+        "Malformed JSON inventory — StateReader has this test but InventoryReader does not",
+        "Inventory with unknown task status (not pending/in_progress/tested/fully_works) — countByStatus would have NaN in counts",
+        "Inventory where all tasks are pending (0% completion) — edge case for completionPercentage",
+        "Single-phase single-task inventory",
+        "Inventory with phases that have empty tasks: {}"
+      ],
+      "weak_assertions": [
+        "reads complete inventory: only checks P0-T1.status; doesn't verify P0-T2, P1-T1, P1-T2, or gate values",
+        "computes partial progress: comment says 'P0: 1/1 done, P1: 1/3 done = 2/4 = 50%' but doesn't verify the intermediate counts"
+      ],
+      "error_paths_missing": [
+        "Malformed JSON returns null — tested for StateReader but NOT for InventoryReader despite identical pattern"
+      ]
+    },
+    {
+      "name": "RulesReader (Task 4)",
+      "file": "tests/rules-reader.test.ts",
+      "test_count": 2,
+      "sufficient": false,
+      "missing_cases": [
+        "Malformed TOML — returns null? Not tested",
+        "Empty TOML file — parses to {} but doesn't match RulesToml interface",
+        "TOML with rules but empty entries array",
+        "TOML with state_injection section — schema defines it but no fixture/test",
+        "Multiple rules (not just modulo) — schema supports Record<string, ModuloRule>",
+        "Disabled rule (enabled: false) — no fixture has this",
+        "Verification of entries[1].at=7, entries[2].at=11, entries[3].at=15 and their prompt content — only entries[0] checked"
+      ],
+      "weak_assertions": [
+        "reads default rules: only checks entries.length=4 and entries[0].at=5. Doesn't verify entries[1-3], enabled=true, name='modulo', or prompt content"
+      ],
+      "error_paths_missing": [
+        "Malformed TOML returns null — not tested",
+        "Permission denied on TOML file — not tested"
+      ]
+    },
+    {
+      "name": "Pm2Client (Task 5)",
+      "file": "tests/pm2-client.test.ts",
+      "test_count": 2,
+      "sufficient": false,
+      "missing_cases": [
+        "findByName with short name (without 'ralph-' prefix) — code supports both `p.name === name || p.name === 'ralph-' + name` but only full-name matching is tested",
+        "findByName with non-existent name returns null — not tested",
+        "stop() — not tested at all",
+        "restart() — not tested at all",
+        "delete() — not tested at all",
+        "start() — not tested at all (most critical method!)",
+        "PM2 daemon not running — connect() rejects, how does the CLI handle it?",
+        "Connection lifecycle: connect → disconnect → connect again works",
+        "listAll() filtering correctness — only listRalph() tested, not listAll()"
+      ],
+      "weak_assertions": [
+        "findByName: wrapped in `if (procs.length > 0)` — test passes vacuously when no ralph processes exist. Should have an else clause that skips or uses mock data",
+        "list returns array: `expect(Array.isArray(procs)).toBe(true)` — only checks it's an array, doesn't verify RalphProcess structure fields"
+      ],
+      "error_paths_missing": [
+        "No error path tests at all — PM2 connect failure, stop non-existent process, start with invalid opts",
+        "Tests depend on live PM2 daemon — no mocking, will fail in CI without PM2 running",
+        "No cleanup (start a test process then delete it)"
+      ],
+      "critical_note": "Only 2 tests for the most infrastructure-critical class. stop/restart/delete/start have zero test coverage. This is the highest-risk test gap."
+    },
+    {
+      "name": "Formatter (Task 6)",
+      "file": "tests/formatter.test.ts",
+      "test_count": 2,
+      "sufficient": false,
+      "missing_cases": [
+        "Empty rows array → formatListTable should produce header-only output",
+        "Multiple rows — only single-row tested",
+        "Long name exceeding 24-char column width — truncation behavior not verified",
+        "formatStatus for 'errored', 'launching', or unknown status — only 'online' implicitly tested",
+        "pad() function edge cases: string exactly len chars, string longer than len (truncation!)",
+        "Doctor output with empty crash-looping array — section should be omitted",
+        "Doctor output with stuck category — missing from DoctorResult type in formatter test! Doctor class outputs stuck[] but formatDoctorOutput's DoctorResult doesn't include it",
+        "Doctor output with ALL empty categories — only healthy shown",
+        "formatDoctorOutput with only healthy processes"
+      ],
+      "weak_assertions": [
+        "formats process list: uses toContain which is substring match — doesn't verify column alignment, padding, or that values appear in correct columns. Could match 'online' in the wrong column",
+        "categorizes anomalies: uses toContain for category labels — doesn't verify exact formatting, indentation, or process details within categories"
+      ],
+      "error_paths_missing": [
+        "No negative tests",
+        "formatListTable with rows containing special characters (ANSI, unicode) in name/model fields"
+      ],
+      "type_mismatch": "DoctorResult interface in formatter.ts has { crashLooping, completedButRunning, healthy } but Doctor.DoctorOutput has { crashLooping, completedButRunning, stuck, stopped, healthy }. The stuck and stopped categories are missing from formatDoctorOutput — these will never be rendered."
+    },
+    {
+      "name": "GoalFileManager (Task 7)",
+      "file": "tests/goal-reader.test.ts",
+      "test_count": 4,
+      "sufficient": false,
+      "missing_cases": [
+        "Multiple _GOAL files in directory — which one is selected? No test for this ambiguity",
+        "_GOAL file without '# _GOAL' title line — implementation falls back to unshift (prepend), not tested",
+        "Empty _GOAL file (0 bytes) — injectHeader reads empty content, no '## Working Directory' found, no '# _GOAL' line found, falls to unshift. Not tested",
+        "injectHeader when no goal file found — returns { injected: false, skipped: false, goalFile: '' } but this path is untested",
+        "Header contains correct branch and stateDir values — test checks worktreePath appears but not branch or stateDir",
+        "Double-injection: inject → verify injected=true, then inject again → verify skipped=true (full round-trip idempotency)",
+        "Original content preservation: verify exact content before and after injection (minus the added header)"
+      ],
+      "weak_assertions": [
+        "injects header: checks content.contains('## Working Directory') and content.contains('/tmp/wt-test') but doesn't verify the header appears AFTER the '# _GOAL_test' line, doesn't check branch='wt/test' appears, doesn't check stateDir appears",
+        "idempotent: checks result.skipped=true but doesn't verify file content is UNCHANGED (could have been rewritten identically)"
+      ],
+      "error_paths_missing": [
+        "Read-only file — writeFileSync will throw, not handled",
+        "Directory that doesn't exist for worktreePath — findGoalFile returns null but not tested explicitly",
+        "Concurrent write during injection — no test"
+      ]
+    },
+    {
+      "name": "Doctor (Task 8)",
+      "file": "tests/doctor.test.ts",
+      "test_count": 4,
+      "sufficient": false,
+      "missing_cases": [
+        "Boundary values: restarts=99 → healthy (NOT crash-looping); restarts=100 → crash-looping. Threshold is >=100 but only 1328 tested",
+        "Boundary values: noProgress=9 → healthy; noProgress=10 → stuck. Threshold is >=10 but only 5907 tested",
+        "Boundary values: progressPct=99 → not completed-running; progressPct=100 + status='stopped' → should be stopped (not completed-running since stopped is checked first). Not verified",
+        "Status 'errored' — not 'stopped' and not 'online', falls through to crash-looping check then completed-running then stuck then healthy. A high-restart errored process would be crash-looping, but a low-restart errored process would be 'healthy' which is wrong",
+        "Empty input array → all output arrays should be empty",
+        "Multiple inputs across multiple categories — only single-input-per-test",
+        "progressPct=-1 (no inventory available) — should not trigger completed-but-running since -1 < 100",
+        "Crash-looping AND completed-but-running simultaneously: restarts=200, progressPct=100. Crash-looping wins due to if-else order but this isn't tested"
+      ],
+      "weak_assertions": [
+        "detects crash-looping: checks crashLooping.length=1 and healthy.length=0 but doesn't verify stopped/completedButRunning/stuck are also empty",
+        "classifies healthy: only checks healthy.length=1 but doesn't assert it's NOT in crashLooping, stuck, etc.",
+        "All tests use single-element arrays — no multi-element classification test"
+      ],
+      "error_paths_missing": [
+        "No test for negative restarts/iteration/noProgress values",
+        "No test for progressPct > 100 (shouldn't happen but not guarded)",
+        "Priority order of classification is critical but untested: stopped > crash-looping > completed-running > stuck > healthy. A single comprehensive test covering the priority chain would catch regressions"
+      ]
+    },
+    {
+      "name": "ScaffoldBuilder (Task 9)",
+      "file": "tests/scaffold.test.ts",
+      "test_count": 4,
+      "sufficient": false,
+      "missing_cases": [
+        "{{NAME}} placeholder replacement in rules.toml — the template has {{NAME}} but test only checks 'at = 5/7/11/15', doesn't verify the replacement happened correctly",
+        "inventory.json can be parsed by InventoryReader (round-trip) — structural validation",
+        "Scaffold on existing dir with some files present (e.g., rules.toml exists but inventory.json doesn't) — should create only missing files",
+        "Return value correctness: result.created[] lists exactly the files created, result.skipped[] lists exactly the files that existed",
+        "Deeply nested state dir path (e.g., /a/b/c/d/.ralph-test) — mkdirSync recursive",
+        "inventory.json lastUpdated is a valid ISO-8601 date that is approximately now",
+        "inventory.json currentPhase is empty string (verified) and phases is empty object (only checks 'defined')"
+      ],
+      "weak_assertions": [
+        "creates state dir: checks existsSync but not result.created.includes(stateDir)",
+        "rules.toml has entries: checks string content 'at = 5' etc. but not that the TOML is valid/parseable by RulesReader",
+        "inventory.json valid: only checks phases and lastUpdated are defined, not that they are correct types ({}/string)"
+      ],
+      "error_paths_missing": [
+        "Permission denied on parent directory — mkdirSync will throw",
+        "Read-only existing directory — writeFileSync will throw",
+        "Path traversal in name parameter — not sanitized"
+      ]
+    }
+  ],
+  "overall_sufficient": false,
+  "summary": {
+    "total_test_suites": 8,
+    "total_test_cases_in_plan": 26,
+    "suites_with_gaps": 8,
+    "suites_sufficient": 0,
+    "most_critical_gaps": [
+      "Pm2Client: Only 2 tests for the most infra-critical class. stop/restart/delete/start have ZERO coverage. Tests depend on live PM2 (no mocking) — will fail in CI.",
+      "RulesReader: Only 2 tests. Malformed TOML, empty file, missing entries, state_injection — all untested.",
+      "Formatter: DoctorResult type MISMATCH with Doctor.DoctorOutput — stuck and stopped categories exist in Doctor but are missing from formatDoctorOutput. This is a bug, not just a test gap.",
+      "Doctor: No boundary-value tests for thresholds (99 vs 100 restarts, 9 vs 10 noProgress). Classification priority order untested.",
+      "InventoryReader: formatProgress() has implementation but ZERO tests.",
+      "StateReader: File permission error (EACCES) will throw uncaught — existsSync passes but readFileSync throws for unreadable files."
+    ],
+    "cross_cutting_issues": [
+      "No test suite uses mocking/stubbing — all I/O tests hit real filesystem or real PM2. CI will be fragile.",
+      "Error path coverage is near-zero across all suites. Only 'file not found' is consistently tested.",
+      "No integration tests that exercise reader → doctor → formatter pipeline end-to-end.",
+      "Task 10 (CLI wiring) and Task 11 (build) have NO automated tests — only manual smoke tests."
+    ],
+    "recommended_additions": [
+      "Add boundary-value tests to Doctor for ALL 4 thresholds (restarts: 99/100, noProgress: 9/10, progressPct: 99/100, status: stopped/online/errored)",
+      "Fix Formatter.DoctorResult to include stuck and stopped categories — this is a type contract bug",
+      "Add Pm2Client mock wrapper for CI — at minimum test findByName, start, stop with mocked pm2 API",
+      "Add malformed-input tests to ALL readers (InventoryReader and RulesReader are missing this)",
+      "Add formatProgress() test to InventoryReader",
+      "Add double-injection round-trip test to GoalFileManager (inject → verify injected, inject again → verify skipped)",
+      "Add test for {{NAME}} replacement in ScaffoldBuilder rules.toml output"
+    ]
+  }
+}

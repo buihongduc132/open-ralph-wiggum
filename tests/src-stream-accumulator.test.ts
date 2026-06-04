@@ -34,14 +34,14 @@ describe("StreamAccumulator — basic append & tail", () => {
 
    it("returns appended content as tail", () => {
       const acc = new StreamAccumulator();
-      acc.append("hello", false);
+      acc.append("hello");
       expect(acc.tail).toBe("hello");
    });
 
    it("concatenates multiple appends", () => {
       const acc = new StreamAccumulator();
-      acc.append("hello ", false);
-      acc.append("world", false);
+      acc.append("hello ");
+      acc.append("world");
       expect(acc.tail).toBe("hello world");
    });
 });
@@ -56,7 +56,7 @@ describe("StreamAccumulator — tail trimming", () => {
       const acc = new StreamAccumulator({ tailMaxBytes: threshold });
 
       // Append 250 bytes total — exceeds 2 * 100 = 200, should trim to last 100
-      acc.append(byteString(250), false);
+      acc.append(byteString(250));
 
       expect(acc.tail.length).toBe(threshold);
       // Should be the LAST 100 chars
@@ -68,7 +68,7 @@ describe("StreamAccumulator — tail trimming", () => {
       const acc = new StreamAccumulator({ tailMaxBytes: threshold });
 
       // 150 bytes — under 2 * 100 = 200, no trim
-      acc.append(byteString(150), false);
+      acc.append(byteString(150));
 
       expect(acc.tail.length).toBe(150);
    });
@@ -77,8 +77,8 @@ describe("StreamAccumulator — tail trimming", () => {
       const threshold = 50;
       const acc = new StreamAccumulator({ tailMaxBytes: threshold });
 
-      acc.append(byteString(60, "A"), false);
-      acc.append(byteString(60, "B"), false);
+      acc.append(byteString(60, "A"));
+      acc.append(byteString(60, "B"));
       // Total = 120, exceeds 2*50=100 → trim to last 50
       expect(acc.tail.length).toBe(threshold);
       // Last 50 chars should all be "B"
@@ -89,7 +89,7 @@ describe("StreamAccumulator — tail trimming", () => {
       const threshold = 100;
       const acc = new StreamAccumulator({ tailMaxBytes: threshold });
 
-      acc.append(byteString(200), false); // exactly 2x → trim to threshold
+      acc.append(byteString(200)); // exactly 2x → trim to threshold
       expect(acc.tail.length).toBe(threshold);
    });
 
@@ -99,7 +99,7 @@ describe("StreamAccumulator — tail trimming", () => {
 
       // 10MB single chunk
       const big = byteString(10 * 1024 * 1024);
-      acc.append(big, false);
+      acc.append(big);
 
       expect(acc.tail.length).toBe(threshold);
       expect(acc.totalBytes).toBe(10 * 1024 * 1024);
@@ -109,7 +109,7 @@ describe("StreamAccumulator — tail trimming", () => {
       const acc = new StreamAccumulator();
       // Append just under 4MB (2x of 2MB default = 4MB) — no trim
       const underLimit = byteString(4 * 1024 * 1024 - 1);
-      acc.append(underLimit, false);
+      acc.append(underLimit);
       expect(acc.tail.length).toBe(4 * 1024 * 1024 - 1);
    });
 });
@@ -124,7 +124,7 @@ describe("StreamAccumulator — small chunks, no trim", () => {
       const acc = new StreamAccumulator({ tailMaxBytes: threshold });
 
       for (let i = 0; i < 100; i++) {
-         acc.append(`line ${i}\n`, false);
+         acc.append(`line ${i}\n`);
       }
 
       // 100 * ~7 bytes = ~700 bytes, well under threshold
@@ -141,79 +141,79 @@ describe("StreamAccumulator — small chunks, no trim", () => {
 describe("StreamAccumulator — error pattern matching", () => {
    it("detects 'error:' pattern", () => {
       const acc = new StreamAccumulator();
-      acc.append("Something went error: bad things\n", false);
+      acc.append("Something went error: bad things\n");
       expect(acc.errors).toHaveLength(1);
       expect(acc.errors[0]).toContain("error: bad things");
    });
 
    it("detects 'failed:' pattern", () => {
       const acc = new StreamAccumulator();
-      acc.append("Build failed: missing deps\n", false);
+      acc.append("Build failed: missing deps\n");
       expect(acc.errors).toHaveLength(1);
       expect(acc.errors[0]).toContain("failed: missing deps");
    });
 
    it("detects 'exception:' pattern", () => {
       const acc = new StreamAccumulator();
-      acc.append("Caught exception: timeout\n", false);
+      acc.append("Caught exception: timeout\n");
       expect(acc.errors).toHaveLength(1);
       expect(acc.errors[0]).toContain("exception: timeout");
    });
 
    it("detects 'typeerror' pattern (case-insensitive)", () => {
       const acc = new StreamAccumulator();
-      acc.append("TypeError: Cannot read properties\n", false);
+      acc.append("TypeError: Cannot read properties\n");
       expect(acc.errors).toHaveLength(1);
    });
 
    it("detects 'syntaxerror' pattern", () => {
       const acc = new StreamAccumulator();
-      acc.append("SyntaxError: unexpected token\n", false);
+      acc.append("SyntaxError: unexpected token\n");
       expect(acc.errors).toHaveLength(1);
    });
 
    it("detects 'referenceerror' pattern", () => {
       const acc = new StreamAccumulator();
-      acc.append("ReferenceError: x is not defined\n", false);
+      acc.append("ReferenceError: x is not defined\n");
       expect(acc.errors).toHaveLength(1);
    });
 
    it("detects 'test' + 'fail' combined pattern", () => {
       const acc = new StreamAccumulator();
-      acc.append("Test suite FAIL: 3 tests failed\n", false);
+      acc.append("Test suite FAIL: 3 tests failed\n");
       expect(acc.errors).toHaveLength(1);
       expect(acc.errors[0]).toContain("Test suite FAIL");
    });
 
    it("does NOT match 'error' without colon", () => {
       const acc = new StreamAccumulator();
-      acc.append("this is just an error message without colon\n", false);
+      acc.append("this is just an error message without colon\n");
       expect(acc.errors).toHaveLength(0);
    });
 
    it("does NOT match 'test' alone without 'fail'", () => {
       const acc = new StreamAccumulator();
-      acc.append("test case passed\n", false);
+      acc.append("test case passed\n");
       expect(acc.errors).toHaveLength(0);
    });
 
    it("case-insensitive matching", () => {
       const acc = new StreamAccumulator();
-      acc.append("ERROR: something\n", false);
-      acc.append("Failed: something\n", false);
-      acc.append("EXCEPTION: something\n", false);
+      acc.append("ERROR: something\n");
+      acc.append("Failed: something\n");
+      acc.append("EXCEPTION: something\n");
       expect(acc.errors).toHaveLength(3);
    });
 
    it("matches errors even when isError=true flag is set", () => {
       const acc = new StreamAccumulator();
-      acc.append("error: from stderr\n", true);
+      acc.append("error: from stderr\n");
       expect(acc.errors).toHaveLength(1);
    });
 
    it("matches errors when isError=false (stdout)", () => {
       const acc = new StreamAccumulator();
-      acc.append("error: from stdout\n", false);
+      acc.append("error: from stdout\n");
       expect(acc.errors).toHaveLength(1);
    });
 });
@@ -225,16 +225,16 @@ describe("StreamAccumulator — error pattern matching", () => {
 describe("StreamAccumulator — error deduplication", () => {
    it("does not add duplicate error lines", () => {
       const acc = new StreamAccumulator();
-      acc.append("error: same thing\n", false);
-      acc.append("error: same thing\n", false);
-      acc.append("error: same thing\n", false);
+      acc.append("error: same thing\n");
+      acc.append("error: same thing\n");
+      acc.append("error: same thing\n");
       expect(acc.errors).toHaveLength(1);
    });
 
    it("adds different error lines", () => {
       const acc = new StreamAccumulator();
-      acc.append("error: first\n", false);
-      acc.append("error: second\n", false);
+      acc.append("error: first\n");
+      acc.append("error: second\n");
       expect(acc.errors).toHaveLength(2);
    });
 });
@@ -248,7 +248,7 @@ describe("StreamAccumulator — error cap at 10", () => {
       const acc = new StreamAccumulator();
 
       for (let i = 0; i < 20; i++) {
-         acc.append(`error: unique error number ${i}\n`, false);
+         acc.append(`error: unique error number ${i}\n`);
       }
 
       expect(acc.errors).toHaveLength(10);
@@ -258,7 +258,7 @@ describe("StreamAccumulator — error cap at 10", () => {
       const acc = new StreamAccumulator();
 
       for (let i = 0; i < 20; i++) {
-         acc.append(`error: unique error number ${i}\n`, false);
+         acc.append(`error: unique error number ${i}\n`);
       }
 
       // Should keep the first 10 (0–9)
@@ -275,7 +275,7 @@ describe("StreamAccumulator — error line truncation", () => {
    it("truncates error lines to 200 characters", () => {
       const acc = new StreamAccumulator();
       const longError = "error: " + "x".repeat(300);
-      acc.append(longError, false);
+      acc.append(longError);
 
       expect(acc.errors).toHaveLength(1);
       expect(acc.errors[0].length).toBeLessThanOrEqual(200);
@@ -283,7 +283,7 @@ describe("StreamAccumulator — error line truncation", () => {
 
    it("keeps short error lines intact", () => {
       const acc = new StreamAccumulator();
-      acc.append("error: short", false);
+      acc.append("error: short");
 
       expect(acc.errors).toHaveLength(1);
       expect(acc.errors[0]).toBe("error: short");
@@ -291,7 +291,7 @@ describe("StreamAccumulator — error line truncation", () => {
 
    it("trims whitespace from error lines", () => {
       const acc = new StreamAccumulator();
-      acc.append("  error: padded  \n", false);
+      acc.append("  error: padded  \n");
 
       expect(acc.errors).toHaveLength(1);
       expect(acc.errors[0]).toBe("error: padded");
@@ -305,8 +305,8 @@ describe("StreamAccumulator — error line truncation", () => {
 describe("StreamAccumulator — isError flag", () => {
    it("both stdout and stderr go to the same tail buffer", () => {
       const acc = new StreamAccumulator();
-      acc.append("stdout chunk\n", false);
-      acc.append("stderr chunk\n", true);
+      acc.append("stdout chunk\n");
+      acc.append("stderr chunk\n");
 
       expect(acc.tail).toContain("stdout chunk");
       expect(acc.tail).toContain("stderr chunk");
@@ -314,9 +314,9 @@ describe("StreamAccumulator — isError flag", () => {
 
    it("isError flag does not affect error extraction", () => {
       const acc = new StreamAccumulator();
-      acc.append("normal line\n", false);
-      acc.append("error: from stderr\n", true);
-      acc.append("error: from stdout\n", false);
+      acc.append("normal line\n");
+      acc.append("error: from stderr\n");
+      acc.append("error: from stdout\n");
 
       expect(acc.errors).toHaveLength(2);
    });
@@ -334,8 +334,8 @@ describe("StreamAccumulator — totalBytes", () => {
 
    it("tracks total bytes across appends", () => {
       const acc = new StreamAccumulator();
-      acc.append("hello", false);     // 5 bytes
-      acc.append(" world", false);    // 6 bytes
+      acc.append("hello");     // 5 bytes
+      acc.append(" world");    // 6 bytes
       expect(acc.totalBytes).toBe(11);
    });
 
@@ -343,7 +343,7 @@ describe("StreamAccumulator — totalBytes", () => {
       const threshold = 50;
       const acc = new StreamAccumulator({ tailMaxBytes: threshold });
 
-      acc.append(byteString(200), false);
+      acc.append(byteString(200));
       // Tail is trimmed to 50, but totalBytes should be 200
       expect(acc.totalBytes).toBe(200);
       expect(acc.tail.length).toBe(threshold);
@@ -351,8 +351,8 @@ describe("StreamAccumulator — totalBytes", () => {
 
    it("counts stderr bytes too", () => {
       const acc = new StreamAccumulator();
-      acc.append("stdout", false);
-      acc.append("stderr", true);
+      acc.append("stdout");
+      acc.append("stderr");
       expect(acc.totalBytes).toBe(12);
    });
 });
@@ -364,8 +364,8 @@ describe("StreamAccumulator — totalBytes", () => {
 describe("StreamAccumulator — reset()", () => {
    it("clears everything", () => {
       const acc = new StreamAccumulator();
-      acc.append("hello\n", false);
-      acc.append("error: something\n", false);
+      acc.append("hello\n");
+      acc.append("error: something\n");
 
       expect(acc.tail).toBeTruthy();
       expect(acc.errors.length).toBeGreaterThan(0);
@@ -380,9 +380,9 @@ describe("StreamAccumulator — reset()", () => {
 
    it("allows appends after reset", () => {
       const acc = new StreamAccumulator();
-      acc.append("before reset\n", false);
+      acc.append("before reset\n");
       acc.reset();
-      acc.append("after reset\n", false);
+      acc.append("after reset\n");
 
       expect(acc.tail).toBe("after reset\n");
       expect(acc.totalBytes).toBe(12);
@@ -396,7 +396,7 @@ describe("StreamAccumulator — reset()", () => {
 describe("StreamAccumulator — edge cases", () => {
    it("handles empty chunks", () => {
       const acc = new StreamAccumulator();
-      acc.append("", false);
+      acc.append("");
       expect(acc.tail).toBe("");
       expect(acc.totalBytes).toBe(0);
       expect(acc.errors).toHaveLength(0);
@@ -404,36 +404,36 @@ describe("StreamAccumulator — edge cases", () => {
 
    it("handles empty chunk between non-empty chunks", () => {
       const acc = new StreamAccumulator();
-      acc.append("hello", false);
-      acc.append("", false);
-      acc.append(" world", false);
+      acc.append("hello");
+      acc.append("");
+      acc.append(" world");
       expect(acc.tail).toBe("hello world");
       expect(acc.totalBytes).toBe(11);
    });
 
    it("handles chunks with no newlines", () => {
       const acc = new StreamAccumulator();
-      acc.append("error: no newline here", false);
+      acc.append("error: no newline here");
       expect(acc.errors).toHaveLength(1);
       expect(acc.errors[0]).toBe("error: no newline here");
    });
 
    it("handles multi-line chunk with mixed content", () => {
       const acc = new StreamAccumulator();
-      acc.append("line 1\nerror: something\nline 3\n", false);
+      acc.append("line 1\nerror: something\nline 3\n");
       expect(acc.errors).toHaveLength(1);
       expect(acc.errors[0]).toBe("error: something");
    });
 
    it("handles chunk with only error lines", () => {
       const acc = new StreamAccumulator();
-      acc.append("error: a\nerror: b\nerror: c\n", false);
+      acc.append("error: a\nerror: b\nerror: c\n");
       expect(acc.errors).toHaveLength(3);
    });
 
    it("handles Unicode content correctly", () => {
       const acc = new StreamAccumulator();
-      acc.append("Hello 🌍 error: unicode 🎉\n", false);
+      acc.append("Hello 🌍 error: unicode 🎉\n");
       expect(acc.errors).toHaveLength(1);
       expect(acc.errors[0]).toContain("error: unicode");
    });
@@ -443,7 +443,7 @@ describe("StreamAccumulator — edge cases", () => {
       const acc = new StreamAccumulator({ tailMaxBytes: threshold });
 
       // Exactly 200 bytes = 2x threshold → should trim
-      acc.append(byteString(200), false);
+      acc.append(byteString(200));
       expect(acc.tail.length).toBe(threshold);
    });
 
@@ -452,7 +452,7 @@ describe("StreamAccumulator — edge cases", () => {
       const acc = new StreamAccumulator({ tailMaxBytes: threshold });
 
       // 201 bytes → trim
-      acc.append(byteString(201), false);
+      acc.append(byteString(201));
       expect(acc.tail.length).toBe(threshold);
    });
 
@@ -461,14 +461,14 @@ describe("StreamAccumulator — edge cases", () => {
       const acc = new StreamAccumulator({ tailMaxBytes: threshold });
 
       // 199 bytes → just under 2x, no trim
-      acc.append(byteString(199), false);
+      acc.append(byteString(199));
       expect(acc.tail.length).toBe(199);
    });
 
    it("handles error in a very long line that spans more than 200 chars", () => {
       const acc = new StreamAccumulator();
       const line = "error: " + "z".repeat(500);
-      acc.append(line, false);
+      acc.append(line);
 
       expect(acc.errors).toHaveLength(1);
       expect(acc.errors[0].length).toBe(200);
@@ -476,12 +476,34 @@ describe("StreamAccumulator — edge cases", () => {
 
    it("multiple resets in a row are safe", () => {
       const acc = new StreamAccumulator();
-      acc.append("data\n", false);
+      acc.append("data\n");
       acc.reset();
       acc.reset();
       acc.reset();
       expect(acc.tail).toBe("");
       expect(acc.errors).toEqual([]);
       expect(acc.totalBytes).toBe(0);
+   });
+
+   it("deduplicates errors across streams (simulated stdout+stderr merge)", () => {
+      const stdoutAcc = new StreamAccumulator();
+      const stderrAcc = new StreamAccumulator();
+
+      // Same error in both streams
+      stdoutAcc.append("error: something went wrong\n");
+      stderrAcc.append("error: something went wrong\n");
+
+      // Different error in stderr
+      stderrAcc.append("TypeError: cannot read null\n");
+
+      // Simulate the merge logic from ralph.ts
+      const allErrors: string[] = [];
+      const errorSet = new Set<string>();
+      for (const e of stdoutAcc.errors) { if (!errorSet.has(e)) { errorSet.add(e); allErrors.push(e); } }
+      for (const e of stderrAcc.errors) { if (!errorSet.has(e)) { errorSet.add(e); allErrors.push(e); } }
+
+      expect(allErrors).toHaveLength(2);
+      expect(allErrors[0]).toBe("error: something went wrong");
+      expect(allErrors[1]).toBe("TypeError: cannot read null");
    });
 });

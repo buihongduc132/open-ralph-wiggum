@@ -54,6 +54,11 @@ describe("isJsonModeAgent", () => {
     expect(isJsonModeAgent("some-agent", ["--output-format", "stream-json"])).toBe(true);
   });
 
+  it("returns true when extraFlags contain --output-format=stream-json (equals syntax)", () => {
+    expect(isJsonModeAgent("some-agent", ["--output-format=stream-json"])).toBe(true);
+    expect(isJsonModeAgent("gemini", ["--output-format=stream-json", "--verbose"])).toBe(true);
+  });
+
   it("returns true when extraFlags contain --json", () => {
     expect(isJsonModeAgent("codex", ["--json"])).toBe(true);
   });
@@ -81,11 +86,13 @@ describe("isJsonModeAgent", () => {
 describe("hasJsonAdapter", () => {
   it("returns true for agents with adapters", () => {
     expect(hasJsonAdapter("claude-code")).toBe(true);
+    expect(hasJsonAdapter("cursor-agent")).toBe(true);
+    expect(hasJsonAdapter("codex")).toBe(true);
+    expect(hasJsonAdapter("gemini")).toBe(true);
   });
 
   it("returns false for agents without adapters", () => {
     expect(hasJsonAdapter("opencode")).toBe(false);
-    expect(hasJsonAdapter("codex")).toBe(false);
     expect(hasJsonAdapter("unknown-agent")).toBe(false);
   });
 });
@@ -120,6 +127,33 @@ describe("beautifyJsonLine — mode=text", () => {
     expect(stripAnsi(joined)).toBe(joined); // no ANSI in text mode
     expect(joined).toContain("Hello from assistant");
   });
+
+  it("extracts text from codex message events", () => {
+    const line = JSON.stringify({ type: "message", content: "Codex says hi" });
+    const result = beautifyJsonLine(line, config({ mode: "text", agentType: "codex" }));
+    expect(result.some(r => r.includes("Codex says hi"))).toBe(true);
+  });
+
+  it("extracts text from codex complete events", () => {
+    const line = JSON.stringify({ type: "complete", output: "All done" });
+    const result = beautifyJsonLine(line, config({ mode: "text", agentType: "codex" }));
+    expect(result.some(r => r.includes("All done"))).toBe(true);
+  });
+
+  it("extracts text from gemini top-level text field", () => {
+    const line = JSON.stringify({ type: "unknown", text: "Gemini text here" });
+    const result = beautifyJsonLine(line, config({ mode: "text", agentType: "gemini" }));
+    expect(result.some(r => r.includes("Gemini text here"))).toBe(true);
+  });
+
+  it("extracts thinking from content_block_delta thinking_delta in text mode", () => {
+    const line = JSON.stringify({
+      type: "content_block_delta",
+      delta: { type: "thinking_delta", thinking: "deep thoughts" },
+    });
+    const result = beautifyJsonLine(line, config({ mode: "text" }));
+    expect(result.some(r => r.includes("deep thoughts"))).toBe(true);
+  });
 });
 
 // ─── beautifyJsonLine — non-JSON passthrough ────────────────────────────────
@@ -147,7 +181,7 @@ describe("beautifyJsonLine — non-JSON lines", () => {
   });
 
   it("parses ANSI-prefixed JSON line", () => {
-    const json = JSON.stringify({ type: "result", result: "done", duration_ms: 5000, cost_usd: 0.01 });
+    const json = JSON.stringify({ type: "result", result: "done", duration_ms: 5000, total_cost_usd: 0.01 });
     const ansiLine = "\u001b[32m" + json + "\u001b[0m";
     const result = beautifyJsonLine(ansiLine, config({ agentType: "claude-code" }));
     expect(result.length).toBeGreaterThan(0);
@@ -314,7 +348,7 @@ describe("Claude adapter — result event", () => {
       type: "result",
       result: "Task completed",
       duration_ms: 5432,
-      cost_usd: 0.0123,
+      total_cost_usd: 0.0123,
     });
     const result = beautifyJsonLine(line, config({ agentType: "claude-code", showCost: true }));
     const joined = result.map(r => stripAnsi(r)).join("\n");
@@ -328,7 +362,7 @@ describe("Claude adapter — result event", () => {
       type: "result",
       result: "Task completed",
       duration_ms: 5432,
-      cost_usd: 0.0123,
+      total_cost_usd: 0.0123,
     });
     const result = beautifyJsonLine(line, config({ agentType: "claude-code", showCost: false }));
     const joined = result.map(r => stripAnsi(r)).join("\n");
@@ -433,6 +467,26 @@ describe("Claude adapter — auto_retry_start", () => {
     const result = beautifyJsonLine(line, config({ agentType: "claude-code", showRetry: true }));
     expect(result.length).toBeGreaterThan(0);
     expect(result.some(r => stripAnsi(r).includes("30s"))).toBe(true);
+  });
+
+  it("shows hours when delay >= 1 hour", () => {
+    const line = JSON.stringify({
+      type: "auto_retry_start",
+      retryInfo: { attempt: 4, maxAttempts: 10, delayMs: 7200000, lastError: "server overloaded" },
+    });
+    const result = beautifyJsonLine(line, config({ agentType: "claude-code", showRetry: true }));
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.some(r => stripAnsi(r).includes("2h"))).toBe(true);
+  });
+
+  it("shows 0s when delayMs is 0", () => {
+    const line = JSON.stringify({
+      type: "auto_retry_start",
+      retryInfo: { attempt: 1, maxAttempts: 3, delayMs: 0, lastError: "" },
+    });
+    const result = beautifyJsonLine(line, config({ agentType: "claude-code", showRetry: true }));
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.some(r => stripAnsi(r).includes("0s"))).toBe(true);
   });
 });
 
@@ -582,5 +636,290 @@ describe("Edge cases", () => {
     const result = beautifyJsonLine(line, config({ agentType: "claude-code" }));
     expect(result).toBeDefined();
     expect(Array.isArray(result)).toBe(true);
+  });
+});
+
+// ─── Cursor-Agent Adapter (beautify mode) ─────────────────────────────────
+
+describe("cursor-agent adapter (beautify mode)", () => {
+  const cfg = config({ agentType: "cursor-agent" });
+
+  it("renders assistant text content", () => {
+    const line = JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [{ type: "text", text: "Hello world" }],
+      },
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.some(r => stripAnsi(r).includes("Hello world"))).toBe(true);
+  });
+
+  it("renders tool_call with shell command", () => {
+    const line = JSON.stringify({
+      type: "tool_call",
+      tool_call: {
+        shellToolCall: { args: { command: "npm test" } },
+      },
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.some(r => stripAnsi(r).includes("SHELL"))).toBe(true);
+    expect(result.some(r => stripAnsi(r).includes("npm test"))).toBe(true);
+  });
+
+  it("renders tool_call with path arg", () => {
+    const line = JSON.stringify({
+      type: "tool_call",
+      tool_call: {
+        editToolCall: { args: { path: "/src/file.ts" } },
+      },
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.some(r => stripAnsi(r).includes("EDIT"))).toBe(true);
+    expect(result.some(r => stripAnsi(r).includes("/src/file.ts"))).toBe(true);
+  });
+
+  it("renders tool_call without args", () => {
+    const line = JSON.stringify({
+      type: "tool_call",
+      tool_call: {
+        grepToolCall: {},
+      },
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.some(r => stripAnsi(r).includes("GREP"))).toBe(true);
+  });
+
+  it("renders result event", () => {
+    const line = JSON.stringify({
+      type: "result",
+      result: "Task completed",
+      subtype: "success",
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.some(r => stripAnsi(r).includes("Task completed"))).toBe(true);
+    expect(result.some(r => stripAnsi(r).includes("success"))).toBe(true);
+  });
+
+  it("renders error event", () => {
+    const line = JSON.stringify({
+      type: "error",
+      error: { message: "Something broke" },
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.some(r => stripAnsi(r).includes("Something broke"))).toBe(true);
+  });
+
+  it("suppressed unknown event types", () => {
+    const line = JSON.stringify({ type: "unknown_event" });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result).toEqual([]);
+  });
+});
+
+// ─── Codex Adapter (beautify mode) ──────────────────────────────────────────
+
+describe("codex adapter (beautify mode)", () => {
+  const cfg = config({ agentType: "codex" });
+
+  it("renders message with string content", () => {
+    const line = JSON.stringify({
+      type: "message",
+      content: "Building the feature",
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.some(r => stripAnsi(r).includes("Building the feature"))).toBe(true);
+  });
+
+  it("renders message with array content", () => {
+    const line = JSON.stringify({
+      type: "message",
+      content: [{ type: "text", text: "Array content here" }],
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.some(r => stripAnsi(r).includes("Array content here"))).toBe(true);
+  });
+
+  it("renders tool_call event", () => {
+    const line = JSON.stringify({
+      type: "tool_call",
+      name: "ReadFile",
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.some(r => stripAnsi(r).includes("ReadFile"))).toBe(true);
+  });
+
+  it("renders complete event with output", () => {
+    const line = JSON.stringify({
+      type: "complete",
+      output: "All done",
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.some(r => stripAnsi(r).includes("All done"))).toBe(true);
+  });
+
+  it("renders complete event without output", () => {
+    const line = JSON.stringify({
+      type: "complete",
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.some(r => stripAnsi(r).includes("Done"))).toBe(true);
+  });
+
+  it("renders error event", () => {
+    const line = JSON.stringify({
+      type: "error",
+      message: "Rate limited",
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.some(r => stripAnsi(r).includes("Rate limited"))).toBe(true);
+  });
+
+  it("suppresses unknown event types", () => {
+    const line = JSON.stringify({ type: "ping" });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result).toEqual([]);
+  });
+});
+
+// ─── Gemini Adapter (beautify mode) ─────────────────────────────────────────
+
+describe("gemini adapter (beautify mode)", () => {
+  const cfg = config({ agentType: "gemini" });
+
+  it("renders text field", () => {
+    const line = JSON.stringify({
+      text: "Hello from Gemini",
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.some(r => stripAnsi(r).includes("Hello from Gemini"))).toBe(true);
+  });
+
+  it("renders toolCall event", () => {
+    const line = JSON.stringify({
+      toolCall: { name: "search" },
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.some(r => stripAnsi(r).includes("search"))).toBe(true);
+  });
+
+  it("renders tool_call event (snake_case variant)", () => {
+    const line = JSON.stringify({
+      tool_call: { name: "read_file" },
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.some(r => stripAnsi(r).includes("read_file"))).toBe(true);
+  });
+
+  it("renders error (object)", () => {
+    const line = JSON.stringify({
+      error: { message: "Quota exceeded" },
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.some(r => stripAnsi(r).includes("Quota exceeded"))).toBe(true);
+  });
+
+  it("renders error (string)", () => {
+    const line = JSON.stringify({
+      error: "Network failure",
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.some(r => stripAnsi(r).includes("Network failure"))).toBe(true);
+  });
+
+  it("renders content field", () => {
+    const line = JSON.stringify({
+      content: "Some content",
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.some(r => stripAnsi(r).includes("Some content"))).toBe(true);
+  });
+
+  it("suppresses events with no useful fields", () => {
+    const line = JSON.stringify({ type: "metadata", model: "gemini-pro" });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result).toEqual([]);
+  });
+});
+
+// ─── extractJsonCompletionText: non-Claude agents ───────────────────────────
+
+describe("extractJsonCompletionText: non-Claude agents", () => {
+  it("extracts text from cursor-agent assistant events", () => {
+    const line = JSON.stringify({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "Result text" }] },
+    });
+    const result = extractJsonCompletionText(line, "cursor-agent");
+    expect(result.some(r => r.includes("Result text"))).toBe(true);
+  });
+
+  it("extracts text from codex complete events", () => {
+    const line = JSON.stringify({
+      type: "complete",
+      output: "Codex finished",
+    });
+    const result = extractJsonCompletionText(line, "codex");
+    expect(result.some(r => r.includes("Codex finished"))).toBe(true);
+  });
+
+  it("extracts text from gemini text events", () => {
+    const line = JSON.stringify({ text: "Gemini output" });
+    const result = extractJsonCompletionText(line, "gemini");
+    expect(result.some(r => r.includes("Gemini output"))).toBe(true);
+  });
+
+  it("extracts text from stream_event with nested text_delta", () => {
+    const line = JSON.stringify({
+      type: "stream_event",
+      event: {
+        delta: {
+          type: "text_delta",
+          text: "Streamed text",
+        },
+      },
+    });
+    const result = extractJsonCompletionText(line, "claude-code");
+    expect(result.some(r => r.includes("Streamed text"))).toBe(true);
+  });
+});
+
+// ─── Gemini result/complete adapter tests ─────────────────────────────────────
+
+describe("gemini adapter (beautify mode) – result/complete events", () => {
+  const cfg: BeautifierConfig = {
+    mode: "beautify",
+    agentType: "gemini",
+    verboseTools: false,
+    showThinking: true,
+    showRetry: true,
+    showError: true,
+    showCost: true,
+    maxErrorLength: 120,
+  };
+
+  it("renders result event with result field", () => {
+    const line = JSON.stringify({ type: "result", result: "All done" });
+    const out = beautifyJsonLine(line, cfg);
+    expect(out.length).toBe(1);
+    expect(out[0]).toContain("All done");
+    expect(out[0]).toContain("✅");
+  });
+
+  it("renders complete event with output field", () => {
+    const line = JSON.stringify({ type: "complete", output: "Task complete" });
+    const out = beautifyJsonLine(line, cfg);
+    expect(out.length).toBe(1);
+    expect(out[0]).toContain("Task complete");
+    expect(out[0]).toContain("✅");
+  });
+
+  it("suppresses result event with empty result", () => {
+    const line = JSON.stringify({ type: "result", result: "" });
+    const out = beautifyJsonLine(line, cfg);
+    expect(out).toEqual([]);
   });
 });

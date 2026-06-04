@@ -875,9 +875,7 @@ describe("dispatchVoters integration", () => {
 
    // @ts-expect-error bun test supports third arg for options
    it("times out voter and auto-rejects", { timeout: 10_000 }, async () => {
-      // voter timeout is 2s + process spawn overhead — need 10s test timeout
-      // Script that sleeps forever
-      // NOTE: needs 10s+ timeout since we test 2s real timeout + process overhead
+      // voter timeout is 1s + process spawn overhead — need 10s test timeout
       const sleepScript = join(tmpDirV, "sleep.sh");
       writeFileSync(sleepScript, "#!/bin/bash\nsleep 300\n");
       Bun.spawnSync(["chmod", "+x", sleepScript]);
@@ -885,7 +883,7 @@ describe("dispatchVoters integration", () => {
       const config: import("../src/types").ReviewConfig = {
          enabled: true,
          quorum: "1/1",
-         voterTimeout: "2s",
+         voterTimeout: "1s",
          maxRejectCycles: 3,
          reviewPromptFile: "",
          voters: [{ agent: sleepScript, model: "" }],
@@ -913,6 +911,9 @@ describe("dispatchVoters integration", () => {
       const elapsed = Date.now() - start;
       expect(elapsed).toBeLessThan(5000); // Should timeout in ~1s, not 300s
       expect(result.approved).toBe(false);
-      expect(savedState.votes["voter-0"].status).toBe("timeout");
+      // After timeout, checkQuorum treats it as rejection → resetVotes fires → votes reset to pending
+      // The timeout reason should be in lastRejectionReasons
+      expect(result.state.lastRejectionReasons.length).toBeGreaterThan(0);
+      expect(result.state.rejectCycleCount).toBe(1);
    });
 });

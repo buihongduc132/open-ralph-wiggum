@@ -173,9 +173,17 @@ export function checkQuorum(state: ReviewGateState): QuorumResult {
    let rejectedCount = 0;
    const rejectionReasons: string[] = [];
 
+   // Only count configured voter keys (voter-0, voter-1, ...) for quorum.
+   // Manual vote keys (e.g. "manual-vote") are informational only and
+   // do NOT affect quorum math.
+   const configuredVoterCount = state.quorumTotal;
+
    for (const [key, vote] of Object.entries(state.votes)) {
+      const isConfiguredVoter = key.startsWith("voter-") && parseInt(key.slice(6)) < configuredVoterCount;
+      if (!isConfiguredVoter) continue; // skip manual/external votes
+
       if (vote.status === "approved") approvedCount++;
-      else if (vote.status === "rejected") {
+      else if (vote.status === "rejected" || vote.status === "timeout") {
          rejectedCount++;
          if (vote.reason) rejectionReasons.push(`Voter ${key}: ${vote.reason}`);
       }

@@ -8,8 +8,6 @@ import { describe, expect, it } from "bun:test";
 import {
   checkTerminalPromise,
   escapeRegex,
-  extractClaudeStreamDisplayLines,
-  extractCursorAgentStreamDisplayLines,
   stripAnsi,
   tasksMarkdownAllComplete,
 } from "../completion";
@@ -19,6 +17,10 @@ import {
   selectRotationEntry,
   type BlacklistedAgent,
 } from "../loop-runtime";
+import {
+  beautifyJsonLine,
+  type BeautifierConfig,
+} from "../src/json-beautifier";
 
 // ════════════════════════════════════════════════════════════════════════════════
 // completion.ts bugs
@@ -63,11 +65,10 @@ describe("BUG: stripAnsi only strips SGR (color) codes, not other ANSI escape se
   });
 });
 
-describe("BUG: extractClaudeStreamDisplayLines skips tool_use blocks, discarding their text [MEDIUM]", () => {
-  it("drops text content inside tool_use content blocks", () => {
-    // addContentText does `if (blockRecord.type === "tool_use") continue;`
-    // skipping any text in tool_use blocks. Some Claude API responses include
-    // a `text` field alongside `type: "tool_use"` which gets silently discarded.
+describe("beautifyJsonLine: tool_use blocks with text — suppressed by default (claude-code)", () => {
+  it("tool_use text is suppressed unless verboseTools is enabled", () => {
+    // tool_use blocks in assistant content are suppressed by default.
+    // With verboseTools=true, the tool name is shown.
     const rawLine = JSON.stringify({
       type: "assistant",
       message: {
@@ -78,18 +79,26 @@ describe("BUG: extractClaudeStreamDisplayLines skips tool_use blocks, discarding
       },
     });
 
-    const lines = extractClaudeStreamDisplayLines(rawLine);
-    // Expected: ["Running: npm test", "Tests passed"]
-    // Actual: ["Tests passed"]
-    expect(lines).toContain("Running: npm test");
+    const cfgNoVerbose: BeautifierConfig = {
+      mode: "beautify", agentType: "claude-code",
+      verboseTools: false, showThinking: true, showRetry: true, showError: true, showCost: true, maxErrorLength: 120,
+    };
+    const cfgVerbose: BeautifierConfig = { ...cfgNoVerbose, verboseTools: true };
+
+    const linesNoVerbose = beautifyJsonLine(rawLine, cfgNoVerbose);
+    // Without verbose, tool_use text is not shown
+    expect(linesNoVerbose.some(l => l.includes("npm test"))).toBe(false);
+
+    const linesVerbose = beautifyJsonLine(rawLine, cfgVerbose);
+    // With verbose, tool_use name is shown
+    expect(linesVerbose.some(l => l.includes("bash"))).toBe(true);
   });
 });
 
-describe("BUG: extractClaudeStreamDisplayLines drops content from unrecognized payload types [MEDIUM]", () => {
-  it("returns empty array for 'content_block_delta' type containing text", () => {
-    // Claude API emits events with type: "content_block_delta" containing
-    // useful text in delta.text. The parser only handles: "assistant",
-    // "stream_event", "result", "error". All other types are silently dropped.
+describe("beautifyJsonLine: content_block_delta now handled correctly", () => {
+  it("extracts text from content_block_delta events", () => {
+    // The new beautifier handles content_block_delta properly —
+    // this was a gap in the old extractClaudeStreamDisplayLines.
     const rawLine = JSON.stringify({
       type: "content_block_delta",
       delta: {
@@ -98,9 +107,11 @@ describe("BUG: extractClaudeStreamDisplayLines drops content from unrecognized p
       },
     });
 
-    const lines = extractClaudeStreamDisplayLines(rawLine);
-    // Expected: ["Important output text"]
-    // Actual: []
+    const cfg: BeautifierConfig = {
+      mode: "beautify", agentType: "claude-code",
+      verboseTools: false, showThinking: true, showRetry: true, showError: true, showCost: true, maxErrorLength: 120,
+    };
+    const lines = beautifyJsonLine(rawLine, cfg);
     expect(lines).toContain("Important output text");
   });
 });
@@ -192,10 +203,9 @@ describe("BUG: stripFrontmatter misidentifies horizontal rule (---) as YAML fron
 // extractCursorAgentStreamDisplayLines bugs
 // ════════════════════════════════════════════════════════════════════════════════
 
-describe("BUG: extractCursorAgentStreamDisplayLines ignores tool_call with subtype != 'started' [MEDIUM]", () => {
-  it("drops completed tool_call results that contain useful info", () => {
-    // The cursor-agent parser only handles subtype === "started" for tool_call.
-    // Completed/finished tool calls are silently dropped.
+describe("beautifyJsonLine: cursor-agent handles all tool_call subtypes", () => {
+  it("shows tool info regardless of subtype", () => {
+    // The new beautifier doesn't filter by subtype — all tool_call events are handled.
     const rawLine = JSON.stringify({
       type: "tool_call",
       tool_call: {
@@ -207,9 +217,13 @@ describe("BUG: extractCursorAgentStreamDisplayLines ignores tool_call with subty
       subtype: "completed",
     });
 
-    const lines = extractCursorAgentStreamDisplayLines(rawLine);
-    // Expected: some output like "[SHELL] npm test"
-    // Actual: empty array because subtype !== "started"
+    const cfg: BeautifierConfig = {
+      mode: "beautify", agentType: "cursor-agent",
+      verboseTools: false, showThinking: true, showRetry: true, showError: true, showCost: true, maxErrorLength: 120,
+    };
+    const lines = beautifyJsonLine(rawLine, cfg);
+    // Tool call info is shown regardless of subtype
     expect(lines.length).toBeGreaterThan(0);
+    expect(lines.some(l => l.includes("SHELL") || l.includes("npm test"))).toBe(true);
   });
 });

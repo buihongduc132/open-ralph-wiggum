@@ -9,7 +9,6 @@ import {
    allTasksComplete,
    detectPlaceholderPluginError,
    detectModelNotFoundError,
-   extractClaudeStreamDisplayLines,
    detectStrugglePatterns,
    type Task,
 } from "../src/display";
@@ -261,91 +260,6 @@ describe("detectModelNotFoundError", () => {
 
    it("returns false for clean output", () => {
       expect(detectModelNotFoundError("Everything is fine")).toBe(false);
-   });
-});
-
-describe("extractClaudeStreamDisplayLines", () => {
-   it("returns raw line for non-JSON", () => {
-      expect(extractClaudeStreamDisplayLines("hello world")).toEqual(["hello world"]);
-   });
-
-   it("returns empty array for invalid JSON", () => {
-      expect(extractClaudeStreamDisplayLines("{bad json")).toEqual([]);
-   });
-
-   it("extracts text from assistant message content", () => {
-      const json = JSON.stringify({
-         type: "assistant",
-         message: {
-            content: [{ type: "text", text: "Hello from Claude" }],
-         },
-      });
-      const lines = extractClaudeStreamDisplayLines(json);
-      expect(lines).toContain("Hello from Claude");
-   });
-
-   it("extracts text from assistant delta", () => {
-      const json = JSON.stringify({
-         type: "assistant",
-         delta: { text: "delta text" },
-      });
-      const lines = extractClaudeStreamDisplayLines(json);
-      expect(lines).toContain("delta text");
-   });
-
-   it("extracts result text", () => {
-      const json = JSON.stringify({
-         type: "result",
-         result: "final result",
-      });
-      const lines = extractClaudeStreamDisplayLines(json);
-      expect(lines).toContain("final result");
-   });
-
-   it("extracts error message", () => {
-      const json = JSON.stringify({
-         type: "error",
-         error: { message: "something went wrong" },
-      });
-      const lines = extractClaudeStreamDisplayLines(json);
-      expect(lines).toContain("something went wrong");
-   });
-
-   it("extracts string error", () => {
-      const json = JSON.stringify({
-         type: "error",
-         error: "string error",
-      });
-      const lines = extractClaudeStreamDisplayLines(json);
-      expect(lines).toContain("string error");
-   });
-
-   it("skips tool_use blocks", () => {
-      const json = JSON.stringify({
-         type: "assistant",
-         message: {
-            content: [
-               { type: "tool_use", name: "Read" },
-               { type: "text", text: "visible text" },
-            ],
-         },
-      });
-      const lines = extractClaudeStreamDisplayLines(json);
-      expect(lines).toContain("visible text");
-      expect(lines.length).toBe(1);
-   });
-
-   it("splits multiline text", () => {
-      const json = JSON.stringify({
-         type: "result",
-         result: "line one\nline two\nline three",
-      });
-      const lines = extractClaudeStreamDisplayLines(json);
-      expect(lines).toEqual(["line one", "line two", "line three"]);
-   });
-
-   it("returns raw line for non-object JSON", () => {
-      expect(extractClaudeStreamDisplayLines("null")).toEqual(["null"]);
    });
 });
 
