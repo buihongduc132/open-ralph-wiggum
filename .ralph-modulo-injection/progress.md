@@ -113,3 +113,20 @@ No demoted tasks, no problem_notes, no drift. No new work available.
 ## Next Checkpoints
 - **I7** (I%7==0): BACKWARD — verifier loop (READ-ONLY)
 - **I11** (I%11==0): BACKWARD — mutation + CodeQL (READ-ONLY)
+
+---
+
+# Iteration 1 Progress (FORWARD — hold)
+
+New loop iteration 1. No modulo checkpoints (1%5=1, 1%7=1, 1%11=1).
+
+All T1-T8 remain **completed** from previous loop. **1389 pass, 27 skip, 0 fail** across 40 files. Injection tests: **368 pass, 0 fail**. Git clean. No demotions, no drift, no regressions.
+
+## No New Work Available
+
+All tasks completed. No problem_notes. No audit findings requiring action. Coverage at effective 100% for reachable injection code paths. Loop continues in hold.
+
+## Next Checkpoints
+- **I5** (I%5==0): SYNC — lateral alignment
+- **I7** (I%7==0): BACKWARD — verifier loop (READ-ONLY)
+- **I11** (I%11==0): BACKWARD — mutation + CodeQL (READ-ONLY)
