@@ -1,3 +1,18 @@
+# Iteration 12 Progress (FORWARD — hold)
+
+No modulo checkpoints (12%5=2, 12%7=5, 12%11=1). All T1-T8 completed. **1389 pass, 27 skip, 0 fail** across 40 files. Injection tests: **368 pass, 0 fail**. Git clean. I11 mutation audit: **100% kill rate (11/11)**. No demotions, no drift, no regressions.
+
+## No New Work Available
+
+All T1-T8 remain **completed** with no demotions. No problem_notes. No drift. No regressions. Coverage at effective 100% for reachable injection code paths.
+
+## Next Checkpoints
+- **I14** (I%7==0): BACKWARD — verifier loop (READ-ONLY)
+- **I15** (I%5==0): SYNC — lateral alignment
+- **I22** (I%11==0): BACKWARD — mutation + CodeQL (READ-ONLY)
+
+---
+
 # Iteration 9 Progress (FORWARD)
 
 No modulo checkpoints (9%5=4, 9%7=2, 9%11=9). All T1-T8 completed. **1389 pass, 27 skip, 0 fail** across 40 files. Injection tests: **368 pass, 0 fail**. Git clean. Branch synced with origin.
