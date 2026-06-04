@@ -13,7 +13,35 @@ All T1-T8 remain **completed** with no demotions. No problem_notes. No drift. No
 
 ---
 
-# Iteration 9 Progress (FORWARD)
+# Iteration 5 Progress (SYNC)
+
+**SYNC checkpoint (I%5==0)**: Pulled (up-to-date), pushed I12 progress. All T1-T8 completed. **1389 pass, 27 skip, 0 fail** across 40 files. Injection tests: **368 pass, 0 fail**. Branch synced with origin.
+
+## No New Work Available
+
+All T1-T8 remain **completed** with no demotions. No problem_notes. No drift. No regressions. Loop has been in hold for 5+ iterations.
+
+## Status: ALL WORK COMPLETE
+
+- T1 (TOML types) ✅
+- T2 (loadRulesToml) ✅
+- T3 (buildPrompt injection) ✅
+- T4 (scaffoldRulesToml) ✅
+- T5 (PLACEHOLDER gate) ✅
+- T6 (init-rules subcommand) ✅
+- T7 (ralph-run skill) ✅
+- T8 (tests) ✅ — 368 injection tests, 0 fail
+
+Mutation audit (I11): 100% kill rate (11/11). Verifier audits (I7, I14): no demotions, no drift.
+
+## Next Checkpoints
+- **I7** (I%7==0): BACKWARD — verifier loop (READ-ONLY)
+- **I10** (I%5==0): SYNC — lateral alignment
+- **I11** (I%11==0): BACKWARD — mutation + CodeQL (READ-ONLY)
+
+---
+
+# Iteration 12 Progress (FORWARD — hold)
 
 No modulo checkpoints (9%5=4, 9%7=2, 9%11=9). All T1-T8 completed. **1389 pass, 27 skip, 0 fail** across 40 files. Injection tests: **368 pass, 0 fail**. Git clean. Branch synced with origin.
 
