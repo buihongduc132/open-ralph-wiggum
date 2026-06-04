@@ -516,7 +516,7 @@ describe("syncGoalStateAfterIteration", () => {
       expect(result!.facts["2"]).toBeUndefined(); // Not yet verified
    });
 
-   it("transitions to done when all facts are verified", () => {
+   it("cascades to done on iteration 1 when all facts pre-verified", () => {
       const goalMd = join(SYNC_DIR, "complete-goal.md");
       const statePath = join(SYNC_DIR, "complete-goal.state.json");
       const { writeFileSync: wf } = require("fs");
@@ -530,10 +530,31 @@ describe("syncGoalStateAfterIteration", () => {
 1. Step 1
 `);
 
-      const result = syncGoalStateAfterIteration(goalMd, statePath, 3);
+      const result = syncGoalStateAfterIteration(goalMd, statePath, 1);
       expect(result).not.toBeNull();
       expect(result!.phase).toBe("done");
-      expect(result!.iterations).toBe(3);
+      expect(result!.iterations).toBe(1);
+   });
+
+   it("advances one phase at a time on iteration > 1", () => {
+      const goalMd = join(SYNC_DIR, "iter-goal.md");
+      const statePath = join(SYNC_DIR, "iter-goal.state.json");
+      const { writeFileSync: wf } = require("fs");
+      wf(goalMd, `# Goal: Iter Test
+
+## Facts
+- [x] Fact 1: First
+- [x] Fact 2: Second
+
+## Plan
+1. Step 1
+`);
+
+      // iteration 2 (not first) should only advance planning → executing
+      const result = syncGoalStateAfterIteration(goalMd, statePath, 2);
+      expect(result).not.toBeNull();
+      expect(result!.phase).toBe("executing"); // NOT done
+      expect(result!.iterations).toBe(2);
    });
 
    it("transitions to executing when some facts are verified", () => {

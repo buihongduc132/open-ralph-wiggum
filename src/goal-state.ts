@@ -274,33 +274,32 @@ export function syncGoalStateAfterIteration(
       }
    }
 
-   // Auto-transition: if goal has facts and all are verified, advance phases.
-      // NOTE: This cascades through all remaining phases (planning → executing → verifying → done)
-      // in a single call when all facts are already verified. This is intentional — it fast-forwards
-      // goals where the user pre-verified all facts in goal.md before running the loop.
+   // Auto-transition phase management.
+   //
+   // On iteration 1 (first sync), we cascade through all phases for pre-verified goals
+   // (user checked all facts in goal.md before running the loop).
+   //
+   // On subsequent iterations, advance only ONE phase per call so the loop has a chance
+   // to actually execute plan steps and run verification commands.
    if (goal.facts.length > 0 && isGoalComplete(state, goal.facts.length)) {
-      // Advance to executing if still planning
-      if (state.phase === "planning") {
-         try {
-            state = transitionPhase(state, "executing");
-         } catch {
-            // Already past executing — that's fine
+      if (iteration <= 1) {
+         // First iteration: cascade for pre-verified goals
+         for (const target of ["executing", "verifying", "done"] as GoalPhase[]) {
+            try {
+               state = transitionPhase(state, target);
+            } catch {
+               break; // Already past this phase
+            }
          }
-      }
-      // Advance to verifying if executing
-      if (state.phase === "executing") {
-         try {
-            state = transitionPhase(state, "verifying");
-         } catch {
-            // Already past verifying — that's fine
-         }
-      }
-      // Advance to done if verifying
-      if (state.phase === "verifying") {
-         try {
-            state = transitionPhase(state, "done");
-         } catch {
-            // Already done
+      } else {
+         // Subsequent iterations: advance one phase at a time
+         const next = getNextPhase(state.phase);
+         if (next) {
+            try {
+               state = transitionPhase(state, next);
+            } catch {
+               // Already at the target or past it
+            }
          }
       }
    } else if (goal.facts.length > 0 && state.phase === "planning") {
