@@ -355,7 +355,7 @@ describe("beautifyJsonLine — claude-code full branch coverage", () => {
   });
 
   it("extracts text from 'result' type", () => {
-    const line = JSON.stringify({ type: "result", result: "final result text", duration_ms: 1000, cost_usd: 0.01 });
+    const line = JSON.stringify({ type: "result", result: "final result text", duration_ms: 1000, total_cost_usd: 0.01 });
     const result = stripLines(beautifyJsonLine(line, claudeCfg()));
     expect(result.some(l => l.includes("final result text"))).toBe(true);
   });

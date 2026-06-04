@@ -181,7 +181,7 @@ describe("beautifyJsonLine — non-JSON lines", () => {
   });
 
   it("parses ANSI-prefixed JSON line", () => {
-    const json = JSON.stringify({ type: "result", result: "done", duration_ms: 5000, cost_usd: 0.01 });
+    const json = JSON.stringify({ type: "result", result: "done", duration_ms: 5000, total_cost_usd: 0.01 });
     const ansiLine = "\u001b[32m" + json + "\u001b[0m";
     const result = beautifyJsonLine(ansiLine, config({ agentType: "claude-code" }));
     expect(result.length).toBeGreaterThan(0);
@@ -348,7 +348,7 @@ describe("Claude adapter — result event", () => {
       type: "result",
       result: "Task completed",
       duration_ms: 5432,
-      cost_usd: 0.0123,
+      total_cost_usd: 0.0123,
     });
     const result = beautifyJsonLine(line, config({ agentType: "claude-code", showCost: true }));
     const joined = result.map(r => stripAnsi(r)).join("\n");
@@ -362,7 +362,7 @@ describe("Claude adapter — result event", () => {
       type: "result",
       result: "Task completed",
       duration_ms: 5432,
-      cost_usd: 0.0123,
+      total_cost_usd: 0.0123,
     });
     const result = beautifyJsonLine(line, config({ agentType: "claude-code", showCost: false }));
     const joined = result.map(r => stripAnsi(r)).join("\n");

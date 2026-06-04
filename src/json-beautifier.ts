@@ -268,7 +268,9 @@ function claudeResult(p: Record<string, unknown>, cfg: BeautifierConfig): string
 
   if (cfg.showCost) {
     const durationMs = typeof p.duration_ms === "number" ? p.duration_ms : 0;
-    const costUsd = typeof p.cost_usd === "number" ? p.cost_usd : 0;
+    // Claude API uses total_cost_usd; fallback to cost_usd for backward compat
+    const costUsd = typeof p.total_cost_usd === "number" ? p.total_cost_usd
+      : typeof p.cost_usd === "number" ? p.cost_usd : 0;
     const seconds = (durationMs / 1000).toFixed(1);
     const costStr = costUsd < 0.01 ? `$${costUsd.toFixed(4)}` : `$${costUsd.toFixed(2)}`;
 
