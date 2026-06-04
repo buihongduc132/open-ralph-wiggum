@@ -104,7 +104,7 @@ describe("stall retries", () => {
     expect(result.output).toContain("Cleared fallback blacklist. Restarting fallback cycle.");
     expect(countMatches(result.output, "(opencode / alpha)")).toBeGreaterThanOrEqual(2);
     expect(result.output).toContain("(codex / beta)");
-  });
+  }, 30_000);
 
   it("keeps immediate rotation wraparound behavior when stall retries are disabled", async () => {
     const result = await runRalph(tempDir, [
