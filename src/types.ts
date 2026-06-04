@@ -68,6 +68,7 @@ export interface RalphRuntimeConfig {
 export interface ReviewVoter {
    agent: string;
    model: string;
+   promptFlag?: string; // CLI flag for prompt (default: "-p"). Codex uses "-q", etc.
 }
 
 export interface ReviewConfig {

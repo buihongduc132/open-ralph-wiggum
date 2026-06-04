@@ -140,11 +140,12 @@ export function parseReviewConfig(parsed: Record<string, unknown>): ReviewConfig
          const voterObj = v as Record<string, unknown>;
          const agent = normalizeRuntimeConfigValue(`review.voter[${i}].agent`, voterObj.agent, "string") as string | undefined;
          const model = normalizeRuntimeConfigValue(`review.voter[${i}].model`, voterObj.model, "string") as string | undefined;
+         const promptFlag = normalizeRuntimeConfigValue(`review.voter[${i}].prompt_flag`, voterObj.prompt_flag, "string") as string | undefined;
          if (!agent || !model) {
             console.error(`Error: review.voter[${i}] must have both 'agent' and 'model' fields.`);
             process.exit(1);
          }
-         voters.push({ agent, model });
+         voters.push({ agent, model, promptFlag });
       }
    }
 

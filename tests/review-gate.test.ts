@@ -24,6 +24,7 @@ import {
    injectRejectionFeedback,
    parseVoterTimeout,
    validateReviewConfig,
+   dispatchVoters,
 } from "../src/review-gate";
 import { parseReviewConfig } from "../src/runtime-config";
 

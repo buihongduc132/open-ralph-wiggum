@@ -277,11 +277,18 @@ export async function dispatchVoters(params: {
       let timedOut = false;
 
       try {
-         const proc = Bun.spawn([
-            voter.agent,
-            "-p", reviewPrompt,
-            "--cwd", cwd,
-         ], {
+         // Build spawn args — support agent-specific flags
+         // pi/claude use -p, codex uses -q, opencode uses -p
+         // If voter has argsTemplate, use it; otherwise default to -p
+         const promptFlag = voter.promptFlag || "-p";
+         const spawnArgs = [voter.agent, promptFlag, reviewPrompt];
+
+         // Only add --model if voter specifies one (not empty/default)
+         if (voter.model && voter.model !== "default" && voter.model !== "") {
+            spawnArgs.push("--model", voter.model);
+         }
+
+         const proc = Bun.spawn(spawnArgs, {
             stdout: "pipe",
             stderr: "pipe",
             cwd,
@@ -321,8 +328,8 @@ export async function dispatchVoters(params: {
             currentState.votes[voterKey] = { status: "approved", at: now, reason: "" };
             console.log(`✅ Voter ${voterKey} approved`);
          } else if (isReject) {
-            // Extract reason from output
-            const reasonMatch = voterOutput.match(/REASON:\s*(.+)/i);
+            // Extract reason from output — capture multi-line (up to 500 chars)
+            const reasonMatch = voterOutput.match(/REASON:\s*([\s\S]{1,500}?)(?=\n<promise>|$)/i);
             const reason = reasonMatch ? reasonMatch[1].trim() : "No reason provided";
             currentState.votes[voterKey] = { status: "rejected", at: now, reason };
             console.log(`❌ Voter ${voterKey} rejected: ${reason}`);

@@ -31,7 +31,7 @@ import {
    injectRejectionFeedback,
    validateReviewConfig,
 } from "./src/review-gate";
-import { loadReviewConfig, parseReviewConfig } from "./src/runtime-config";
+import { parseReviewConfig } from "./src/runtime-config";
 import type { ReviewConfig, ReviewGateState } from "./src/types";
 
 export const VERSION = "1.3.0";
@@ -3390,6 +3390,17 @@ Unable to read ${currentTasksFileLabel()}
       }
       if (reviewConfig && !state.reviewGate) {
          state.reviewGate = createReviewGateState(reviewConfig);
+      }
+
+      // Crash recovery: detect stale review gate state from crashed previous run
+      if (resuming && state.reviewGate && state.reviewGate.phase === "waiting_review") {
+         console.warn(`\n⚠️ Detected stale review gate state (phase: waiting_review). Previous run may have crashed during voter dispatch.`);
+         console.warn(`   Resetting review gate to inner_complete for re-dispatch.`);
+         state.reviewGate.phase = "inner_complete";
+         // Reset all votes to pending
+         for (const key of Object.keys(state.reviewGate.votes)) {
+            state.reviewGate.votes[key] = { status: "pending", at: "", reason: "" };
+         }
       }
 
       // Update stalling config if resuming (allow runtime override)
