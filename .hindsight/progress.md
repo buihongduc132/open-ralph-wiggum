@@ -31,7 +31,7 @@
 - **I63**: Backward audit — all phases pass, 0 new findings
 - **I66**: I%11 Mutation+CodeQL — 0 HIGH/CRITICAL, 1 LOW (escapeRegex accepted), 2 INFO
 
-## Iteration 3 (current)
+## Iteration 3
 
 - External review (claude -p) found 3 medium issues + 4 low issues
 - **Fix 1**: Missing `basename` import in ralph.ts — caused `--goal-status` crash
@@ -41,6 +41,20 @@
 - Added 3 subprocess tests for goal mode CLI behavior
 - Total tests: 1153 pass, 0 fail, 27 skip (1180 across 45 files)
 
-## Commits on Branch: 31
+## Iteration 4 (current)
 
-All work committed to `feat/goal-inventory-state`.
+- **Verifier loop**: All 10 checklist items PASS (reviewer subagent)
+- **External review (pi -p)**: Found 1 actionable bug + 3 edge cases
+- **Fix**: Gate phase cascade in `syncGoalStateAfterIteration` on iteration 1 only
+  - Iteration 1: cascades all phases for pre-verified goals (user checked all facts before loop)
+  - Iteration >1: advances one phase at a time, so `verifying` phase actually gets used
+- **New test**: "advances one phase at a time on iteration > 1" confirms single-phase advance
+- Accepted edge cases (no fix needed):
+  - rewriteFactsSection sequential counter (low risk for well-structured goal.md)
+  - extractSection regex `$(?!\n)` is dead code but harmless
+  - loadGoalState accepts unknown fields (forward-compatible by design)
+- Total tests: 1154 pass, 0 fail, 27 skip (1181 across 45 files)
+
+## Commits on Branch: 32
+
+All work committed and pushed to `feat/goal-inventory-state`.
