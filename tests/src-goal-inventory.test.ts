@@ -164,6 +164,38 @@ describe("buildInventory", () => {
       expect(inv.goals).toHaveLength(0);
    });
 
+   it("uses defaults when state file is malformed (loadGoalState returns null)", () => {
+      createGoalDir("bad-state", GOAL_TEMPLATE("Bad State", 3, 1));
+      // Write a malformed state file — invalid JSON
+      writeFileSync(join(TEMP_DIR, "bad-state", "goal.state.json"), "{invalid json", "utf-8");
+
+      const inv = buildInventory(TEMP_DIR);
+      const goal = inv.goals.find(g => g.slug === "bad-state");
+      expect(goal).toBeDefined();
+      expect(goal!.phase).toBe("planning"); // defaults when loadGoalState returns null
+      expect(goal!.factsVerified).toBe(1); // only from goal.md checkbox
+      expect(goal!.lastIterationAt).toBe(""); // default
+   });
+
+   it("uses defaults when state file has invalid phase (loadGoalState returns null)", () => {
+      createGoalDir("bad-phase", GOAL_TEMPLATE("Bad Phase", 2, 0));
+      // Valid JSON but invalid phase — loadGoalState rejects it
+      writeFileSync(
+         join(TEMP_DIR, "bad-phase", "goal.state.json"),
+         JSON.stringify({
+            slug: "bad-phase", phase: "INVALID", startedAt: "2026-01-01T00:00:00Z",
+            lastIterationAt: "2026-01-01T00:00:00Z", iterations: 1,
+            facts: {}, planSteps: {}, completionPromise: "COMPLETE",
+         }, null, 2),
+         "utf-8"
+      );
+
+      const inv = buildInventory(TEMP_DIR);
+      const goal = inv.goals.find(g => g.slug === "bad-phase");
+      expect(goal).toBeDefined();
+      expect(goal!.phase).toBe("planning"); // falls back to default
+   });
+
    it("skips non-directory entries (files, symlinks to files)", () => {
       writeFileSync(join(TEMP_DIR, "readme.md"), "not a directory", "utf-8");
 

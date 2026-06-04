@@ -5,12 +5,11 @@
  * finds next actionable goal.
  */
 
-import { existsSync, readdirSync, statSync, readFileSync } from "fs";
+import { existsSync, readdirSync, statSync } from "fs";
 import { join, basename } from "path";
 import { parseGoalMd } from "./goal-parser";
-import type { FactState, GoalInventory, GoalInventoryEntry, GoalPhase } from "./goal-types";
-
-const VALID_PHASES: GoalPhase[] = ["planning", "executing", "verifying", "done"];
+import { loadGoalState } from "./goal-state";
+import type { GoalInventory, GoalInventoryEntry, GoalPhase } from "./goal-types";
 
 // Phase priority for finding next actionable goal (lower = higher priority)
 const PHASE_PRIORITY: Record<GoalPhase, number> = {
@@ -62,25 +61,20 @@ export function buildInventory(goalsDir: string): GoalInventory {
          let lastIterationAt = "";
          let factsVerified = goal.facts.filter(f => f.verified).length;
 
-         if (existsSync(statePath)) {
-            try {
-               const state = JSON.parse(readFileSync(statePath, "utf-8"));
-               // Validate phase from state
-               phase = VALID_PHASES.includes(state.phase) ? state.phase : "planning";
-               lastIterationAt = state.lastIterationAt ?? "";
+         const loadedState = loadGoalState(statePath);
+         if (loadedState) {
+            phase = loadedState.phase;
+            lastIterationAt = loadedState.lastIterationAt;
 
-               // Take the max of goal.md verified and state verified.
-               // State is authoritative for facts explicitly verified via markFactVerified,
-               // but goal.md may have additional checkboxes checked manually.
-               const stateVerified = Object.values(
-                  state.facts ?? {}
-               ).filter(
-                  (f: FactState) => f.status === "verified"
-               ).length;
-               factsVerified = Math.min(goal.facts.length, Math.max(factsVerified, stateVerified));
-            } catch {
-               // Malformed state — use defaults
-            }
+            // Take the max of goal.md verified and state verified.
+            // State is authoritative for facts explicitly verified via markFactVerified,
+            // but goal.md may have additional checkboxes checked manually.
+            const stateVerified = Object.values(
+               loadedState.facts
+            ).filter(
+               f => f.status === "verified"
+            ).length;
+            factsVerified = Math.min(goal.facts.length, Math.max(factsVerified, stateVerified));
          }
 
          goals.push({
