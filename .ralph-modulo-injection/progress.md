@@ -1,3 +1,19 @@
+# Iteration 8 Progress (FORWARD)
+
+No modulo checkpoints (8%5=3, 8%7=1, 8%11=8). Fixed F10 cosmetic finding from I7 audit.
+
+- **F10 fixed**: `validateRulesToml()` now early-outs when `rules` is malformed (string/array), preventing per-character/element noise warnings. Wrapped iteration in `else` branch.
+- **TDD**: 2 new tests — string rules → exactly 1 warning, array rules → exactly 1 warning.
+- 365 injection tests pass, 0 fail. Full suite: 1385 pass, 27 skip, 1 pre-existing stall-retry timeout flake.
+- All T1-T8 remain completed. No demotions.
+
+## Next Checkpoints
+- **I10** (I%5==0): SYNC — lateral alignment
+- **I11** (I%11==0): BACKWARD — mutation + CodeQL (READ-ONLY)
+- **I14** (I%7==0): BACKWARD — verifier loop (READ-ONLY)
+
+---
+
 # Iteration 6 Progress (FORWARD — hold)
 
 No modulo checkpoints (6%5=1, 6%7=6, 6%11=6). All T1-T8 completed. 1384 pass, 0 fail, git clean. No new work available.
