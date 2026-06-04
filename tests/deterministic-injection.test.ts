@@ -7819,3 +7819,99 @@ describe("F10: validateRulesToml — no per-character noise when rules is malfor
     expect(warnings[0]).toContain("[rules] must be an object");
   });
 });
+
+describe("resolveInjectPlaceholders — 1MB performance guard", () => {
+  it("skips state injection when source file exceeds 1MB", () => {
+    const testDir = join(TMP_DIR, "ralph-oversize");
+    mkdirSync(testDir, { recursive: true });
+
+    // Create a file just over 1MB (1,048,577 bytes)
+    const oversizeContent = "x".repeat(1_048_577);
+    writeFileSync(join(testDir, "bigstate.jsonl"), oversizeContent);
+
+    const toml: RalphRulesToml = {
+      state_injection: {
+        source: "bigstate.jsonl",
+        max_next: 2,
+        max_prev: 2,
+        show_status: true,
+        reminder: "check progress",
+      },
+    };
+
+    const warnCalls: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnCalls.push(args.map(String).join(" "));
+
+    try {
+      const result = resolveInjectPlaceholders("{{inject:state}}", { iteration: 1 }, testDir, toml);
+      // Should return empty — file is too large
+      expect(result).toBe("");
+      // Should have warned about size
+      expect(warnCalls.length).toBeGreaterThan(0);
+      expect(warnCalls.join(" ")).toContain("too large");
+    } finally {
+      console.warn = origWarn;
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it("processes state injection when source file is exactly 1MB", () => {
+    const testDir = join(TMP_DIR, "ralph-exact-1mb");
+    mkdirSync(testDir, { recursive: true });
+
+    // Create a file exactly 1MB (1,048,576 bytes) — should NOT trigger the guard
+    // Use lines with content so slicing has something to work with
+    const line = "{" + "a".repeat(100) + "}";
+    const linesNeeded = Math.ceil(1_048_576 / (line.length + 1)); // +1 for newline
+    const exactContent = Array.from({ length: linesNeeded }, () => line).join("\n").slice(0, 1_048_576);
+    writeFileSync(join(testDir, "exact1mb.jsonl"), exactContent);
+
+    const toml: RalphRulesToml = {
+      state_injection: {
+        source: "exact1mb.jsonl",
+        max_next: 1,
+        max_prev: 1,
+        show_status: false,
+        reminder: "",
+      },
+    };
+
+    const result = resolveInjectPlaceholders("{{inject:state}}", { iteration: 1 }, testDir, toml);
+    // Should NOT be skipped — exactly at the limit is allowed
+    expect(result).toContain("## State Context");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+describe("resolveInjectPlaceholders — state injection file read error", () => {
+  it("returns empty string when source file read throws", () => {
+    const testDir = join(TMP_DIR, "ralph-readerr");
+    mkdirSync(testDir, { recursive: true });
+
+    // Create a file, then immediately delete it — the readFileSync will fail
+    // Actually we test the catch path by pointing source to a nonexistent file
+    // BUT that's already covered. Instead test with a directory (not a file)
+    // which will cause readFileSync to throw
+    const notFilePath = join(testDir, "not-a-file");
+    mkdirSync(notFilePath, { recursive: true }); // It's a directory, not a file
+
+    const toml: RalphRulesToml = {
+      state_injection: {
+        source: "not-a-file",
+        max_next: 1,
+        max_prev: 1,
+        show_status: false,
+        reminder: "",
+      },
+    };
+
+    // readFileSync on a directory throws EISDIR
+    const result = resolveInjectPlaceholders("{{inject:state}}", { iteration: 1 }, testDir, toml);
+    // The catch block returns ""
+    expect(result).toBe("");
+
+    rmSync(testDir, { recursive: true, force: true });
+  });
+});
