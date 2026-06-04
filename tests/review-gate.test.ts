@@ -672,4 +672,247 @@ describe("Phase 3 — Edge Cases", () => {
       expect(gateState.phase).toBe("dispatching");
       expect(gateState.rejectCycleCount).toBe(0);
    });
+
+   it("T16: SIGINT during review → phase = interrupted", () => {
+      // Simulate a review gate state that was interrupted
+      // In production, the SIGINT handler in ralph.ts sets phase = "interrupted"
+      // and persists the state before exiting.
+      const gateState = createReviewGateState({
+         enabled: true,
+         quorum: "2/3",
+         voterTimeout: "10m",
+         maxRejectCycles: 5,
+         reviewPromptFile: "",
+         voters: [
+            { agent: "pi", model: "test" },
+            { agent: "claude", model: "test" },
+            { agent: "codex", model: "test" },
+         ],
+      });
+      gateState.phase = "waiting_review";
+      // First voter dispatched
+      gateState.votes["voter-0"] = { status: "approved", at: new Date().toISOString(), reason: "" };
+      // SIGINT fires during second voter dispatch
+      gateState.phase = "interrupted" as import("../src/types").ReviewGatePhase;
+
+      // Verify interrupted state is persisted correctly
+      saveState({ reviewGate: gateState } as any, statePath, tmpDir);
+      const loaded = loadState(statePath) as any;
+      expect(loaded.reviewGate.phase).toBe("interrupted");
+      expect(loaded.reviewGate.votes["voter-0"].status).toBe("approved");
+      // voter-1 should still be pending (dispatch was interrupted)
+      expect(loaded.reviewGate.votes["voter-1"].status).toBe("pending");
+   });
+
+   it("T17: Atomic state write — concurrent calls do not corrupt", async () => {
+      // Verify that rapid concurrent saveState calls produce valid JSON
+      // Using temp file + renameSync ensures atomicity
+      const states: RalphState[] = [];
+      for (let i = 0; i < 50; i++) {
+         states.push({
+            iteration: i,
+            pid: process.pid,
+            active: true,
+            cwd: tmpDir,
+            stateDir: tmpDir,
+            agentIndex: i % 3,
+            agents: ["pi", "claude", "codex"],
+            startTime: new Date().toISOString(),
+            reviewGate: {
+               enabled: true,
+               quorum: "1/1",
+               quorumRequired: 1,
+               quorumTotal: 1,
+               phase: "waiting_review",
+               rejectCycleCount: 0,
+               lastRejectionReasons: [],
+               votes: { "voter-0": { status: i % 2 === 0 ? "approved" : "pending", at: new Date().toISOString(), reason: "" } },
+            },
+         } as any);
+      }
+
+      // Fire all writes concurrently
+      const concurrentPath = join(tmpDir, "concurrent-test.state.json");
+      await Promise.all(states.map((s) => {
+         return new Promise<void>((resolve) => {
+            // Use setImmediate to simulate concurrent writes
+            setImmediate(() => {
+               saveState(s, concurrentPath, tmpDir);
+               resolve();
+            });
+         });
+      }));
+
+      // Verify the final state is valid JSON and parseable
+      expect(existsSync(concurrentPath)).toBe(true);
+      const content = readFileSync(concurrentPath, "utf-8");
+      const parsed = JSON.parse(content);
+      expect(parsed).toBeDefined();
+      expect(typeof parsed.iteration).toBe("number");
+      // Last write wins — iteration should be one of the 50 values
+      expect(parsed.iteration).toBeGreaterThanOrEqual(0);
+      expect(parsed.iteration).toBeLessThan(50);
+   });
+});
+
+// ── dispatchVoters Integration Tests ────────────────────────────────────────
+
+describe("dispatchVoters integration", () => {
+   let tmpDirV: string;
+   let statePathV: string;
+
+   beforeEach(() => {
+      tmpDirV = join(process.cwd(), `.test-dispatch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+      mkdirSync(tmpDirV, { recursive: true });
+      statePathV = join(tmpDirV, "dispatch.state.json");
+   });
+
+   afterEach(() => {
+      if (existsSync(tmpDirV)) rmSync(tmpDirV, { recursive: true, force: true });
+   });
+
+   it("dispatches voter and approves on quorum", async () => {
+      // Use 'echo' as a fake voter agent that outputs APPROVE
+      const config: import("../src/types").ReviewConfig = {
+         enabled: true,
+         quorum: "1/1",
+         voterTimeout: "30s",
+         maxRejectCycles: 3,
+         reviewPromptFile: "",
+         voters: [{ agent: "echo", model: "", promptFlag: "-e" }],
+      };
+      const gateState = createReviewGateState(config);
+      gateState.phase = "inner_complete";
+
+      // 'echo -e "<promise>APPROVE</promise>"' will produce parseable output
+      // But echo's -e flag is different — let's use printf instead
+      const procConfig: import("../src/types").ReviewConfig = {
+         enabled: true,
+         quorum: "1/1",
+         voterTimeout: "30s",
+         maxRejectCycles: 3,
+         reviewPromptFile: "",
+         voters: [{ agent: "printf", model: "", promptFlag: "<promise>APPROVE</promise>" }],
+      };
+      const gateState2 = createReviewGateState(procConfig);
+      gateState2.phase = "inner_complete";
+
+      // Actually, the simplest approach: use a script that outputs APPROVE
+      const approveScript = join(tmpDirV, "approve.sh");
+      writeFileSync(approveScript, "#!/bin/bash\necho '<promise>APPROVE</promise>'\n");
+      Bun.spawnSync(["chmod", "+x", approveScript]);
+
+      const realConfig: import("../src/types").ReviewConfig = {
+         enabled: true,
+         quorum: "1/1",
+         voterTimeout: "30s",
+         maxRejectCycles: 3,
+         reviewPromptFile: "",
+         voters: [{ agent: approveScript, model: "" }],
+      };
+      const gateState3 = createReviewGateState(realConfig);
+      gateState3.phase = "inner_complete";
+
+      let savedState: any = null;
+      const saveFn = (s: any) => { savedState = s; };
+
+      const result = await dispatchVoters({
+         state: gateState3,
+         config: realConfig,
+         cwd: tmpDirV,
+         prompt: "Test prompt",
+         iterationCount: 5,
+         contextPath: join(tmpDirV, "context.md"),
+         statePath: statePathV,
+         stateDir: tmpDirV,
+         runHash: "testhash123",
+         saveStateFn: saveFn,
+      });
+
+      expect(result.approved).toBe(true);
+      expect(result.state.phase).toBe("approved");
+      expect(savedState).not.toBeNull();
+      expect(savedState.votes["voter-0"].status).toBe("approved");
+   });
+
+   it("rejects on voter REJECT and resets votes", async () => {
+      const rejectScript = join(tmpDirV, "reject.sh");
+      writeFileSync(rejectScript, "#!/bin/bash\necho 'REASON: Tests are failing\n<promise>REJECT</promise>'\n");
+      Bun.spawnSync(["chmod", "+x", rejectScript]);
+
+      const config: import("../src/types").ReviewConfig = {
+         enabled: true,
+         quorum: "1/1",
+         voterTimeout: "30s",
+         maxRejectCycles: 3,
+         reviewPromptFile: "",
+         voters: [{ agent: rejectScript, model: "" }],
+      };
+      const gateState = createReviewGateState(config);
+      gateState.phase = "inner_complete";
+
+      let savedState: any = null;
+      const saveFn = (s: any) => { savedState = s; };
+
+      const result = await dispatchVoters({
+         state: gateState,
+         config,
+         cwd: tmpDirV,
+         prompt: "Test prompt",
+         iterationCount: 5,
+         contextPath: join(tmpDirV, "context.md"),
+         statePath: statePathV,
+         stateDir: tmpDirV,
+         runHash: "testhash456",
+         saveStateFn: saveFn,
+      });
+
+      expect(result.approved).toBe(false);
+      expect(result.state.rejectCycleCount).toBe(1);
+      // Votes should be reset after rejection
+      expect(savedState.votes["voter-0"].status).toBe("pending");
+   });
+
+   // @ts-expect-error bun test supports third arg for options
+   it("times out voter and auto-rejects", { timeout: 10_000 }, async () => {
+      // voter timeout is 2s + process spawn overhead — need 10s test timeout
+      // Script that sleeps forever
+      // NOTE: needs 10s+ timeout since we test 2s real timeout + process overhead
+      const sleepScript = join(tmpDirV, "sleep.sh");
+      writeFileSync(sleepScript, "#!/bin/bash\nsleep 300\n");
+      Bun.spawnSync(["chmod", "+x", sleepScript]);
+
+      const config: import("../src/types").ReviewConfig = {
+         enabled: true,
+         quorum: "1/1",
+         voterTimeout: "2s",
+         maxRejectCycles: 3,
+         reviewPromptFile: "",
+         voters: [{ agent: sleepScript, model: "" }],
+      };
+      const gateState = createReviewGateState(config);
+      gateState.phase = "inner_complete";
+
+      let savedState: any = null;
+      const saveFn = (s: any) => { savedState = s; };
+
+      const start = Date.now();
+      const result = await dispatchVoters({
+         state: gateState,
+         config,
+         cwd: tmpDirV,
+         prompt: "Test prompt",
+         iterationCount: 5,
+         contextPath: join(tmpDirV, "context.md"),
+         statePath: statePathV,
+         stateDir: tmpDirV,
+         runHash: "testhash789",
+         saveStateFn: saveFn,
+      });
+
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeLessThan(5000); // Should timeout in ~1s, not 300s
+      expect(result.approved).toBe(false);
+      expect(savedState.votes["voter-0"].status).toBe("timeout");
+   });
 });

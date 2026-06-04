@@ -298,7 +298,7 @@ export async function dispatchVoters(params: {
          const timeoutPromise = new Promise<void>((resolve) => {
             setTimeout(() => {
                timedOut = true;
-               try { proc.kill(); } catch {}
+               try { proc.kill("SIGKILL"); } catch {}
                resolve();
             }, timeoutMs);
          });
@@ -307,8 +307,8 @@ export async function dispatchVoters(params: {
 
          await Promise.race([exitPromise, timeoutPromise]);
 
-         voterOutput = await new Response(proc.stdout).text();
-         voterError = await new Response(proc.stderr).text();
+         voterOutput = timedOut ? "" : await new Response(proc.stdout).text();
+         voterError = timedOut ? "" : await new Response(proc.stderr).text();
       } catch (err) {
          console.warn(`⚠️ Voter ${voterKey} failed: ${err}`);
          voterOutput = "";
