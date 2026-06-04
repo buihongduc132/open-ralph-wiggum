@@ -978,6 +978,10 @@ Learn more: https://ghuntley.com/ralph/
       }
 
       const now = new Date().toISOString();
+      // Defensive: ensure votes object exists (corrupted state file guard)
+      if (!reviewState.reviewGate.votes) {
+         reviewState.reviewGate.votes = {};
+      }
       if (action === "approve") {
          reviewState.reviewGate.votes[voterKey] = { status: "approved", at: now, reason: "" };
       } else {
@@ -3397,10 +3401,12 @@ Unable to read ${currentTasksFileLabel()}
          console.warn(`\n⚠️ Detected stale review gate state (phase: waiting_review). Previous run may have crashed during voter dispatch.`);
          console.warn(`   Resetting review gate to inner_complete for re-dispatch.`);
          state.reviewGate.phase = "inner_complete";
-         // Reset all votes to pending
-         for (const key of Object.keys(state.reviewGate.votes)) {
-            state.reviewGate.votes[key] = { status: "pending", at: "", reason: "" };
+         // Reset all votes to pending (defensive: handle missing/corrupted votes)
+         const votes = state.reviewGate.votes || {};
+         for (const key of Object.keys(votes)) {
+            votes[key] = { status: "pending", at: "", reason: "" };
          }
+         state.reviewGate.votes = votes;
       }
 
       // Update stalling config if resuming (allow runtime override)

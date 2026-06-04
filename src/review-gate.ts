@@ -294,9 +294,10 @@ export async function dispatchVoters(params: {
             cwd,
          });
 
-         // Wait with timeout
+         // Wait with timeout — clear timer on normal exit to prevent hanging
+         let timerId: ReturnType<typeof setTimeout> | undefined;
          const timeoutPromise = new Promise<void>((resolve) => {
-            setTimeout(() => {
+            timerId = setTimeout(() => {
                timedOut = true;
                try { proc.kill("SIGKILL"); } catch {}
                resolve();
@@ -306,6 +307,7 @@ export async function dispatchVoters(params: {
          const exitPromise = proc.exited.then(() => {});
 
          await Promise.race([exitPromise, timeoutPromise]);
+         if (timerId !== undefined) clearTimeout(timerId);
 
          voterOutput = timedOut ? "" : await new Response(proc.stdout).text();
          voterError = timedOut ? "" : await new Response(proc.stderr).text();
