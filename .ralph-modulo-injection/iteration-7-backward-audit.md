@@ -2,40 +2,34 @@
 
 **Date**: 2026-06-04
 **Type**: READ-ONLY audit, no implementation changes
-**Auditor**: Self-audit + external (claude -p)
+**Auditor**: Self-audit + external verification
 
 ## Test Results
 
-- Full suite: **1384 pass, 27 skip, 0 fail** (52.40s)
-- Injection tests: **364 tests, 0 failures**
+- Full suite: **1385 pass, 27 skip, 1 fail** (flaky — see F12 below)
+- Injection tests: **365 pass, 0 failures** (isolated run)
+- Flaky test passes in isolation (confirmed 3/3)
 
 ## Backward Hunt Results
 
 | Check | Result |
 |-------|--------|
-| TOML parsing correctness | ✅ PASS (9/10) |
-| Regex collision with {{iteration}} etc. | ✅ PASS (10/10) |
-| Append-mode scaffolding integrity | ✅ PASS (9/10) |
-| PLACEHOLDER gate fires every iteration | ✅ PASS (10/10) |
-| Implementation drift from plan | ✅ NO DRIFT (9/10) |
-| Over/under-engineering | ✅ WELL-CALIBRATED (9/10) |
-
-## External Verifier Score: 9.3/10
+| TOML parsing correctness | ✅ PASS — Bun.TOML.parse handles all edge cases (whitespace, corrupt, empty) |
+| Regex collision with `{{iteration}}` etc. | ✅ PASS — `/\{\{inject:([a-zA-Z0-9_-]+)\}\}/g` only matches `inject:` prefix |
+| Append-mode scaffolding integrity | ✅ PASS — header regex prevents duplicates, separator logic handles missing newline |
+| PLACEHOLDER gate fires every iteration | ✅ PASS — double-load pattern (F9 fix) catches scaffolded sections |
+| Implementation drift from plan | ✅ NO DRIFT — all T1-T8 implemented per spec |
+| Over/under-engineering | ✅ WELL-CALIBRATED — cross-anchor bleed prevention, path security, performance guard |
+| Injection runs before variable replacement | ✅ PASS — `resolveInjectPlaceholders()` at line 2700, `.replace(/\{\{iteration\}\}/g, ...)` at line 2721 |
+| `validateRulesToml` early-out on malformed rules | ✅ PASS — F10 fix from prior audit confirmed working |
 
 ## Findings
 
 | ID | Severity | Description | Action |
 |----|----------|-------------|--------|
-| F10 | Minor (cosmetic) | `validateRulesToml` iterates `Object.entries(toml.rules)` even when rules is malformed (string/array), producing misleading per-character warnings | Next forward iteration: add early-out after malformed-rules warning |
-| F11 | Info | Previous findings F1-F9 from earlier audits all resolved in commits `84fa224`, `15c6d4e`, `2d33920` | N/A |
-
-## Previous Finding Resolution Verification
-
-- F1 (schema validation): ✅ Fixed — `validateRulesToml()` validates all fields
-- F4 (substring idempotency): ✅ Fixed — `headerRegex` with proper anchoring
-- F5 (leading newline): ✅ Fixed — separator logic only adds `\n` when needed
-- F6, F7: ✅ Acceptable as-designed
-- F2, F3: ✅ Acceptable (null = opt-out, by design)
+| F12 | Minor (pre-existing flaky) | `stall retries > stalls, clears the fallback blacklist, and restarts the rotation cycle after all fallbacks are exhausted` times out (5002ms) under full-suite load. Passes in isolation. Unrelated to injection work — observed in prior audits (I7, I14, I44). | Non-blocking. Consider increasing timeout or marking as `skip` under CI in future iteration. |
+| F10 | ✅ RESOLVED | `validateRulesToml` early-out on malformed rules — fixed in prior iteration, confirmed in F10 test (365 tests) | N/A |
+| F1-F9 | ✅ RESOLVED | All prior findings resolved in commits `84fa224`, `15c6d4e`, `2d33920` | N/A |
 
 ## Demotions
 
@@ -46,17 +40,17 @@
 | Task | Status | Notes |
 |------|--------|-------|
 | T1 — TOML schema types | ✅ completed | RuleEntry, RulesConfig, StateInjectionConfig, RalphRulesToml |
-| T2 — loadRulesToml() | ✅ completed | stateDir→cwd, null if missing, no caching |
-| T3 — resolveInjectPlaceholders | ✅ completed | Cross-anchor bleed prevention, state isolation |
-| T4 — scaffoldRulesToml | ✅ completed | Append-mode, idempotent, header regex |
-| T5 — PLACEHOLDER gate | ✅ completed | F9 double-load, case-insensitive, every iteration |
-| T6 — init-rules subcommand | ✅ completed | No-op if exists, stateDir |
+| T2 — loadRulesToml() | ✅ completed | stateDir→cwd, null if missing, corrupt=fatal, no caching |
+| T3 — resolveInjectPlaceholders | ✅ completed | Cross-anchor bleed prevention, state isolation, path security |
+| T4 — scaffoldRulesToml | ✅ completed | Append-mode, idempotent (header regex), separator logic |
+| T5 — PLACEHOLDER gate | ✅ completed | Double-load pattern, case-insensitive, every iteration |
+| T6 — init-rules subcommand | ✅ completed | No-op if exists, stateDir, `getDefaultRulesToml()` |
 | T7 — ralph-run skill update | ✅ completed | SKILL.md + references/rules-toml.md |
-| T8 — Tests | ✅ completed | 364 tests, comprehensive edge case coverage |
+| T8 — Tests | ✅ completed | 365 tests across deterministic-injection.test.ts |
 
 ## Conclusion
 
-No demotions. All 8 tasks remain completed. Implementation is sound. One cosmetic finding (F10) recorded for next forward iteration — non-blocking, does not affect correctness or safety.
+No demotions. All 8 tasks remain completed. Implementation is sound and matches the plan. One pre-existing flaky test (F12) recorded — unrelated to injection work, non-blocking.
 
 ## Next Checkpoints
 
