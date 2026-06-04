@@ -44,6 +44,7 @@ function writeStateFile(runHash: string, reviewGate?: Record<string, unknown>) {
       model: "test-model",
       agent: "opencode",
       runHash,
+      runCwd: tmpDir,  // Capture CWD for cross-directory validation
       reviewGate: reviewGate ?? {
          enabled: true,
          quorum: "1/1",
@@ -167,5 +168,17 @@ describe("as-review CLI", () => {
       const result = await runAsReview(["approve", "--hash", hash]);
       // Should still succeed (vote recorded)
       expect(result.exitCode).toBe(0);
+   });
+
+   it("I7: CWD mismatch exits with error (cross-directory contamination guard)", async () => {
+      const hash = "cwdmmismatch00000";
+      const state = writeStateFile(hash);
+      // Simulate state from a different directory
+      state.runCwd = "/totally/different/project";
+      writeFileSync(statePath, JSON.stringify(state, null, 2));
+
+      const result = await runAsReview(["approve", "--hash", hash]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("CWD mismatch");
    });
 });

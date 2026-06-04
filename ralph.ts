@@ -941,11 +941,27 @@ Learn more: https://ghuntley.com/ralph/
          process.exit(1);
       }
 
+      // CWD validation: prevent cross-directory vote contamination (G22)
+      if (reviewState.runCwd && reviewState.runCwd !== process.cwd()) {
+         console.error(`Error: CWD mismatch. Ralph running in: ${reviewState.runCwd}, Current: ${process.cwd()}`);
+         process.exit(1);
+      }
+
+      // Warn if Ralph loop is dead (pid not running) but still allow vote
+      if (reviewState.active && reviewState.pid) {
+         try {
+            process.kill(reviewState.pid, 0); // signal 0 = existence check
+         } catch {
+            console.warn(`Warning: Ralph loop (pid ${reviewState.pid}) is not running. Vote will still be recorded.`);
+         }
+      }
+
       if (action === "status") {
          // Output status as JSON
          const rg = reviewState.reviewGate;
          console.log(JSON.stringify({
             runHash: reviewState.runHash,
+            runCwd: reviewState.runCwd,
             phase: rg?.phase ?? "disabled",
             rejectCycleCount: rg?.rejectCycleCount ?? 0,
             votes: rg?.votes ?? {},
@@ -3354,6 +3370,7 @@ Unable to read ${currentTasksFileLabel()}
          stallRetryMinutes,
          fallbackBlacklist: [],
          runHash: generateRunHash(process.cwd(), stateDirInput),
+         runCwd: process.cwd(),
          reviewGate: reviewConfig ? createReviewGateState(reviewConfig) : undefined,
       };
 
@@ -3367,6 +3384,9 @@ Unable to read ${currentTasksFileLabel()}
       // Initialize review gate fields for backward compat (old state files)
       if (!state.runHash) {
          state.runHash = generateRunHash(process.cwd(), stateDirInput);
+      }
+      if (!state.runCwd) {
+         state.runCwd = process.cwd();
       }
       if (reviewConfig && !state.reviewGate) {
          state.reviewGate = createReviewGateState(reviewConfig);

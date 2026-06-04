@@ -105,6 +105,7 @@ export interface RalphState {
    fallbackBlacklist?: string[];
    // Review gate fields
    runHash?: string;
+   runCwd?: string;
    reviewGate?: ReviewGateState;
 }
 

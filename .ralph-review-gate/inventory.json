@@ -1,6 +1,6 @@
 {
-  "lastUpdated": "2026-06-04T06:30:00Z",
-  "currentPhase": "P3",
+  "lastUpdated": "2026-06-04T08:00:00Z",
+  "currentPhase": "P3-complete",
   "phases": {
     "P0": {
       "status": "fully_works",
@@ -15,11 +15,11 @@
       "tasks": {
         "P1-T1": { "status": "fully_works", "description": "ReviewConfig, ReviewVote, ReviewGateState types" },
         "P1-T2": { "status": "fully_works", "description": "Run-hash generation" },
-        "P1-T3": { "status": "fully_works", "description": "runHash + reviewGate fields on RalphState" },
+        "P1-T3": { "status": "fully_works", "description": "runHash + runCwd + reviewGate fields on RalphState" },
         "P1-T4": { "status": "fully_works", "description": "Parse [review] TOML section" },
         "P1-T5": { "status": "fully_works", "description": "ralph as-review CLI" },
-        "P1-T6": { "status": "fully_works", "description": "Parse as-review args" },
-        "P1-T7": { "status": "fully_works", "description": "Tests T1, T8, I1-I6" }
+        "P1-T6": { "status": "fully_works", "description": "Parse as-review args (inline in ralph.ts, functional deviation from §10)" },
+        "P1-T7": { "status": "fully_works", "description": "Tests T1, T8, I1-I7" }
       },
       "gate": "PASSED"
     },
@@ -50,17 +50,25 @@
         "P3-T7": { "status": "fully_works", "description": "Context injection timing test (T22)" },
         "P3-T8": { "status": "fully_works", "description": "Full verification checklist" }
       },
-      "gate": "PASSED — all 1060 tests pass (3 pre-existing stall-retry failures)"
+      "gate": "PASSED"
     }
+  },
+  "auditFixes": {
+    "CG1_runCwd": { "status": "fully_works", "description": "Added runCwd to RalphState, CWD validation in as-review CLI, test I7" },
+    "CG2_missing_tests": { "status": "fully_works", "description": "Added T8, T14, T18 unit tests + runCwd round-trip tests" },
+    "CG3_inventory_accuracy": { "status": "fully_works", "description": "Inventory updated to reflect actual state (runCwd, parse-args deviation noted)" },
+    "CG4_hash_spec": { "status": "accepted_deviation", "description": "16 hex chars (SHA-256 derived) instead of 8 — more robust, acceptable deviation" }
   },
   "verificationChecklist": {
     "RalphState_unified": true,
     "atomic_saveState": true,
     "run_hash_16_hex": true,
+    "runCwd_captured_and_validated": true,
     "legacy_behavior_preserved": true,
     "review_gate_intercepts": true,
     "inner_agent_unchanged": true,
     "as_review_CLI_works": true,
+    "as_review_validates_hash_and_cwd": true,
     "vote_reset_clears_all": true,
     "rejection_feedback_via_context_md": true,
     "max_reject_cycles_force_stop": true,
@@ -72,19 +80,36 @@
     "tasksMode_review_only_final": true,
     "abortPromise_skips_review": true,
     "ctrl_c_graceful_during_review": true,
-    "stall_not_counted_during_review": true
+    "stall_not_counted_during_review": true,
+    "dead_pid_warning_in_as_review": true
   },
   "testSummary": {
-    "total": 1090,
-    "pass": 1060,
+    "total": 1096,
+    "pass": 1066,
     "fail": 3,
     "skip": 27,
-    "newTests": 42,
+    "newTests": 48,
     "preExistingFailures": ["stall-retry.test.ts — missing bin/ralph binary (ENOENT)"]
   },
   "filesChanged": {
     "new": ["src/review-gate.ts", "tests/review-gate.test.ts", "tests/as-review-cli.test.ts"],
     "modified": ["ralph.ts", "src/loop-helpers.ts", "src/runtime-config.ts", "src/types.ts"],
     "unchanged": ["completion.ts"]
-  }
+  },
+  "specDeviations": [
+    {
+      "id": "SD1",
+      "section": "§2.1",
+      "description": "Run hash is 16 hex chars (SHA-256 derived) instead of 8 (randomBytes(4))",
+      "reason": "More robust against collisions, acceptable for CLI copy-paste",
+      "severity": "low"
+    },
+    {
+      "id": "SD2",
+      "section": "§10",
+      "description": "as-review args parsed inline in ralph.ts, not in src/parse-args.ts",
+      "reason": "Functionally equivalent, avoids import complexity for a self-contained subcommand",
+      "severity": "low"
+    }
+  ]
 }

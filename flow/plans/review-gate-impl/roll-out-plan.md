@@ -13,11 +13,11 @@
 ### Phase 1 — Types + Run Hash + CLI ✅
 - [x] **P1-T1**: Add `ReviewConfig`, `ReviewVote`, `ReviewGateState` types to `src/types.ts`
 - [x] **P1-T2**: Implement run-hash generation (SHA-256, 16 hex chars, randomBytes(8))
-- [x] **P1-T3**: Add `runHash` + `reviewGate` fields to unified `RalphState`
+- [x] **P1-T3**: Add `runHash` + `runCwd` + `reviewGate` fields to unified `RalphState`
 - [x] **P1-T4**: Parse `[review]` TOML section in `src/runtime-config.ts`
 - [x] **P1-T5**: Implement `ralph as-review` CLI subcommand (approve/reject/status + --hash)
 - [x] **P1-T6**: Parse `as-review` args in `src/parse-args.ts`
-- [x] **P1-T7**: Tests T1, T8, I1-I6
+- [x] **P1-T7**: Tests T1, T8, I1-I7 (I7: CWD mismatch test added)
 - **Gate**: `bun test` pass. `as-review` CLI functional.
 
 ### Phase 2 — Review Gate + Voter Dispatch ✅
@@ -29,7 +29,7 @@
 - [x] **P2-T6**: Voter timeout → auto-reject
 - [x] **P2-T7**: Graceful shutdown on Ctrl+C during review (phase = "interrupted")
 - [x] **P2-T8**: Struggle/stall NOT counted during review wait
-- [x] **P2-T9**: Tests T2-T7, T9-T20, T22
+- [x] **P2-T9**: Tests T2-T7, T9-T22 (T8, T14, T18 added in audit fix)
 - **Gate**: `bun test` pass. Full review flow works end-to-end.
 
 ### Phase 3 — Edge Cases + Verification ✅
