@@ -1,0 +1,149 @@
+{
+  "suites": [
+    {
+      "name": "Config (Task 3)",
+      "missing_cases": [
+        "Race: resolveConfig called while worktree directory is being created/deleted by concurrent scaffold — _findGoalFile readdirSync can throw ENOENT if directory is removed between existsSync and readdirSync",
+        "Path traversal: name='../../../etc/passwd' — pm2Name becomes 'ralph-../../../etc/passwd', stateDir resolves to arbitrary path"
+      ],
+      "edge_cases": [
+        "Symlinked worktree — _findGoalFile follows symlinks via readdirSync, may find _GOAL in symlink target, not the worktree itself",
+        "projectRoot on NFS/CIFS mount — existsSync may be stale. Config should not rely on filesystem state for pure convention resolution",
+        "Name with characters illegal on Windows (CON, PRN, NUL) — not relevant for Linux but naming convention not enforced"
+      ]
+    },
+    {
+      "name": "StateReader (Task 4)",
+      "missing_cases": [
+        "Race: StateReader.read() while ralph is actively writing state.json — readFileSync reads partial/truncated JSON (ralph uses atomic write via tmp+rename? unknown — if not, this is a real race)",
+        "State file is a symlink to a file that disappears between existsSync and readFileSync — TOCTOU race",
+        "State file with BOM (UTF-8 BOM marker) — JSON.parse may fail on \\uFEFF prefix"
+      ],
+      "edge_cases": [
+        "Read-only filesystem — readFileSync itself won't fail, but if path resolution is wrong, existsSync may return false",
+        "State file larger than available memory — readFileSync loads entire file, no streaming",
+        "startedAt is not ISO-8601 (e.g., Unix timestamp number instead of string) — elapsedHours uses new Date(number) which produces 1970-based date"
+      ]
+    },
+    {
+      "name": "InventoryReader (Task 4)",
+      "missing_cases": [
+        "Race: reading inventory.json while ralph is writing — same partial-read concern as StateReader",
+        "Inventory with circular references in phases (JSON doesn't support this but a corrupted file could have duplicate keys with different values)"
+      ],
+      "edge_cases": [
+        "Schema drift: inventory with 'last_updated' (snake_case) instead of 'lastUpdated' — field silently ignored, no warning",
+        "Phase key ordering: phases are Record<string,...> — iteration order depends on JS engine, completionPercentage may be non-deterministic if order matters for display",
+        "Task status is an array instead of string — type cast at runtime will produce unexpected behavior"
+      ]
+    },
+    {
+      "name": "RulesReader (Task 4)",
+      "missing_cases": [
+        "TOML file with circular reference or deeply nested structures — smol-toml parsing may hang or OOM",
+        "TOML file encoding mismatch (UTF-16, Latin-1) — readFileSync with 'utf-8' on non-UTF8 produces garbage"
+      ],
+      "edge_cases": [
+        "TOML with extremely long string values (multi-MB prompt) — parsed successfully but may OOM downstream",
+        "TOML with rules that have 0 entries — rules.modulo.entries would be empty array, no test for this",
+        "smol-toml version incompatibility — parsing behavior may differ across versions, no pinning test"
+      ]
+    },
+    {
+      "name": "Pm2Client (Task 5)",
+      "missing_cases": [
+        "PM2 daemon not running — pm2.connect() will retry and timeout. Test should verify error message is actionable, not a raw ECONNREFUSED",
+        "PM2 socket permission denied — if PM2 daemon socket is owned by different user, connect fails with EACCES",
+        "PM2 process in 'launching' state — status field may be 'launching' not 'online'/'stopped', not handled in any consumer",
+        "pm2.list() returns null (not an error, just empty) — some PM2 versions return null instead of []",
+        "pm2.start() called with script that doesn't exist — PM2 will report error asynchronously, need to verify error propagation",
+        "Concurrent connect/disconnect from multiple async operations — connected flag is not thread-safe (single-threaded JS, but async interleaving can cause issues)"
+      ],
+      "edge_cases": [
+        "PM2 process with monit: null (not just missing fields) — pm.monit?.memory ?? 0 handles null but not tested",
+        "Process name with non-'ralph-' prefix that coincidentally appears in list — filtering is correct but not tested with mixed PM2 processes",
+        "PM2 restart_time overflow — PM2 tracks restarts as integer, very long-running daemon could have huge values",
+        "pm2_env.args is a string instead of array — type guard Array.isArray exists but not tested"
+      ]
+    },
+    {
+      "name": "Formatter (Task 6)",
+      "missing_cases": [
+        "Zero processes — formatListTable([]) should produce header-only or empty output, formatDoctorOutput with all empty arrays",
+        "Very long process name (>24 chars) — pad() truncates but doesn't indicate truncation (no '…')",
+        "Name with exactly 24 chars — boundary: pad() should return it as-is, not tested",
+        "All processes are stopped — formatDoctorOutput would only show stopped category, output format untested"
+      ],
+      "edge_cases": [
+        "ANSI color codes in formatted output break column alignment — formatStatus wraps in ANSI but pad() counts ANSI bytes as visible chars",
+        "Negative numbers (restarts: -1) — pad(String(-1), 10) works but semantically wrong",
+        "Unicode characters in name — pad() uses string.length which counts code units, not grapheme clusters. Emoji names would misalign",
+        "formatDoctorOutput with 0 healthy processes — still prints HEALTHY header with empty list, looks wrong"
+      ]
+    },
+    {
+      "name": "GoalFileManager (Task 7)",
+      "missing_cases": [
+        "Race: scaffold creates _GOAL file while GoalFileManager.injectHeader is writing — no file locking, corrupted write possible",
+        "Two _GOAL files: _GOAL.md and _GOAL_feature.md — findGoalFile uses Array.find which returns first match. Which one? Depends on readdir order (filesystem-dependent, not alphabetical). Not specified, not tested"
+      ],
+      "edge_cases": [
+        "_GOAL file is a symlink — writeFileSync follows symlink, writes to target. If target is read-only, throws",
+        "_GOAL file with CRLF line endings — injectHeader splits on '\\n' but content may have '\\r\\n'. Reassembled content changes line endings",
+        "Header injection when '# _GOAL' appears inside a markdown code block — titleEnd would point to wrong location",
+        "worktreePath is root '/' — readdirSync('/') would scan entire root filesystem for _GOAL files"
+      ]
+    },
+    {
+      "name": "Doctor (Task 8)",
+      "missing_cases": [
+        "Precedence bug: stopped process with 200 restarts — code checks status==='stopped' FIRST, so it goes to 'stopped' not 'crashLooping'. Is this correct? Not documented, not tested",
+        "Process with progressPct=-1 (no inventory) AND noProgress>=10 — should be 'stuck' but -1 >= 100 is false, so falls through correctly. But what if progressPct is undefined?",
+        "Process with status 'errored' — falls through all conditions to 'healthy'. An errored process classified as healthy is a bug"
+      ],
+      "edge_cases": [
+        "Very large input array (1000+ processes) — O(n) is fine but output formatting may be slow",
+        "Process with NaN or Infinity values — noProgress=Infinity, restarts=NaN — comparison operators produce false, process becomes 'healthy'",
+        "Duplicate process names in input — not prevented, both appear in output",
+        "Threshold constants are not configurable — no way to test with different thresholds"
+      ]
+    },
+    {
+      "name": "ScaffoldBuilder (Task 9)",
+      "missing_cases": [
+        "Race: two scaffoldStateDir calls on same directory simultaneously — both check existsSync, both see false, both mkdirSync — second throws EEXIST",
+        "Scaffold while ralph-admin start is running — PM2 process starts writing to state dir before scaffold finishes creating files"
+      ],
+      "edge_cases": [
+        "State dir path contains a symlink component — existsSync follows symlinks, mkdirSync may fail if symlink target doesn't exist",
+        "Name containing '/' or null bytes — path traversal vulnerability, stateDir could escape expected directory tree",
+        "Existing state dir is a file, not a directory — existsSync returns true, skipped, but subsequent writeFileSync to rules.toml fails because parent is a file",
+        "Unicode in name — DEFAULT_RULES_TOML template uses name in comment only, but if name has special TOML chars, replacement is safe (it's in a comment)"
+      ]
+    }
+  ],
+  "additional_test_suites_needed": [
+    {
+      "name": "Integration: scaffold + start + doctor end-to-end",
+      "reason": "No test verifies the full workflow: scaffold creates state dir → start launches PM2 → doctor detects it as healthy. This is the primary user flow and has zero test coverage"
+    },
+    {
+      "name": "Integration: scaffold + concurrent ralph-admin run",
+      "reason": "Race conditions between scaffold, start, and status commands are likely in real use. Two terminals running ralph-admin simultaneously could corrupt state files"
+    },
+    {
+      "name": "Error handling: PM2 daemon lifecycle",
+      "reason": "All PM2 operations assume daemon is running. Need test suite for: PM2 not installed, PM2 not running, PM2 socket stale, PM2 version incompatibility"
+    },
+    {
+      "name": "Schema validation: state/inventory/rules schema drift",
+      "reason": "All readers blindly cast parsed JSON/TOML to typed interfaces. No runtime validation. If ralph changes its schema (adds required fields, renames fields, changes types), readers silently return malformed objects that crash downstream. Need ajoi/zod validation tests"
+    },
+    {
+      "name": "Concurrency: file locking under parallel access",
+      "reason": "StateReader, InventoryReader, GoalFileManager all do readFileSync/writeFileSync with no locking. ScaffoldBuilder checks existsSync before write — classic TOCTOU. Need tests that verify behavior under concurrent access (even if solution is 'graceful error')"
+    }
+  ],
+  "overall_sufficient": false,
+  "summary": "The test plan has significant gaps beyond what Reviewer #1 identified. Critical findings: (1) TOCTOU races in ScaffoldBuilder (existsSync then mkdirSync is not atomic) and GoalFileManager (read-check-write without locking). (2) Doctor classifies 'errored' processes as 'healthy' — this is a logic bug with no test. (3) Pm2Client has no tests for PM2-not-running, permission denied, or null responses from PM2 API. (4) Formatter's pad() function miscounts when ANSI escape codes are present — invisible bug that breaks table alignment. (5) No integration test for the primary workflow (scaffold → start → doctor). (6) No schema validation — all readers blindly trust file contents match TypeScript interfaces. (7) GoalFileManager picks first _GOAL file from readdir which is filesystem-order-dependent, not deterministic. Recommended: add 5 additional test suites for integration, error handling, schema drift, concurrency, and PM2 lifecycle."
+}

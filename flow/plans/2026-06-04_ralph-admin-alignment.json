@@ -1,0 +1,242 @@
+{
+  "aligned": [
+    {
+      "req": "CLI tool ralph-admin with 10 commands",
+      "task": "Task 1 (CLI stubs with commander), Task 10 (wire all commands to implementations)"
+    },
+    {
+      "req": "Reads ralph state from disk (state.json, inventory.json, rules.toml) — NO code imports",
+      "task": "Task 4 (StateReader, InventoryReader, RulesReader) — each reads from file path, parses locally"
+    },
+    {
+      "req": "Wraps PM2 for lifecycle (start, stop, restart, list)",
+      "task": "Task 5 (Pm2Client) — wraps pm2.connect/list/start/stop/restart/delete"
+    },
+    {
+      "req": "Scaffolds new loops — creates state dir, rules.toml, inventory.json",
+      "task": "Task 9 (ScaffoldBuilder) — scaffoldStateDir creates dir + rules.toml + inventory.json"
+    },
+    {
+      "req": "Injects working-directory header into _GOAL file",
+      "task": "Task 7 (GoalFileManager) — injectHeader with idempotent check for '## Working Directory'"
+    },
+    {
+      "req": "Tracks progress — reads inventory phases/tasks, displays completion percentage",
+      "task": "Task 4 (InventoryReader.completionPercentage, formatProgress, countByStatus)"
+    },
+    {
+      "req": "Detects anomalies — crash-looping, stuck, completed-but-still-running",
+      "task": "Task 8 (Doctor) — diagnose() with CRASH_LOOP_THRESHOLD=100, STUCK_THRESHOLD=10, COMPLETED_THRESHOLD=100"
+    },
+    {
+      "req": "OOP classes per domain: Pm2Client, StateReader, InventoryReader, RulesManager, ScaffoldBuilder, GoalFileManager, CliRouter",
+      "task": "All classes present: Pm2Client (Task 5), StateReader (Task 4), InventoryReader (Task 4), RulesReader (Task 4, renamed from RulesManager), ScaffoldBuilder (Task 9), GoalFileManager (Task 7), CliRouter via Commander (Task 1)"
+    },
+    {
+      "req": "DRY — shared base for reading; PM2 ops via single wrapper",
+      "task": "Schemas defined once in Task 2, each reader is separate class, Pm2Client is single PM2 wrapper"
+    },
+    {
+      "req": "Performance — lazy reads, Promise.all, cache PM2 list per invocation",
+      "task": "Readers read on demand (Task 4), Pm2Client.listAll caches per call, Task 10 wiring uses Promise.all for parallel state+inventory reads"
+    },
+    {
+      "req": "Fail-closed — doctor shows problems, start validates state dir",
+      "task": "Doctor defaults to surfacing anomalies (Task 8), start resolves config before PM2 launch (Task 10)"
+    },
+    {
+      "req": "Separation of concerns — never writes to state.json, only writes rules.toml, inventory.json (scaffold), _GOAL header",
+      "task": "ScaffoldBuilder only writes rules.toml + inventory.json (Task 9), GoalFileManager writes _GOAL header (Task 7), StateReader/InventoryReader are read-only (Task 4)"
+    },
+    {
+      "req": "Separate repository — ralph-admin in own repo",
+      "task": "§0 Architecture Decision Record: buihongduc132/ralph-admin (NEW)"
+    },
+    {
+      "req": "File format contracts defined locally (not imported)",
+      "task": "Task 2: RalphState, Inventory, RulesTOML schemas defined in src/schemas/"
+    },
+    {
+      "req": "List output format with columns NAME/STATUS/ITER/MODEL/PROGRESS/UPTIME/RESTARTS",
+      "task": "Task 6 (Formatter.formatListTable)"
+    },
+    {
+      "req": "Doctor output format with CRASH-LOOPING/COMPLETED-BUT-RUNNING/HEALTHY categories",
+      "task": "Task 6 (Formatter.formatDoctorOutput) + Task 8 (Doctor.diagnose)"
+    },
+    {
+      "req": "Convention resolution (name → paths)",
+      "task": "Task 3 (LoopConfig) — resolves pm2Name, stateDir, stateFile, inventoryFile, rulesFile, worktreePath, goalFile, branch from name"
+    },
+    {
+      "req": "Tech stack: Bun, pm2 npm, smol-toml, commander, bun:test",
+      "task": "Task 1 Step 2 installs pm2, smol-toml, commander; tsconfig targets ES2022 with bun-types"
+    },
+    {
+      "req": "Build: bun build → single binary bin/ralph-admin",
+      "task": "Task 11 — bun build src/cli.ts --compile --outfile bin/ralph-admin"
+    },
+    {
+      "req": "_GOAL header injection is idempotent",
+      "task": "Task 7 — GoalFileManager.injectHeader checks for '## Working Directory', returns {skipped: true} if present"
+    },
+    {
+      "req": "Scaffold writes rules.toml with defaults (I%5 sync, I%7 backward, I%11 deep review, I%15 guard)",
+      "task": "Task 9 — DEFAULT_RULES_TOML includes entries at 5, 7, 11, 15 with matching prompts"
+    },
+    {
+      "req": "Scaffold writes inventory.json with empty phases/tasks structure",
+      "task": "Task 9 — ScaffoldBuilder writes {lastUpdated, currentPhase: '', phases: {}}"
+    },
+    {
+      "req": "Scaffold is idempotent — does not overwrite existing files",
+      "task": "Task 9 — checks existsSync before writing; test verifies existing content preserved"
+    }
+  ],
+  "gaps": [
+    {
+      "req": "Scaffold step 1: Create git worktree via 'git worktree add ../repo-wt-my-feature -b wt/my-feature'",
+      "missing_task": true,
+      "detail": "Intention scaffold step 1 explicitly requires git worktree creation. Plan's ScaffoldBuilder (Task 9) only creates state dir + files. No git worktree creation code or test exists. Config (Task 3) resolves worktree path but doesn't create it."
+    },
+    {
+      "req": "Scaffold step 6: Output the ralph start command with correct --state-dir, --no-commit, --reuse-state flags",
+      "missing_task": true,
+      "detail": "Intention says scaffold should 'Output the ralph start command with correct flags' after creating everything. Plan's Task 10 scaffold wiring doesn't mention printing the start command. Users won't know what to run next."
+    },
+    {
+      "req": "Risk mitigation: 'Version field in state file; ralph-admin warns on unknown version'",
+      "missing_task": true,
+      "detail": "Intention's risk table requires a version field in RalphState and a warning when unknown version encountered. Plan's RalphState schema (§1.1) has no version field. No warning logic anywhere in plan."
+    },
+    {
+      "req": "Risk mitigation: 'Pin pm2 version'",
+      "missing_task": true,
+      "detail": "Intention's risk table says 'Pin pm2 version'. Plan's Task 1 Step 2 installs pm2 without version pin. No .nvmrc or engines field."
+    },
+    {
+      "req": "Start step 5: Verify process started (check pid)",
+      "missing_task": true,
+      "detail": "Intention's Start Behavior step 5 says 'Verify process started (check pid)'. Plan's Pm2Client.start() resolves on callback but doesn't verify the process is actually running afterward."
+    },
+    {
+      "req": "Concurrent safety: scaffold should warn/error if ralph process already running for that name",
+      "missing_task": true,
+      "detail": "Intention says 'only writes during scaffold (before ralph starts)' but plan has no guard against scaffolding while a ralph loop is already running for that name."
+    }
+  ],
+  "gold_plating": [
+    {
+      "task": "Task 6: Formatter class with pad(), formatStatus() helper functions",
+      "not_in_intention": false,
+      "note": "Traces to List Output and Doctor Output format requirements. Not gold-plating — intention specifies exact column layout."
+    },
+    {
+      "task": "Task 3: LoopConfig with resolution order (PM2 args → convention → CLI flags)",
+      "not_in_intention": false,
+      "note": "Traces to convention resolution implied by all commands. Intention mentions 'resolve from name convention'. Three-tier resolution is reasonable engineering."
+    },
+    {
+      "task": "Task 11: Build + Smoke Test (bun build --compile)",
+      "not_in_intention": false,
+      "note": "Traces to 'Build: bun build → single binary' in Tech Stack section."
+    }
+  ],
+  "architecture_match": {
+    "verdict": "PASS",
+    "checks": {
+      "separate_repo": "PASS — Plan specifies buihongduc132/ralph-admin as new repo",
+      "oop_no_god_file": "PASS — 11 classes across separate files, none > 150 lines",
+      "dry": "PASS — Schemas defined once in src/schemas/, readers don't duplicate parsing logic",
+      "pm2_wrapper": "PASS — Pm2Client wraps all pm2 programmatic API calls",
+      "filesystem_contract": "PASS — RalphState, Inventory, RulesTOML schemas defined locally with TypeScript interfaces",
+      "naming_mismatch": "NOTE — Intention says 'RulesManager' but plan calls it 'RulesReader'. Functionally equivalent (both read rules.toml), but naming diverges."
+    }
+  },
+  "performance": {
+    "verdict": "PASS_WITH_NOTES",
+    "lazy_reads": "PASS — All readers construct with file path, read() called on demand",
+    "promise_all": "PASS — Task 10 wiring mentions Promise.all for parallel state+inventory reads",
+    "pm2_connection_per_command": "PASS — Pm2Client.connect() is lazy, disconnect() called in finally block per command",
+    "note": "No explicit caching of PM2 process list within a single command invocation mentioned in Task 5. listAll() makes a fresh call each time. If list + doctor both call listRalph(), they make separate PM2 calls. Minor — could be optimized later."
+  },
+  "determinism": {
+    "verdict": "PASS",
+    "evidence": [
+      "All default values specified: --model bhd-litellm/role-smart, --agent pi, --max-iterations 999",
+      "All thresholds defined: CRASH_LOOP_THRESHOLD=100, STUCK_THRESHOLD=10, COMPLETED_THRESHOLD=100",
+      "All output formats specified with exact columns and ANSI codes",
+      "CLI parsing via commander — no interactive prompts",
+      "No 'choose this or that' language in any task step"
+    ]
+  },
+  "file_format_contracts": {
+    "verdict": "PASS_WITH_NOTES",
+    "ralph_state": "PASS — §1.1 defines RalphState interface with all fields intention mentions",
+    "inventory": "PASS — §1.2 defines Inventory with phases, tasks, status enum",
+    "rules_toml": "PASS — §1.3 defines RulesToml with rules and state_injection",
+    "note": "Missing version field in RalphState (see gaps). Intention's risk table requires it for drift detection."
+  },
+  "goal_header_idempotent": {
+    "verdict": "PASS",
+    "evidence": [
+      "GoalFileManager.injectHeader checks content.includes('## Working Directory') before injecting",
+      "Returns {skipped: true, injected: false} if header present",
+      "Test 'idempotent — skips if header already present' verifies this explicitly"
+    ]
+  },
+  "scaffold_completeness": {
+    "verdict": "FAIL",
+    "intention_steps": [
+      "1. Create worktree: git worktree add ../repo-wt-my-feature -b wt/my-feature",
+      "2. Create state dir: ../repo-wt-my-feature/.ralph-my-feature/",
+      "3. Write rules.toml with defaults",
+      "4. Write inventory.json with empty phases/tasks",
+      "5. Find _GOAL*.md → inject header (idempotent)",
+      "6. Output ralph start command with correct flags"
+    ],
+    "plan_coverage": [
+      "Step 1: MISSING — ScaffoldBuilder does not create git worktree",
+      "Step 2: COVERED — ScaffoldBuilder.scaffoldStateDir creates dir",
+      "Step 3: COVERED — DEFAULT_RULES_TOML with at=5,7,11,15",
+      "Step 4: COVERED — writes {lastUpdated, currentPhase, phases:{}}",
+      "Step 5: COVERED — GoalFileManager.injectHeader with idempotency",
+      "Step 6: MISSING — no 'print start command' step after scaffold"
+    ],
+    "missing": [
+      "Git worktree creation (step 1)",
+      "Start command output after scaffold (step 6)"
+    ]
+  },
+  "verdict": "FAIL",
+  "issues": [
+    "CRITICAL: Scaffold does not create git worktree (intention step 1). ScaffoldBuilder only creates state dir. Users would need to manually create worktree before running scaffold, which defeats the purpose.",
+    "HIGH: Scaffold does not output the ralph start command after completion (intention step 6). Users won't know what command to run next.",
+    "MEDIUM: RalphState schema missing version field for drift detection. Intention risk table explicitly requires 'Version field in state file; ralph-admin warns on unknown version'.",
+    "MEDIUM: Start command doesn't verify process started (no pid check). Intention step 5 requires verification.",
+    "LOW: PM2 version not pinned. Intention risk mitigation says 'Pin pm2 version'.",
+    "LOW: No guard against scaffolding while ralph loop is already running for that name."
+  ],
+  "remediation": [
+    {
+      "issue": "Missing git worktree creation in scaffold",
+      "fix": "Add worktree creation step to ScaffoldBuilder or a new GitWorktreeManager class: execSync(`git worktree add ${worktreePath} -b ${branch}`). Add test with mocked git. Update Task 9 scaffold test to verify worktree creation."
+    },
+    {
+      "issue": "Missing start command output after scaffold",
+      "fix": "After scaffold completes, print the exact ralph start command with resolved paths: `ralph-dev --agent pi --model bhd-litellm/role-smart ... --state-dir .ralph-{name} --no-commit --reuse-state --prompt-file '{goalFile}'`. Add to Task 10 scaffold wiring."
+    },
+    {
+      "issue": "Missing version field in RalphState",
+      "fix": "Add `version?: number;` to RalphState schema (§1.1). Add version check in StateReader.read() — warn on stderr if version > 1 or missing."
+    },
+    {
+      "issue": "Start doesn't verify pid",
+      "fix": "After Pm2Client.start(), call listAll() and findByName() to confirm process is online with a valid pid. Throw if not found within 5s."
+    },
+    {
+      "issue": "PM2 version not pinned",
+      "fix": "Pin in package.json: `\"pm2\": \"5.x\"` (or current major). Add engines field."
+    }
+  ]
+}

@@ -79,6 +79,7 @@ describe("stall retries", () => {
     cleanupPath(tempDir);
   });
 
+  // Spawns real bin/ralph binary (~4.5s observed, flaky at default 5s bun:test timeout)
   it("stalls, clears the fallback blacklist, and restarts the rotation cycle after all fallbacks are exhausted", async () => {
     writeFileSync(
       join(stateDir, "config.toml"),
@@ -104,8 +105,9 @@ describe("stall retries", () => {
     expect(result.output).toContain("Cleared fallback blacklist. Restarting fallback cycle.");
     expect(countMatches(result.output, "(opencode / alpha)")).toBeGreaterThanOrEqual(2);
     expect(result.output).toContain("(codex / beta)");
-  });
+  }, { timeout: 30_000 });
 
+  // Spawns real bin/ralph binary (~4.5s observed, flaky at default 5s bun:test timeout)
   it("keeps immediate rotation wraparound behavior when stall retries are disabled", async () => {
     const result = await runRalph(tempDir, [
       "--state-dir", join(tempDir, ".ralph"),
@@ -122,7 +124,7 @@ describe("stall retries", () => {
 
     // Ralph exits 0 when completion promise detected.
     expect(result.exitCode).toBe(0);
-  });
+  }, { timeout: 30_000 });
 
   // Skipped: pre-start stalling fires at stallingTimeout/3 ≈ 12min before fake-agent
   // produces output. Requires fix to pre-start timeout behavior (default should be shorter).
@@ -148,6 +150,7 @@ describe("stall retries", () => {
     expect(result.output).toContain("Cleared fallback blacklist. Restarting fallback cycle.");
   });
 
+  // Spawns real bin/ralph binary (~3s observed, flaky at default 5s bun:test timeout)
   it("allows current stall retry flags to override persisted state when resuming", async () => {
     // Persisted state has stall retries DISABLED and a long retry interval (99 min).
     // CLI flags --stall-retries and --stall-retry-minutes 0 should override to ENABLE
@@ -198,5 +201,5 @@ describe("stall retries", () => {
     // Verify the persisted "disabled / 99 min" values are NOT shown.
     expect(result.output).not.toContain("Stall retries: disabled");
     expect(result.output).not.toContain("99 minute(s)");
-  });
+  }, { timeout: 30_000 });
 });

@@ -6,19 +6,25 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { join } from "path";
 import { existsSync, writeFileSync, mkdirSync, rmSync } from "fs";
+import { randomUUID } from "crypto";
 
 let tmpDir: string;
 
 beforeAll(() => {
-   tmpDir = join(process.cwd(), ".test-runtime-config-tmp");
-   if (!existsSync(tmpDir)) mkdirSync(tmpDir, { recursive: true });
+   tmpDir = join(process.cwd(), `.test-runtime-config-tmp-${randomUUID()}`);
+   mkdirSync(tmpDir, { recursive: true });
 });
 
 afterAll(() => {
    try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
 });
 
+function ensureTmpDir(): void {
+   if (!existsSync(tmpDir)) mkdirSync(tmpDir, { recursive: true });
+}
+
 function spawnRalphWithToml(tomlContent: string): { exitCode: number; stderr: string; stdout: string } {
+   ensureTmpDir();
    const tomlPath = join(tmpDir, `test-${Date.now()}.toml`);
    writeFileSync(tomlPath, tomlContent);
 
@@ -82,6 +88,7 @@ describe("runtime-config error paths (subprocess)", () => {
    });
 
    it("exits with error when explicit TOML path does not exist", () => {
+      ensureTmpDir();
       const tomlPath = join(tmpDir, "nonexistent-" + Date.now() + ".toml");
       const proc = Bun.spawnSync([
          "bun", "run", "ralph.ts",
@@ -110,5 +117,59 @@ no_commit = true
       expect(result.stderr).not.toContain("must be a string");
       expect(result.stderr).not.toContain("must be a number");
       expect(result.stderr).not.toContain("must be a boolean");
+   });
+
+   // ─── json_display config ────────────────────────────────────────────────
+
+   it("exits with error when json_display is invalid", () => {
+      const result = spawnRalphWithToml(`
+prompt = "test task"
+json_display = "invalid"
+`);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("Invalid json_display");
+   });
+
+   it("accepts json_display = beautify", () => {
+      const result = spawnRalphWithToml(`
+prompt = "test task"
+json_display = "beautify"
+`);
+      expect(result.stderr).not.toContain("Invalid json_display");
+   });
+
+   it("accepts json_display = raw", () => {
+      const result = spawnRalphWithToml(`
+prompt = "test task"
+json_display = "raw"
+`);
+      expect(result.stderr).not.toContain("Invalid json_display");
+   });
+
+   it("accepts json_display = text", () => {
+      const result = spawnRalphWithToml(`
+prompt = "test task"
+json_display = "text"
+`);
+      expect(result.stderr).not.toContain("Invalid json_display");
+   });
+
+   // ─── output_buffer_bytes config ─────────────────────────────────────────
+
+   it("exits with error when output_buffer_bytes is negative", () => {
+      const result = spawnRalphWithToml(`
+prompt = "test task"
+output_buffer_bytes = -1
+`);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("output_buffer_bytes must be non-negative");
+   });
+
+   it("accepts output_buffer_bytes = 0", () => {
+      const result = spawnRalphWithToml(`
+prompt = "test task"
+output_buffer_bytes = 0
+`);
+      expect(result.stderr).not.toContain("output_buffer_bytes");
    });
 });

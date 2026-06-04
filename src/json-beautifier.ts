@@ -5,8 +5,17 @@
  * produced by agents running in JSON mode (claude --output-format stream-json, etc.).
  */
 
-import chalk from "chalk";
-import { stripAnsi } from "../completion";
+import { stripAnsi } from "./strip-ansi";
+
+// ─── ANSI Colors (zero deps — chalk not available) ─────────────────────────────
+
+const ANSI = {
+  cyan: (s: string) => `\x1b[36m${s}\x1b[0m`,
+  yellow: (s: string) => `\x1b[33m${s}\x1b[0m`,
+  gray: (s: string) => `\x1b[90m${s}\x1b[0m`,
+  green: (s: string) => `\x1b[32m${s}\x1b[0m`,
+  red: (s: string) => `\x1b[31m${s}\x1b[0m`,
+} as const;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -33,6 +42,9 @@ const JSON_FLAGS = new Set([
 
 const ADAPTER_REGISTRY = new Map<string, (payload: Record<string, unknown>, cfg: BeautifierConfig) => string[]>([
   ["claude-code", claudeAdapter],
+  ["cursor-agent", cursorAgentAdapter],
+  ["codex", codexAdapter],
+  ["gemini", geminiAdapter],
 ]);
 
 // ─── isJsonModeAgent ────────────────────────────────────────────────────────
@@ -42,8 +54,9 @@ export function isJsonModeAgent(agentType: string, extraFlags?: string[]): boole
   if (extraFlags && extraFlags.length > 0) {
     for (let i = 0; i < extraFlags.length; i++) {
       if (JSON_FLAGS.has(extraFlags[i])) return true;
-      // Check --output-format stream-json as a pair
+      // Check --output-format stream-json as a pair or --output-format=stream-json (equals syntax)
       if (extraFlags[i] === "--output-format" && extraFlags[i + 1] === "stream-json") return true;
+      if (extraFlags[i] === "--output-format=stream-json") return true;
     }
   }
   return false;
@@ -111,7 +124,7 @@ export function beautifyJsonLine(rawLine: string, cfg: BeautifierConfig): string
 
   // Generic adapter for unknown agents
   try {
-    return genericAdapter(record);
+    return genericAdapter(record, cfg);
   } catch {
     return [rawLine];
   }
@@ -143,43 +156,43 @@ function claudeAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): strin
 function claudeAssistant(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
   const lines: string[] = [];
   const msg = p.message as Record<string, unknown> | undefined;
-  if (!msg || typeof msg !== "object") return lines;
 
-  const model = typeof msg.model === "string" ? msg.model : "unknown";
-  lines.push(chalk.cyan(`🤖 ${model}`));
+  // Model header (only when message exists)
+  if (msg && typeof msg === "object") {
+    const model = typeof msg.model === "string" ? msg.model : "unknown";
+    lines.push(ANSI.cyan(`🤖 ${model}`));
 
-  const content = msg.content;
-  if (Array.isArray(content)) {
-    for (const block of content) {
-      if (!block || typeof block !== "object") continue;
-      const b = block as Record<string, unknown>;
-      if (b.type === "tool_use") {
-        // tool_use blocks in assistant content — show name only if verboseTools
-        if (cfg.verboseTools && typeof b.name === "string") {
-          lines.push(chalk.yellow(`🔧 ${b.name}`));
-        }
-        continue;
-      }
-      if (b.type === "thinking" && typeof b.thinking === "string") {
-        if (cfg.showThinking) {
-          for (const s of b.thinking.split(/\r?\n/)) {
-            const trimmed = s.trim();
-            if (trimmed) lines.push(chalk.gray(`💭 ${trimmed}`));
+    const content = msg.content;
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (!block || typeof block !== "object") continue;
+        const b = block as Record<string, unknown>;
+        if (b.type === "tool_use") {
+          if (cfg.verboseTools && typeof b.name === "string") {
+            lines.push(ANSI.yellow(`🔧 ${b.name}`));
           }
+          continue;
         }
-        continue;
-      }
-      // text block
-      if (typeof b.text === "string") {
-        for (const s of b.text.split(/\r?\n/)) {
-          const trimmed = s.trim();
-          if (trimmed) lines.push(trimmed);
+        if (b.type === "thinking" && typeof b.thinking === "string") {
+          if (cfg.showThinking) {
+            for (const s of b.thinking.split(/\r?\n/)) {
+              const trimmed = s.trim();
+              if (trimmed) lines.push(ANSI.gray(`💭 ${trimmed}`));
+            }
+          }
+          continue;
+        }
+        if (typeof b.text === "string") {
+          for (const s of b.text.split(/\r?\n/)) {
+            const trimmed = s.trim();
+            if (trimmed) lines.push(trimmed);
+          }
         }
       }
     }
   }
 
-  // Also check for delta at top level
+  // Delta at top level (works with or without message)
   if (p.delta && typeof p.delta === "object") {
     const delta = p.delta as Record<string, unknown>;
     if (typeof delta.text === "string") {
@@ -191,7 +204,13 @@ function claudeAssistant(p: Record<string, unknown>, cfg: BeautifierConfig): str
     if (typeof delta.thinking === "string" && cfg.showThinking) {
       for (const s of (delta.thinking as string).split(/\r?\n/)) {
         const trimmed = s.trim();
-        if (trimmed) lines.push(chalk.gray(`💭 ${trimmed}`));
+        if (trimmed) lines.push(ANSI.gray(`💭 ${trimmed}`));
+      }
+    }
+    if (typeof delta.content === "string") {
+      for (const s of (delta.content as string).split(/\r?\n/)) {
+        const trimmed = s.trim();
+        if (trimmed) lines.push(trimmed);
       }
     }
   }
@@ -211,7 +230,7 @@ function claudeContentBlockDelta(p: Record<string, unknown>, cfg: BeautifierConf
     if (typeof delta.thinking === "string") {
       for (const s of (delta.thinking as string).split(/\r?\n/)) {
         const trimmed = s.trim();
-        if (trimmed) lines.push(chalk.gray(`💭 ${trimmed}`));
+        if (trimmed) lines.push(ANSI.gray(`💭 ${trimmed}`));
       }
     }
     return lines;
@@ -237,7 +256,7 @@ function claudeContentBlockStart(p: Record<string, unknown>, cfg: BeautifierConf
   if (cbType === "tool_use") {
     if (!cfg.verboseTools) return [];
     const name = typeof cb.name === "string" ? cb.name : "unknown";
-    return [chalk.yellow(`🔧 ${name}`)];
+    return [ANSI.yellow(`🔧 ${name}`)];
   }
 
   // text blocks and others → suppress
@@ -249,19 +268,23 @@ function claudeResult(p: Record<string, unknown>, cfg: BeautifierConfig): string
 
   if (cfg.showCost) {
     const durationMs = typeof p.duration_ms === "number" ? p.duration_ms : 0;
-    const costUsd = typeof p.cost_usd === "number" ? p.cost_usd : 0;
+    // Claude API uses total_cost_usd; fallback to cost_usd for backward compat
+    const costUsd = typeof p.total_cost_usd === "number" ? p.total_cost_usd
+      : typeof p.cost_usd === "number" ? p.cost_usd : 0;
     const seconds = (durationMs / 1000).toFixed(1);
     const costStr = costUsd < 0.01 ? `$${costUsd.toFixed(4)}` : `$${costUsd.toFixed(2)}`;
 
     const lines: string[] = [];
-    lines.push(chalk.green(`✅ ${result} (${seconds}s, ${costStr})`));
+    lines.push(ANSI.green(`✅ ${result} (${seconds}s, ${costStr})`));
     return lines;
   }
 
-  return [chalk.green(`✅ ${result}`)];
+  return [ANSI.green(`✅ ${result}`)];
 }
 
 function claudeError(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
+  if (!cfg.showError) return [];
+
   let message: string;
   if (p.error && typeof p.error === "object") {
     const err = p.error as Record<string, unknown>;
@@ -274,7 +297,7 @@ function claudeError(p: Record<string, unknown>, cfg: BeautifierConfig): string[
     message = message.slice(0, cfg.maxErrorLength) + "...";
   }
 
-  return [chalk.red(`❌ ${message}`)];
+  return [ANSI.red(`❌ ${message}`)];
 }
 
 function claudeRetry(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
@@ -295,21 +318,199 @@ function claudeRetry(p: Record<string, unknown>, cfg: BeautifierConfig): string[
   let lastError = rawError;
   if (lastError.length > 40) lastError = lastError.slice(0, 40) + "...";
 
-  const delayStr = delayMs < 60000 ? `${Math.round(delayMs / 1000)}s` : `${Math.round(delayMs / 60000)}m`;
+  const delayStr = delayMs < 60000
+    ? `${Math.round(delayMs / 1000)}s`
+    : delayMs < 3600000
+      ? `${Math.round(delayMs / 60000)}m`
+      : `${Math.round(delayMs / 3600000)}h`;
+
   const parts = [`🔄 Retry ${attempt}/${maxAttempts} in ${delayStr}`];
   if (lastError) parts.push(`(${lastError})`);
 
-  return [chalk.yellow(parts.join(" "))];
+  return [ANSI.yellow(parts.join(" "))];
+}
+
+// ─── Cursor-Agent Adapter ────────────────────────────────────────────────────
+
+function cursorAgentAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
+  const lines: string[] = [];
+  const t = typeof p.type === "string" ? p.type : "";
+
+  if (t === "assistant") {
+    if (p.message && typeof p.message === "object") {
+      const msg = p.message as Record<string, unknown>;
+      if (Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (!block || typeof block !== "object") continue;
+          const b = block as Record<string, unknown>;
+          if (typeof b.text === "string") {
+            for (const s of (b.text as string).split(/\r?\n/)) {
+              const trimmed = s.trim();
+              if (trimmed) lines.push(trimmed);
+            }
+          }
+        }
+      }
+    }
+  } else if (t === "tool_call") {
+    const tc = p.tool_call as Record<string, unknown> | undefined;
+    if (tc && typeof tc === "object") {
+      const toolKey = Object.keys(tc).find((k: string) => k.endsWith("ToolCall"));
+      if (toolKey) {
+        const toolName = toolKey.replace("ToolCall", "");
+        const toolData = tc[toolKey] as Record<string, unknown> | undefined;
+        if (toolData?.args && typeof toolData.args === "object") {
+          const args = toolData.args as Record<string, unknown>;
+          if (toolName.toLowerCase() === "shell" && typeof args.command === "string") {
+            lines.push(ANSI.yellow(`🔧 SHELL ${args.command}`));
+          } else if (typeof args.path === "string") {
+            lines.push(ANSI.yellow(`🔧 ${toolName.toUpperCase()} ${args.path}`));
+          } else {
+            lines.push(ANSI.yellow(`🔧 ${toolName.toUpperCase()}`));
+          }
+        } else {
+          lines.push(ANSI.yellow(`🔧 ${toolName.toUpperCase()}`));
+        }
+      }
+    }
+  } else if (t === "result") {
+    if (typeof p.result === "string" && p.result.trim()) {
+      const subtype = typeof p.subtype === "string" ? ` (${p.subtype})` : "";
+      lines.push(ANSI.green(`✅ ${p.result.trim()}${subtype}`));
+    }
+  } else if (t === "error") {
+    if (cfg.showError) {
+      let msg: string;
+      if (p.error && typeof p.error === "object") {
+        msg = typeof (p.error as Record<string, unknown>).message === "string"
+          ? (p.error as Record<string, unknown>).message as string
+          : String(p.error);
+      } else {
+        msg = String(p.error ?? "Unknown error");
+      }
+      if (msg.length > cfg.maxErrorLength) msg = msg.slice(0, cfg.maxErrorLength) + "...";
+      lines.push(ANSI.red(`❌ ${msg}`));
+    }
+  }
+
+  return lines;
+}
+
+// ─── Codex Adapter ───────────────────────────────────────────────────────────
+
+function codexAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
+  const t = typeof p.type === "string" ? p.type : "";
+
+  if (t === "message") {
+    // Codex message events with role=assistant contain text content
+    if (p.content && typeof p.content === "string") {
+      const lines: string[] = [];
+      for (const s of (p.content as string).split(/\r?\n/)) {
+        const trimmed = s.trim();
+        if (trimmed) lines.push(trimmed);
+      }
+      return lines;
+    }
+    // Array content
+    if (Array.isArray(p.content)) {
+      const lines: string[] = [];
+      for (const block of p.content) {
+        if (!block || typeof block !== "object") continue;
+        const b = block as Record<string, unknown>;
+        if (typeof b.text === "string") {
+          for (const s of (b.text as string).split(/\r?\n/)) {
+            const trimmed = s.trim();
+            if (trimmed) lines.push(trimmed);
+          }
+        }
+      }
+      return lines;
+    }
+    return [];
+  }
+
+  if (t === "tool_call") {
+    const name = typeof p.name === "string" ? p.name : "unknown";
+    return [ANSI.yellow(`🔧 ${name}`)];
+  }
+
+  if (t === "complete") {
+    const output = typeof p.output === "string" ? p.output : "";
+    return [ANSI.green(`✅ ${output || "Done"}`)];
+  }
+
+  if (t === "error") {
+    if (!cfg.showError) return [];
+    let msg = typeof p.message === "string" ? p.message : String(p.error ?? "Unknown error");
+    if (msg.length > cfg.maxErrorLength) msg = msg.slice(0, cfg.maxErrorLength) + "...";
+    return [ANSI.red(`❌ ${msg}`)];
+  }
+
+  return [];
+}
+
+// ─── Gemini Adapter ──────────────────────────────────────────────────────────
+
+function geminiAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
+  // Gemini stream-json uses different event shapes
+  // text delta events have a text or content field
+  if (typeof p.text === "string" && p.text.trim()) {
+    const lines: string[] = [];
+    for (const s of (p.text as string).split(/\r?\n/)) {
+      const trimmed = s.trim();
+      if (trimmed) lines.push(trimmed);
+    }
+    return lines;
+  }
+
+  // Tool call events
+  if (p.toolCall || p.tool_call) {
+    const tc = (p.toolCall || p.tool_call) as Record<string, unknown>;
+    const name = typeof tc.name === "string" ? tc.name : "unknown";
+    return [ANSI.yellow(`🔧 ${name}`)];
+  }
+
+  // Error events
+  if (p.error) {
+    if (!cfg.showError) return [];
+    let msg: string;
+    if (typeof p.error === "object") {
+      msg = typeof (p.error as Record<string, unknown>).message === "string"
+        ? (p.error as Record<string, unknown>).message as string
+        : String(p.error);
+    } else {
+      msg = String(p.error);
+    }
+    if (msg.length > cfg.maxErrorLength) msg = msg.slice(0, cfg.maxErrorLength) + "...";
+    return [ANSI.red(`❌ ${msg}`)];
+  }
+
+  // Result / complete events
+  const t = typeof p.type === "string" ? p.type : "";
+  if (t === "result" || t === "complete") {
+    const output = typeof p.result === "string" ? p.result : typeof p.output === "string" ? p.output : "";
+    if (output.trim()) return [ANSI.green(`✅ ${output.trim()}`)];
+    return [];
+  }
+
+  // Content field (some gemini versions)
+  if (typeof p.content === "string" && p.content.trim()) {
+    return [p.content.trim()];
+  }
+
+  return []
 }
 
 // ─── Generic Adapter ────────────────────────────────────────────────────────
 
-function genericAdapter(p: Record<string, unknown>): string[] {
+function genericAdapter(p: Record<string, unknown>, cfg?: BeautifierConfig): string[] {
   // Try to extract error.message
   if (p.error && typeof p.error === "object") {
+    if (cfg && !cfg.showError) return [];
     const err = p.error as Record<string, unknown>;
     if (typeof err.message === "string") {
-      return [chalk.red(`❌ ${err.message}`)];
+      const truncated = cfg && err.message.length > cfg.maxErrorLength ? err.message.slice(0, cfg.maxErrorLength) + "..." : err.message;
+      return [ANSI.red(`❌ ${truncated}`)];
     }
   }
 
@@ -320,7 +521,9 @@ function genericAdapter(p: Record<string, unknown>): string[] {
 
   // String error
   if (typeof p.error === "string") {
-    return [chalk.red(`❌ ${p.error}`)];
+    if (cfg && !cfg.showError) return [];
+    const truncated = cfg && p.error.length > cfg.maxErrorLength ? p.error.slice(0, cfg.maxErrorLength) + "..." : p.error;
+    return [ANSI.red(`❌ ${truncated}`)];
   }
 
   // Nothing useful → return raw
@@ -369,16 +572,46 @@ function textExtract(p: Record<string, unknown>, agentType: string): string[] {
     }
   } else if (t === "content_block_delta") {
     if (p.delta && typeof p.delta === "object") {
-      addText((p.delta as Record<string, unknown>).text);
+      const delta = p.delta as Record<string, unknown>;
+      const deltaType = typeof delta.type === "string" ? delta.type : "";
+      if (deltaType === "thinking_delta") {
+        addText(delta.thinking);
+      } else {
+        addText(delta.text);
+      }
+    }
+  } else if (t === "stream_event") {
+    // Nested event with delta — extract text_delta content
+    if (p.event && typeof p.event === "object") {
+      const event = p.event as Record<string, unknown>;
+      if (event.delta && typeof event.delta === "object") {
+        const delta = event.delta as Record<string, unknown>;
+        if (delta.type === "text_delta" && typeof delta.text === "string") {
+          addText(delta.text);
+        }
+      }
     }
   } else if (t === "result") {
     addText(p.result);
+  } else if (t === "message") {
+    // Codex: type=message with text content
+    // addContent handles both string and array content, no need for separate addText
+    addContent(p.content);
+  } else if (t === "complete") {
+    // Codex: type=complete with output
+    addText(p.output);
   } else if (t === "error") {
     if (p.error && typeof p.error === "object") {
       addText((p.error as Record<string, unknown>).message);
     } else {
       addText(p.error);
     }
+  }
+
+  // Gemini: top-level text or content fields (any event type)
+  if (t !== "assistant" && t !== "content_block_delta" && t !== "stream_event" && t !== "result" && t !== "message" && t !== "complete" && t !== "error") {
+    addText(p.text);
+    if (typeof p.content === "string") addText(p.content);
   }
 
   return lines;

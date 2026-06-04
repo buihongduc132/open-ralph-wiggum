@@ -4,7 +4,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname, isAbsolute, join, resolve } from "path";
-import { stripAnsi } from "../completion";
+import { stripAnsi } from "./strip-ansi";
 import { ARGS_TEMPLATES, type AgentBuildArgsOptions } from "../agent-builders";
 import type { AgentConfig, AgentEnvOptions, AgentType, JsonAgentConfig, RalphConfig } from "./types";
 
