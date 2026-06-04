@@ -1,3 +1,20 @@
+# Iteration 6 Progress (FORWARD — hold)
+
+No modulo checkpoints (6%5=1, 6%7=6, 6%11=6). All T1-T8 completed. 1384 pass, 0 fail, git clean. No new work available.
+
+- T7 verified: `~/.agents/skills/ralph-run/SKILL.md` + `references/rules-toml.md` fully document the injection pattern.
+- Coverage: 363 injection tests, 792 expect() calls — well above 80-90% ceiling.
+- No demoted tasks, no problem_notes, no drift.
+
+**Transient**: Pre-existing stall-retry timeout in full-suite run — passes in isolation. Not related to deterministic-injection.
+
+## Next Checkpoints
+- **I7** (I%7==0): BACKWARD — verifier loop (READ-ONLY)
+- **I10** (I%5==0): SYNC — lateral alignment
+- **I11** (I%11==0): BACKWARD — mutation + CodeQL (READ-ONLY)
+
+---
+
 # Iteration 5 Progress (SYNC)
 
 ## Modulo Checkpoint
