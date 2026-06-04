@@ -1133,3 +1133,45 @@ describe("ralph status history display", () => {
     expect(result.stdout).toContain("2 iterations");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Goal Mode CLI Tests
+// ---------------------------------------------------------------------------
+describe("ralph goal mode", () => {
+  let tempDir: string;
+  let stateDir: string;
+  beforeEach(() => {
+    tempDir = makeTempDir();
+    stateDir = join(tempDir, ".ralph");
+    mkdirSync(stateDir, { recursive: true });
+  });
+  afterEach(() => cleanup(tempDir));
+
+  it("--goal-status with --goal reads goal status", async () => {
+    const goalsDir = join(tempDir, "goals", "test-goal");
+    mkdirSync(goalsDir, { recursive: true });
+    writeFileSync(join(goalsDir, "goal.md"), "# Goal: Test Goal\n\n## Objective\nTest\n\n## Facts\n- [ ] Fact 1: test\n\n## Done Condition\nAll done.\n");
+    const goalPath = join(goalsDir, "goal.md");
+    const result = await runRalph(tempDir, ["--goal-status", "--goal", goalPath]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Test Goal");
+    expect(result.stdout).toContain("test-goal");
+  });
+
+  it("--goal-status with TOML config fallback", async () => {
+    const goalsDir = join(tempDir, "goals", "toml-goal");
+    mkdirSync(goalsDir, { recursive: true });
+    writeFileSync(join(goalsDir, "goal.md"), "# Goal: TOML Goal\n\n## Objective\nTest\n\n## Facts\n- [ ] Fact 1: toml test\n\n## Done Condition\nAll done.\n");
+    const tomlContent = `goal = "${join(goalsDir, "goal.md")}"`;
+    writeFileSync(join(stateDir, "config.toml"), tomlContent);
+    const result = await runRalph(tempDir, ["--state-dir", stateDir, "--goal-status"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("TOML Goal");
+  });
+
+  it("--goal-status errors without --goal or TOML config", async () => {
+    const result = await runRalph(tempDir, ["--goal-status"]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("--goal-status requires");
+  });
+});

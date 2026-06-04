@@ -274,7 +274,10 @@ export function syncGoalStateAfterIteration(
       }
    }
 
-   // Auto-transition: if goal has facts and all are verified, advance phases
+   // Auto-transition: if goal has facts and all are verified, advance phases.
+      // NOTE: This cascades through all remaining phases (planning → executing → verifying → done)
+      // in a single call when all facts are already verified. This is intentional — it fast-forwards
+      // goals where the user pre-verified all facts in goal.md before running the loop.
    if (goal.facts.length > 0 && isGoalComplete(state, goal.facts.length)) {
       // Advance to executing if still planning
       if (state.phase === "planning") {

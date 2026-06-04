@@ -8,7 +8,7 @@
 
 import { $ } from "bun";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, lstatSync } from "fs";
-import { dirname, isAbsolute, join, relative, resolve } from "path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "path";
 import { checkTerminalPromise, containsPromiseTag, escapeRegex, stripAnsi, tasksMarkdownAllComplete } from "./completion";
 import {
    decideLoopOwnership,
@@ -972,8 +972,22 @@ Learn more: https://ghuntley.com/ralph/
          }
       }
 
+      // Fallback: check TOML config for goal/goal_dir if no CLI flag provided
+      if (!statusGoalPath) {
+         const tomlCfg = loadRuntimeTomlConfig(tomlConfigPath, explicitTomlConfigPath);
+         if (tomlCfg?.goal) {
+            statusGoalPath = tomlCfg.goal;
+         } else if (tomlCfg?.goal_dir) {
+            const inv = buildInventory(tomlCfg.goal_dir);
+            const next = findNextActionableGoal(inv);
+            if (next) {
+               statusGoalPath = join(tomlCfg.goal_dir, next.slug, "goal.md");
+            }
+         }
+      }
+
       if (!statusGoalPath || !existsSync(statusGoalPath)) {
-         console.error("Error: --goal-status requires --goal <path> or --goal-dir <dir> with an active goal");
+         console.error("Error: --goal-status requires --goal <path> or --goal-dir <dir> (or TOML config) with an active goal");
          process.exit(1);
       }
 
