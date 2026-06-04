@@ -1,3 +1,16 @@
+# Iteration 1 Progress (FORWARD — hold)
+
+No modulo checkpoints (1%5=1, 1%7=1, 1%11=1). All T1-T8 completed. Fresh ralph loop on already-completed codebase. 1383 pass, 1 flaky stall-retry timeout (pre-existing, not related to deterministic-injection). Git clean.
+
+**Transient**: stall-retry tests timeout in full-suite run due to resource contention. Pass in isolation. Pre-existing, unrelated to deterministic-injection.
+
+## Next Checkpoints
+- **I5** (I%5==0): SYNC — lateral alignment
+- **I7** (I%7==0): BACKWARD — verifier loop (READ-ONLY)
+- **I11** (I%11==0): BACKWARD — mutation + CodeQL (READ-ONLY)
+
+---
+
 # Iteration 113 Progress (FORWARD — hold)
 
 No modulo checkpoints (113%5=3, 113%7=1, 113%11=3). All T1-T8 completed. 1384 pass, 0 fail, git clean. No new work available.
