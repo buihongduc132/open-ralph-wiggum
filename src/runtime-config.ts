@@ -164,25 +164,6 @@ export function parseReviewConfig(parsed: Record<string, unknown>): ReviewConfig
    };
 }
 
-export function loadReviewConfig(configPath: string): ReviewConfig | null {
-   if (!existsSync(configPath)) {
-      return null;
-   }
-   try {
-      const raw = readFileSync(configPath, "utf-8");
-      const parsed = Bun.TOML.parse(raw) as Record<string, unknown>;
-      const reviewConfig = parseReviewConfig(parsed);
-      if (reviewConfig?.reviewPromptFile) {
-         reviewConfig.reviewPromptFile = resolveConfigRelativePath(configPath, reviewConfig.reviewPromptFile);
-      }
-      return reviewConfig;
-   } catch (error) {
-      console.error(`Error: Failed to parse review config from ${configPath}`);
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
-   }
-}
-
 export function getDefaultTomlConfig(): string {
    return `# Ralph Wiggum Runtime Configuration
 # This file configures the Ralph loop behavior.
