@@ -580,7 +580,12 @@ export class LoopConfig {
   goalFile: string | null;
   branch: string;
 
+  private static VALID_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
   constructor(name: string, projectRoot: string, opts?: LoopConfigOptions) {
+    if (!LoopConfig.VALID_NAME.test(name)) {
+      throw new Error(`Invalid loop name '${name}': must match ^[a-z0-9][a-z0-9-]{0,63}$ (lowercase alphanumeric + hyphens, max 64 chars)`);
+    }
     this.name = name;
     this.pm2Name = `ralph-${name}`;
     this.stateDirName = `.ralph-${name}`;
@@ -1003,6 +1008,19 @@ export class Pm2Client {
       });
     });
   }
+
+  /** Post-start verification: poll for process with valid pid */
+  async verifyStarted(name: string, maxAttempts: number = 3, delayMs: number = 2000): Promise<{ pid: number; status: string }> {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (attempt > 0) await new Promise(r => setTimeout(r, delayMs));
+      const procs = await this.listRalph();
+      const found = this.findByName(procs, name);
+      if (found && found.pid > 0 && found.status === 'online') {
+        return { pid: found.pid, status: found.status };
+      }
+    }
+    throw new Error(`Process ${name} did not start within ${maxAttempts * delayMs / 1000}s`);
+  }
 }
 ```
 
@@ -1118,7 +1136,10 @@ export function formatListTable(rows: ListRow[]): string {
 
 export interface DoctorResult {
   crashLooping: Array<{ name: string; restarts: number; uptime: string }>;
+  errored: Array<{ name: string }>; 
   completedButRunning: Array<{ name: string; iteration: number; progress: string }>;
+  stuck: Array<{ name: string; noProgress: number }>;
+  stopped: Array<{ name: string; progress: string }>;
   healthy: Array<{ name: string; iteration: number; restarts: number }>;
 }
 
@@ -1126,9 +1147,17 @@ export function formatDoctorOutput(result: DoctorResult): string {
   const lines: string[] = ["🔍 Fleet Health Check\n"];
 
   if (result.crashLooping.length > 0) {
-    lines.push(`${YELLOW}⚠️  CRASH-LOOPING (${result.crashLooping.length}):${RESET}`);
+    lines.push(`${RED}🔴 CRASH-LOOPING (${result.crashLooping.length}):${RESET}`);
     for (const c of result.crashLooping) {
       lines.push(`  ${c.name}: ${c.restarts} restarts in ${c.uptime}`);
+    }
+    lines.push("");
+  }
+
+  if (result.errored.length > 0) {
+    lines.push(`${RED}❌ ERRORED (${result.errored.length}):${RESET}`);
+    for (const e of result.errored) {
+      lines.push(`  ${e.name}: PM2 status=errored — check logs`);
     }
     lines.push("");
   }
@@ -1137,6 +1166,22 @@ export function formatDoctorOutput(result: DoctorResult): string {
     lines.push(`${YELLOW}✅ COMPLETED-BUT-RUNNING (${result.completedButRunning.length}):${RESET}`);
     for (const c of result.completedButRunning) {
       lines.push(`  ${c.name}: ${c.progress} done, still iterating (i${c.iteration})`);
+    }
+    lines.push("");
+  }
+
+  if (result.stuck.length > 0) {
+    lines.push(`${YELLOW}⏸️ STUCK (${result.stuck.length}):${RESET}`);
+    for (const s of result.stuck) {
+      lines.push(`  ${s.name}: ${s.noProgress} consecutive no-progress iterations`);
+    }
+    lines.push("");
+  }
+
+  if (result.stopped.length > 0) {
+    lines.push(`${RED}🛑 STOPPED (${result.stopped.length}):${RESET}`);
+    for (const s of result.stopped) {
+      lines.push(`  ${s.name}: progress ${s.progress}`);
     }
     lines.push("");
   }
@@ -1397,6 +1442,7 @@ export interface DoctorInput {
 
 export interface DoctorOutput {
   crashLooping: DoctorInput[];
+  errored: DoctorInput[];
   completedButRunning: DoctorInput[];
   stuck: DoctorInput[];
   stopped: DoctorInput[];
@@ -1411,6 +1457,7 @@ export class Doctor {
   diagnose(inputs: DoctorInput[]): DoctorOutput {
     const result: DoctorOutput = {
       crashLooping: [],
+      errored: [],
       completedButRunning: [],
       stuck: [],
       stopped: [],
@@ -1420,6 +1467,8 @@ export class Doctor {
     for (const input of inputs) {
       if (input.status === "stopped") {
         result.stopped.push(input);
+      } else if (input.status === "errored") {
+        result.errored.push(input);
       } else if (input.restarts >= CRASH_LOOP_THRESHOLD) {
         result.crashLooping.push(input);
       } else if (input.progressPct >= COMPLETED_THRESHOLD && input.status === "online") {
@@ -1617,9 +1666,10 @@ export class ScaffoldBuilder {
       return { worktreePath, created: false };
     }
 
-    const { execSync } = await import("child_process");
-    execSync(
-      `git worktree add "${worktreePath}" -b "${opts.branch}"`,
+    const { execFileSync } = await import("child_process");
+    execFileSync(
+      "git",
+      ["worktree", "add", worktreePath, "-b", opts.branch],
       { cwd: opts.sourceRepo, stdio: "pipe" }
     );
 
