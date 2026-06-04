@@ -30,7 +30,8 @@ ralph-admin/
 │   │   ├── rules-reader.ts       # Reads + parses rules.toml
 │   │   └── goal-reader.ts        # Finds + reads _GOAL*.md files
 │   ├── pm2-client.ts             # Wraps pm2 programmatic API
-│   ├── scaffold.ts               # Creates worktree + state dir + rules + inventory + _GOAL header
+│   ├── scaffold.ts               # Bootstraps new loops (worktree + state dir + rules + inventory + _GOAL header — no start)
+│   ├── lifecycle.ts              # Pause / Resume / Stop — PM2-level lifecycle ops
 │   ├── doctor.ts                 # Fleet-wide anomaly detection
 │   ├── formatter.ts              # Table/JSON output formatting
 │   └── config.ts                 # Convention resolution (name → paths)
@@ -40,6 +41,7 @@ ralph-admin/
 │   ├── rules-reader.test.ts
 │   ├── pm2-client.test.ts
 │   ├── scaffold.test.ts
+│   ├── lifecycle.test.ts
 │   ├── doctor.test.ts
 │   ├── config.test.ts
 │   └── fixtures/                 # Sample state/inventory/rules files
@@ -60,10 +62,12 @@ ralph-admin/
 CliRouter (commander)
   ├── ListCommand ────── uses Pm2Client, StateReader, InventoryReader, Formatter
   ├── StatusCommand ──── uses Pm2Client, StateReader, InventoryReader, GoalReader
-  ├── ScaffoldCommand ── uses ScaffoldBuilder, GoalFileManager
-  ├── StartCommand ───── uses Pm2Client, Config
-  ├── StopCommand ────── uses Pm2Client
-  ├── RestartCommand ─── uses Pm2Client
+  ├── BootstrapCommand ── uses ScaffoldBuilder, GoalFileManager (init only, no start)
+  ├── StartCommand ───── uses Pm2Client, Config (validates bootstrap done first)
+  ├── PauseCommand ───── uses Pm2Client (pm2 stop — keep registered, preserve state)
+  ├── ResumeCommand ──── uses Pm2Client (pm2 restart — pick up from state.json)
+  ├── StopCommand ────── uses Pm2Client (pm2 stop + delete — full removal)
+  ├── RestartCommand ─── uses Pm2Client (hard restart)
   ├── DoctorCommand ──── uses Pm2Client, StateReader, InventoryReader, Doctor
   ├── InventoryCommand ─ uses InventoryReader
   └── InjectCommand ──── uses GoalFileManager
@@ -74,7 +78,8 @@ StateReader ───────── reads ralph-loop.state.json → RalphSta
 InventoryReader ────── reads inventory.json → Inventory
 RulesReader ────────── reads rules.toml → RulesToml
 GoalFileManager ────── finds _GOAL*.md, injects header
-ScaffoldBuilder ────── orchestrates worktree + state dir + rules + inventory + _GOAL header
+ScaffoldBuilder ────── bootstraps new loops (worktree + state dir + rules + inventory + _GOAL header — NO start)
+LifecycleManager ───── pause / resume / stop — thin PM2 wrappers with pre/post checks
 Doctor ─────────────── analyzes fleet for anomalies
 Formatter ──────────── table/JSON output (chalk-free, ANSI codes only for status colors)
 ```
@@ -257,9 +262,11 @@ program
   .action(() => { console.log("status: not implemented"); });
 
 program
-  .command("scaffold <name>")
-  .description("Create worktree + state dir + rules + inventory + _GOAL header")
-  .action(() => { console.log("scaffold: not implemented"); });
+  .command("bootstrap <name>")
+  .description("Init loop (worktree + state dir + rules + inventory + _GOAL header) WITHOUT starting")
+  .option("--source-repo <path>", "Source git repo for worktree")
+  .option("--model <model>", "Model to use in generated start command", "bhd-litellm/role-smart")
+  .action(() => { console.log("bootstrap: not implemented"); });
 
 program
   .command("start <name>")
@@ -268,17 +275,27 @@ program
   .option("--reuse-state", "Reuse existing state", false)
   .option("--commit", "Enable commits (default: --no-commit)", false)
   .option("--max-iterations <n>", "Max iterations", "999")
-  .description("Start ralph loop via PM2")
+  .description("Start ralph loop via PM2 (must bootstrap first)")
   .action(() => { console.log("start: not implemented"); });
 
 program
   .command("stop <name>")
-  .description("Stop ralph loop via PM2")
+  .description("Full stop — delete from PM2 registry (state files kept on disk)")
   .action(() => { console.log("stop: not implemented"); });
 
 program
+  .command("pause <name>")
+  .description("Pause loop at PM2 level (keep registered, preserve state, use resume to restart)")
+  .action(() => { console.log("pause: not implemented"); });
+
+program
+  .command("resume <name>")
+  .description("Resume paused loop via PM2 (picks up from preserved state.json)")
+  .action(() => { console.log("resume: not implemented"); });
+
+program
   .command("restart <name>")
-  .description("Restart ralph loop via PM2")
+  .description("Hard restart ralph loop via PM2")
   .action(() => { console.log("restart: not implemented"); });
 
 program
@@ -303,12 +320,13 @@ program.parse();
 ```bash
 bun run src/cli.ts --help
 bun run src/cli.ts list
+bun run src/cli.ts bootstrap --help
 ```
-Expected: help text + "list: not implemented"
+Expected: help text with bootstrap/pause/resume commands visible + "list: not implemented"
 
 - [ ] **Step 6: Commit**
 ```bash
-git add -A && git commit -m "init: ralph-admin project scaffold with CLI stubs"
+git add -A && git commit -m "init: ralph-admin project scaffold with CLI stubs (bootstrap/pause/resume)"
 ```
 
 ---
@@ -979,6 +997,28 @@ export class Pm2Client {
     await this.connect();
     return new Promise((resolve, reject) => {
       pm2.delete(name, (err) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
+  }
+
+  /** Pause: pm2 stop — process stays registered, state preserved on disk */
+  async pause(name: string): Promise<void> {
+    await this.connect();
+    return new Promise((resolve, reject) => {
+      pm2.stop(name, (err) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
+  }
+
+  /** Resume: pm2 restart — picks up from preserved state.json */
+  async resume(name: string): Promise<void> {
+    await this.connect();
+    return new Promise((resolve, reject) => {
+      pm2.restart(name, (err) => {
         if (err) return reject(err);
         resolve();
       });
@@ -1731,7 +1771,149 @@ git add -A && git commit -m "feat: ScaffoldBuilder — creates state dir with ru
 
 ---
 
-### Task 10: Wire CLI Commands
+### Task 10: LifecycleManager (Pause / Resume / Stop)
+
+**Files:**
+- Create: `src/lifecycle.ts`, `tests/lifecycle.test.ts`
+
+> **Design note:** Pause/resume operate at PM2 level only (immediate process stop/restart).
+> **Future enhancement (v0.2):** `pause --after-cycle` will signal ralph to finish its current iteration before stopping.
+> This requires ralph-level support (e.g. touching a `.pause-requested` file that ralph checks at iteration boundary).
+> v0.1 does NOT have this — it is immediate PM2 stop/restart only.
+
+- [ ] **Step 1: Write tests**
+```typescript
+// tests/lifecycle.test.ts
+import { describe, test, expect } from "bun:test";
+import { LifecycleManager } from "../src/lifecycle";
+
+describe("LifecycleManager", () => {
+  test("pause validates process exists in PM2", async () => {
+    // Will throw if no ralph-test-nonexistent in PM2
+    const mgr = new LifecycleManager();
+    expect(mgr.pause("nonexistent-loop-xyz"))
+      .rejects.toThrow();
+  });
+
+  test("resume validates process exists in PM2", async () => {
+    const mgr = new LifecycleManager();
+    expect(mgr.resume("nonexistent-loop-xyz"))
+      .rejects.toThrow();
+  });
+
+  test("stop validates process exists in PM2", async () => {
+    const mgr = new LifecycleManager();
+    expect(mgr.stop("nonexistent-loop-xyz"))
+      .rejects.toThrow();
+  });
+
+  test("derivePm2Name adds ralph- prefix if missing", () => {
+    expect(LifecycleManager.derivePm2Name("my-feature")).toBe("ralph-my-feature");
+    expect(LifecycleManager.derivePm2Name("ralph-my-feature")).toBe("ralph-my-feature");
+  });
+});
+```
+
+- [ ] **Step 2: Implement LifecycleManager**
+```typescript
+// src/lifecycle.ts
+import { Pm2Client } from "./pm2-client";
+import { StateReader } from "./readers/state-reader";
+import { LoopConfig } from "./config";
+
+export interface LifecycleResult {
+  name: string;
+  action: "paused" | "resumed" | "stopped";
+  pm2Name: string;
+  iteration?: number;
+  pid?: number;
+}
+
+export class LifecycleManager {
+  private client = new Pm2Client();
+
+  /**
+   * Derive PM2 process name from user-provided name.
+   * Adds "ralph-" prefix if not already present.
+   */
+  static derivePm2Name(name: string): string {
+    return name.startsWith("ralph-") ? name : `ralph-${name}`;
+  }
+
+  /**
+   * Pause: PM2 stop (process stays registered, state preserved on disk).
+   * Immediate — does NOT wait for current iteration to finish.
+   *
+   * Future (v0.2): pause --after-cycle will signal ralph to finish current
+   * iteration before stopping (requires ralph-level .pause-requested file).
+   */
+  async pause(name: string): Promise<LifecycleResult> {
+    const pm2Name = LifecycleManager.derivePm2Name(name);
+    try {
+      // Get last known iteration before pausing
+      const procs = await this.client.listRalph();
+      const proc = this.client.findByName(procs, pm2Name);
+      if (!proc) throw new Error(`Process '${pm2Name}' not found in PM2`);
+      const iteration = proc.cwd
+        ? new StateReader(`${proc.cwd}/.ralph-${name.replace(/^ralph-/, '')}/ralph-loop.state.json`).read()?.iteration
+        : undefined;
+
+      await this.client.pause(pm2Name);
+      return { name, action: "paused", pm2Name, iteration };
+    } finally {
+      await this.client.disconnect();
+    }
+  }
+
+  /**
+   * Resume: PM2 restart (picks up from preserved state.json on disk).
+   * Verifies the process comes back online with a valid PID.
+   */
+  async resume(name: string): Promise<LifecycleResult> {
+    const pm2Name = LifecycleManager.derivePm2Name(name);
+    try {
+      await this.client.resume(pm2Name);
+      const { pid } = await this.client.verifyStarted(pm2Name);
+      return { name, action: "resumed", pm2Name, pid };
+    } finally {
+      await this.client.disconnect();
+    }
+  }
+
+  /**
+   * Stop: PM2 stop + delete (full removal from PM2 registry).
+   * State files remain on disk (not deleted).
+   */
+  async stop(name: string): Promise<LifecycleResult> {
+    const pm2Name = LifecycleManager.derivePm2Name(name);
+    try {
+      const procs = await this.client.listRalph();
+      const proc = this.client.findByName(procs, pm2Name);
+      if (!proc) throw new Error(`Process '${pm2Name}' not found in PM2`);
+
+      await this.client.stop(pm2Name);
+      await this.client.delete(pm2Name);
+      return { name, action: "stopped", pm2Name };
+    } finally {
+      await this.client.disconnect();
+    }
+  }
+}
+```
+
+- [ ] **Step 3: Run tests**
+```bash
+bun test tests/lifecycle.test.ts
+```
+
+- [ ] **Step 4: Commit**
+```bash
+git add -A && git commit -m "feat: LifecycleManager — pause/resume (PM2-level) + stop (full removal)"
+```
+
+---
+
+### Task 11: Wire CLI Commands
 
 **Files:**
 - Modify: `src/cli.ts`
@@ -1742,10 +1924,12 @@ Replace the stub actions in `src/cli.ts` with real implementations:
 
 - `list`: `Pm2Client.listRalph()` → for each, `StateReader.read()` + `InventoryReader.read()` → `formatListTable()`
 - `status <name>`: Resolve config → read state + inventory + rules + goal → detailed output
-- `scaffold <name>`: `Pm2Client.listRalph()` (guard: error if already running) → `ScaffoldBuilder.scaffoldWorktree()` (git worktree add) → `ScaffoldBuilder.scaffoldStateDir()` → `GoalFileManager.injectHeader()` → print `ScaffoldBuilder.buildStartCommand()` output with exact ralph flags
-- `start <name>`: Build ralph command → `Pm2Client.start()` → poll `Pm2Client.listRalph()` for pid verification (2s retry, 3 attempts) → print confirmation with pid
-- `stop <name>`: `Pm2Client.stop()`
-- `restart <name>`: `Pm2Client.restart()`
+- `bootstrap <name>`: Guard check PM2 (error if already running) → `ScaffoldBuilder.scaffoldWorktree()` (git worktree add) → `ScaffoldBuilder.scaffoldStateDir()` → `GoalFileManager.injectHeader()` → print summary of created files + `ralph-admin start <name>` hint. Does NOT auto-start.
+- `start <name>`: Validate bootstrap done (state dir + rules exist) → build ralph command → `Pm2Client.start()` → poll for pid verification (2s retry, 3 attempts) → print confirmation with pid
+- `pause <name>`: `LifecycleManager.pause()` → pm2 stop, print last iteration, confirm paused
+- `resume <name>`: `LifecycleManager.resume()` → pm2 restart, verify pid, confirm resumed
+- `stop <name>`: `LifecycleManager.stop()` → pm2 stop + delete, confirm removed from registry (files kept)
+- `restart <name>`: `Pm2Client.restart()` → hard restart
 - `doctor`: `Pm2Client.listRalph()` + state reads → `Doctor.diagnose()` → `formatDoctorOutput()`
 - `inventory <name>`: `InventoryReader.read()` → formatted task list
 - `inject-header <name>`: `GoalFileManager.injectHeader()`
@@ -1757,8 +1941,17 @@ Each command:
 4. Print output
 5. `process.exit(0)` on success, `process.exit(1)` on error
 
+> **Future enhancement (v0.2):** `ralph-admin pause --after-cycle <name>` will signal ralph
+> to complete its current iteration before pausing. This requires ralph to check for a
+> `.pause-requested` sentinel file at each iteration boundary. Not in v0.1 scope.
+
 - [ ] **Step 2: Test each command manually**
 ```bash
+bun run src/cli.ts bootstrap my-test --source-repo /path/to/repo
+bun run src/cli.ts start my-test
+bun run src/cli.ts pause my-test
+bun run src/cli.ts resume my-test
+bun run src/cli.ts stop my-test
 bun run src/cli.ts list
 bun run src/cli.ts doctor
 bun run src/cli.ts status acp-alias
@@ -1772,7 +1965,7 @@ git add -A && git commit -m "feat: wire all CLI commands to Pm2Client + readers 
 
 ---
 
-### Task 11: Build + Smoke Test
+### Task 12: Build + Smoke Test
 
 **Files:**
 - Modify: `package.json` (add build script)
@@ -1809,16 +2002,29 @@ git add -A && git commit -m "feat: build + smoke test for ralph-admin binary"
 
 ## §3. Verification Checklist
 
-- [ ] All 10 CLI commands parse and execute
+- [ ] All 12 CLI commands parse and execute (list, status, bootstrap, start, pause, resume, stop, restart, doctor, inventory, inject-header, --help)
+- [ ] `ralph-admin bootstrap <name>` creates worktree + state dir + rules.toml + inventory.json + _GOAL header WITHOUT starting
+- [ ] `ralph-admin start <name>` validates bootstrap done, then launches ralph via PM2
+- [ ] `ralph-admin pause <name>` pauses at PM2 level (process stays registered, state preserved)
+- [ ] `ralph-admin resume <name>` resumes from preserved state.json via PM2
+- [ ] `ralph-admin stop <name>` full removal from PM2 registry (state files kept on disk)
 - [ ] `ralph-admin list` shows all ralph processes from PM2 with iteration + model + progress
 - [ ] `ralph-admin doctor` detects crash-looping, completed-but-running, stuck, healthy
-- [ ] `ralph-admin scaffold` creates state dir + rules.toml + inventory.json + _GOAL header
-- [ ] `ralph-admin start` launches ralph via PM2 with correct args
-- [ ] `ralph-admin stop/restart` delegates to PM2
 - [ ] `ralph-admin inventory` shows task-level progress
 - [ ] `ralph-admin inject-header` injects working-directory header (idempotent)
-- [ ] OOP: 8 classes, no god-file, each < 150 lines
+- [ ] OOP: 9 classes, no god-file, each < 150 lines
 - [ ] DRY: StateReader/InventoryReader/RulesReader share no code; schemas defined once
 - [ ] Performance: PM2 connection per command (not persistent), lazy file reads, Promise.all for parallel reads
 - [ ] Deterministic: every command produces exact output given same inputs
 - [ ] Tests: `bun test` passes with ≥80% coverage
+
+---
+
+## §4. Future Enhancements (out of scope for v0.1)
+
+| Feature | What | Why deferred |
+|---------|-------|-------------|
+| `pause --after-cycle <name>` | Signal ralph to finish current iteration, then stop | Requires ralph-level support: `.pause-requested` sentinel file checked at iteration boundary. Needs change in ralph engine, not just ralph-admin |
+| TUI dashboard | Real-time terminal UI with `blessed`/`ink` | v0.1 is CLI only; TUI requires event loop, key handling, layout engine |
+| Remote fleet | Manage ralph loops on other machines | Requires SSH transport or agent protocol; out of scope |
+| Web dashboard | Browser-based fleet view | Requires HTTP server, WebSocket, auth; out of scope |

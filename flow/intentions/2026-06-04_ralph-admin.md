@@ -50,38 +50,81 @@ ralph (engine)              ralph-admin (dashboard)
 ```
 ralph-admin list                    Show all ralph loops with status, iteration, model, progress %
 ralph-admin status <name>           Detailed status of one loop: state + inventory + recent commits
-ralph-admin scaffold <name>         Create worktree + state dir + rules.toml + inventory + _GOAL header
-ralph-admin start <name>            Start ralph loop via PM2 with correct defaults
-ralph-admin stop <name>             Stop ralph loop via PM2
-ralph-admin restart <name>          Restart ralph loop via PM2
+ralph-admin bootstrap <name>        Init everything (worktree + state dir + rules.toml + inventory + _GOAL header) WITHOUT starting
+ralph-admin start <name>            Start ralph loop via PM2 with correct defaults (must bootstrap first)
+ralph-admin stop <name>             Full stop — delete from PM2 registry (use pause for temporary)
+ralph-admin pause <name>            Pause loop at PM2 level (process stays registered, state preserved on disk)
+ralph-admin resume <name>           Resume paused loop via PM2 (restarts from preserved state)
+ralph-admin restart <name>          Hard restart ralph loop via PM2 (kills current, starts fresh)
 ralph-admin doctor                  Fleet-wide health check: crash-loops, stuck, completed-running
 ralph-admin inventory <name>        Show task-level progress for one loop
 ralph-admin inject-header <name>    Inject working-directory header into _GOAL file (idempotent)
 ralph-admin --help                  Show all commands with usage
 ```
 
-### Scaffold Behavior
+### Bootstrap Behavior
 
-`ralph-admin scaffold my-feature`:
-1. Create worktree: `git worktree add ../repo-wt-my-feature -b wt/my-feature`
-2. Create state dir: `../repo-wt-my-feature/.ralph-my-feature/`
-3. Write `rules.toml` with sensible defaults (I%5 sync, I%7 backward, I%11 deep review, I%15 guard cycle)
-4. Write `inventory.json` with empty phases/tasks structure
-5. Find `_GOAL*.md` in worktree → inject working-directory header at top (idempotent — skip if already present)
-6. Output the `ralph` start command with correct `--state-dir`, `--no-commit`, `--reuse-state` flags
+`ralph-admin bootstrap my-feature` — inits everything WITHOUT starting:
+1. Guard: check PM2 — error if `ralph-my-feature` already running
+2. Create worktree: `git worktree add ../repo-wt-my-feature -b wt/my-feature`
+3. Create state dir: `../repo-wt-my-feature/.ralph-my-feature/`
+4. Write `rules.toml` with sensible defaults (I%5 sync, I%7 backward, I%11 deep review, I%15 guard cycle)
+5. Write `inventory.json` with empty phases/tasks structure
+6. Find `_GOAL*.md` in worktree → inject working-directory header at top (idempotent — skip if already present)
+7. Print the `ralph-admin start my-feature` command hint — but do NOT auto-start
+8. Print summary of created files + paths
+
+> **Note:** `bootstrap` is purely init. You must run `ralph-admin start <name>` separately to launch the loop.
 
 ### Start Behavior
 
-`ralph-admin start my-feature`:
-1. Resolve state dir from name convention (`.ralph-my-feature/`)
-2. Resolve prompt file from worktree (`_GOAL*.md`)
-3. Build `ralph` command with defaults:
+`ralph-admin start my-feature` — launches the loop (bootstrap must be done first):
+1. Validate: state dir exists, rules.toml exists, _GOAL file found (error if not bootstrapped)
+2. Resolve state dir from name convention (`.ralph-my-feature/`)
+3. Resolve prompt file from worktree (`_GOAL*.md`)
+4. Build `ralph` command with defaults:
    - `--state-dir .ralph-my-feature`
    - `--no-commit` (default, `--commit` to override)
    - `--reuse-state` (resume from previous state)
    - `--model <from state or default>`
-4. Register with PM2 as `ralph-my-feature` via `pm2 start`
-5. Verify process started (check pid)
+5. Register with PM2 as `ralph-my-feature` via `pm2 start`
+6. Verify process started (poll for valid pid, 3 attempts, 2s interval)
+
+### Pause / Resume Behavior (PM2 level)
+
+`ralph-admin pause my-feature`:
+1. `pm2 stop ralph-my-feature` — process stays registered in PM2, memory freed, state preserved on disk
+2. Print confirmation with last known iteration
+
+`ralph-admin resume my-feature`:
+1. `pm2 restart ralph-my-feature` — resumes from where it left off (state.json on disk)
+2. Verify process restarted (poll for valid pid)
+
+> **Future enhancement (v0.2):** `ralph-admin pause --after-cycle my-feature` will signal ralph to finish its current iteration, then stop. This requires a ralph-level signaling mechanism (e.g. touching a `.pause-requested` file that ralph checks at iteration boundary). Not in scope for v0.1 — v0.1 pause is immediate at PM2 level only.
+
+### Stop Behavior
+
+`ralph-admin stop my-feature`:
+1. `pm2 stop ralph-my-feature` + `pm2 delete ralph-my-feature` — full removal from PM2 registry
+2. State files remain on disk (not deleted)
+3. Print confirmation
+
+### Lifecycle Summary
+
+```
+bootstrap → (init only, no start)
+    │
+    ▼
+start    → PM2 launch (requires bootstrap)
+    │
+    ├─ pause  → PM2 stop (keep registered, preserve state)
+    │   │
+    │   └─ resume → PM2 restart (pick up from state.json)
+    │
+    ├─ restart → PM2 hard restart (kill + fresh start)
+    │
+    └─ stop   → PM2 stop + delete (remove from registry, keep files)
+```
 
 ### List Output
 
