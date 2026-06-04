@@ -1,3 +1,19 @@
+# Iteration 5 Progress (SYNC)
+
+## Modulo Checkpoint
+- I % 5 == 0 → SYNC ✓ (pulled, committed, pushed to origin)
+
+## Summary
+All T1-T8 completed. 1384 pass, 27 skip, 0 fail. Git clean. Branch pushed to `origin/feat/deterministic-modulo-injection`.
+
+**Transient**: Pre-existing stall-retry timeout in full-suite run — passes in isolation. Not related to deterministic-injection.
+
+## Next Checkpoints
+- **I7** (I%7==0): BACKWARD — verifier loop (READ-ONLY)
+- **I11** (I%11==0): BACKWARD — mutation + CodeQL (READ-ONLY)
+
+---
+
 # Iteration 1 Progress (FORWARD — hold)
 
 No modulo checkpoints (1%5=1, 1%7=1, 1%11=1). All T1-T8 completed. Fresh ralph loop on already-completed codebase. 1383 pass, 1 flaky stall-retry timeout (pre-existing, not related to deterministic-injection). Git clean.
