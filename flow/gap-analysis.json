@@ -1,0 +1,217 @@
+{
+  "meta": {
+    "date": "2026-06-04",
+    "auditor": "review-gate-auditor",
+    "intention": "flow/intentions/2026-06-03_ralph-external-review-gate.md",
+    "plan": "flow/plans/ralph-external-review-gate.md",
+    "worktree": "open-ralph-wiggum-wt-review-gate"
+  },
+  "requirements": [
+    {
+      "id": "R1",
+      "title": "Each Ralph run gets a unique hash + runCwd guard",
+      "status": "PARTIAL",
+      "evidence": "runHash implemented in src/loop-helpers.ts RalphState (optional field), generated via generateRunHash() in src/review-gate.ts using SHA-256(cwd+stateDir+pid+timestamp+randomBytes(8)) → 16 hex chars. Stored in state file at loop start (ralph.ts:3356). Hash validated in as-review CLI (ralph.ts:939). HOWEVER: runCwd field is COMPLETELY MISSING from RalphState interface, state initialization, and as-review CLI. No CWD validation exists anywhere.",
+      "gap": "runCwd field missing from RalphState (loop-helpers.ts:81-102). No CWD validation in as-review CLI (ralph.ts:892-980). Plan §2.2 explicitly requires runCwd to prevent cross-directory contamination. Gotcha G22 (cross-directory vote contamination) is NOT mitigated. Also: hash spec changed from plan's 8 hex chars (randomBytes(4)) to 16 hex chars (SHA-256 derived) — more robust but deviates from spec."
+    },
+    {
+      "id": "R2",
+      "title": "External runner (separate CLI agent processes as voters)",
+      "status": "COVERED",
+      "evidence": "dispatchVoters() in src/review-gate.ts spawns voters via Bun.spawn (line ~217) as separate processes. Each voter gets its own process space, API session, and cannot see Ralph's internal state. Sequential dispatch implemented.",
+      "gap": ""
+    },
+    {
+      "id": "R3",
+      "title": "Inner agent COMPLETED intercepted, not modified",
+      "status": "COVERED",
+      "evidence": "Inner agent still emits <promise>COMPLETED</promise> unchanged. Ralph intercepts at break point (ralph.ts:3998): if reviewConfig?.enabled → skip break, enter review gate. completionDetected detection path untouched. Inner agent has zero knowledge of review system.",
+      "gap": ""
+    },
+    {
+      "id": "R4",
+      "title": "Voters confirm completion via quorum",
+      "status": "COVERED",
+      "evidence": "checkQuorum() in src/review-gate.ts counts approved/rejected/pending. dispatchVoters() checks quorum after each sequential vote. Quorum met → phase='approved', break loop. Any rejection → resetVotes(), continue loop.",
+      "gap": ""
+    },
+    {
+      "id": "S2-runhash",
+      "title": "§2 Run Hash: 8 random hex chars (simple, short for CLI)",
+      "status": "PARTIAL",
+      "evidence": "generateRunHash() in src/review-gate.ts uses SHA-256(cwd+stateDir+pid+timestamp+randomBytes(8)).slice(0,16) — 16 hex chars. Plan §2.1 specifies randomBytes(4).toString('hex') → 8 hex chars, noting 'short enough to type in CLI without copy-paste fatigue'.",
+      "gap": "16 hex chars instead of 8. More robust (64-bit entropy vs 32-bit) but longer for CLI usage. Functional impact: negligible. Spec deviation: minor. Plan notes 'If collision ever happens in practice, bump to randomBytes(6) (12 hex chars)' — implementation went directly to 16."
+    },
+    {
+      "id": "S2-runcwd",
+      "title": "§2.2 Run CWD: cross-contamination guard",
+      "status": "MISSING",
+      "evidence": "Searched all implementation files for 'runCwd' — zero results. RalphState interface in loop-helpers.ts has no runCwd field. as-review CLI in ralph.ts validates hash only (line 939), does not validate CWD. No CWD comparison anywhere.",
+      "gap": "CRITICAL: Entire runCwd feature missing. Plan §2.2 specifies: (1) capture process.cwd() at loop start, (2) store in state file, (3) validate in as-review CLI that cwd matches. Without this, a state file copied from /project-a/ to /project-b/ allows votes against the wrong Ralph. Gotcha G22 explicitly calls this out as HIGH severity."
+    },
+    {
+      "id": "S3-config",
+      "title": "§3 TOML [review] section parsing — all fields",
+      "status": "COVERED",
+      "evidence": "parseReviewConfig() in src/runtime-config.ts parses: enabled, quorum, voter_timeout (default '10m'), max_reject_cycles (default 5), review_prompt_file (default ''), [[review.voter]] with agent+model. All fields present. Validation requires enabled=true, quorum, and at least one voter.",
+      "gap": ""
+    },
+    {
+      "id": "S3-prompt",
+      "title": "§3.2 Default review prompt + template variables",
+      "status": "COVERED",
+      "evidence": "DEFAULT_REVIEW_PROMPT in src/review-gate.ts matches plan spec exactly. Template variables {run_hash}, {cwd}, {prompt}, {iteration_count}, {rejection_history} all substituted in buildReviewPrompt(). Custom prompt file override with fallback to built-in on file-not-found (line ~68-71).",
+      "gap": ""
+    },
+    {
+      "id": "S4-completion-flow",
+      "title": "§4 Completion flow change — intercept at break point",
+      "status": "COVERED",
+      "evidence": "ralph.ts:3998-4060 implements the full flow: if reviewConfig?.enabled && state.reviewGate?.enabled → set phase='inner_complete', saveState, dispatchVoters, check result. On approval: cleanup + break (same as legacy). On rejection: check max cycles, continue loop. Legacy path unchanged in else branch.",
+      "gap": ""
+    },
+    {
+      "id": "S4-voter-dispatch",
+      "title": "§4.3 Voter dispatch (sequential, with timeout)",
+      "status": "COVERED",
+      "evidence": "dispatchVoters() in src/review-gate.ts iterates voters sequentially. Bun.spawn with stdout/stderr pipes. Timeout via Promise.race with setTimeout → auto-reject 'voter timeout'. Output parsed via checkTerminalPromise for APPROVE/REJECT. No tag → auto-reject 'voter output unrecognized'. State saved after each vote.",
+      "gap": ""
+    },
+    {
+      "id": "S4-vote-recording",
+      "title": "§4.4 Vote recording — single path (Ralph writes directly, as-review also writes directly)",
+      "status": "COVERED",
+      "evidence": "Automatic path: dispatchVoters() calls saveStateFn callback which calls saveState() with atomic write. Manual path: as-review CLI in ralph.ts writes via same atomic temp+rename pattern (line 975-976). Both converge on atomic write.",
+      "gap": ""
+    },
+    {
+      "id": "S5-as-review-cli",
+      "title": "§5 ralph as-review CLI — approve/reject/status commands",
+      "status": "PARTIAL",
+      "evidence": "as-review subcommand implemented in ralph.ts:892-980. Supports approve, reject, status actions with --hash, --reason flags. Outputs JSON. Uses --state-dir for custom state directory. Hash validation present (line 939). Tests I1-I6 pass.",
+      "gap": "THREE gaps: (1) No CWD validation — plan §5.2 requires validating BOTH hash AND cwd. (2) No PID-based warning — plan §5.2 says 'if state.active=true but no process with state.pid exists → warn but allow vote'. I6 test covers this but no warning is printed. (3) Args parsed inline in ralph.ts, NOT in src/parse-args.ts as specified in §10."
+    },
+    {
+      "id": "S6-state-fields",
+      "title": "§6 State file changes — runHash, reviewGate, votes",
+      "status": "PARTIAL",
+      "evidence": "RalphState in loop-helpers.ts has runHash?: string and reviewGate?: ReviewGateState. ReviewGateState in types.ts has all specified fields: enabled, quorum, quorumRequired, quorumTotal, phase, rejectCycleCount, lastRejectionReasons, votes. Vote structure matches spec.",
+      "gap": "runCwd field missing from RalphState. loadState() in loop-helpers.ts does NOT apply defaults for missing fields — it returns raw JSON parse result. Plan §6.4 specifies loadState should apply defaults (reviewGate defaults to disabled, runHash to ''). The code handles this at loop start in ralph.ts:3367-3372 instead, which is functionally equivalent but not where the plan specified it."
+    },
+    {
+      "id": "S6-vote-reset",
+      "title": "§6.2 Vote reset + rejection feedback",
+      "status": "COVERED",
+      "evidence": "resetVotes() in src/review-gate.ts clears all votes to pending, increments rejectCycleCount, collects rejection reasons. dispatchVoters() calls resetVotes on rejection, then injectRejectionFeedback. Max reject cycles checked in ralph.ts:4048 with force-stop.",
+      "gap": ""
+    },
+    {
+      "id": "S6-rejection-feedback",
+      "title": "§6.3 Rejection feedback injection via ralph-context.md",
+      "status": "COVERED",
+      "evidence": "injectRejectionFeedback() in src/review-gate.ts appends to contextPath with exact format from plan: '## Review Feedback (Previous Attempt Rejected)' followed by reasons. Uses appendFileSync. Called from dispatchVoters() after vote reset. Single mechanism, single consumer (inner agent).",
+      "gap": ""
+    },
+    {
+      "id": "S6-rejection-history",
+      "title": "§6.3 Rejection history in voter prompt (for voters, separate from feedback)",
+      "status": "COVERED",
+      "evidence": "buildReviewPrompt() substitutes {rejection_history} with formatted previous rejection reasons from state.lastRejectionReasons. This is for VOTERS (different consumer than ralph-context.md feedback). Template variables populated from state.",
+      "gap": ""
+    },
+    {
+      "id": "S7-unification",
+      "title": "§7 RalphState interface unification",
+      "status": "COVERED",
+      "evidence": "RalphState defined once in src/loop-helpers.ts:81-102. ralph.ts imports it as 'type RalphState as RalphStateBase' and aliases 'type RalphState = RalphStateBase' (ralph.ts:30,33). No duplicate interface in ralph.ts. grep confirms 0 instances of 'interface RalphState' in ralph.ts vs 1 in loop-helpers.ts.",
+      "gap": ""
+    },
+    {
+      "id": "S8-atomic-save",
+      "title": "§8 Atomic saveState — temp file + renameSync",
+      "status": "COVERED",
+      "evidence": "saveState() in loop-helpers.ts:124-130 uses: const tmpPath = '${statePath}.tmp-${process.pid}-${Date.now()}'; writeFileSync(tmpPath, ...); renameSync(tmpPath, statePath). Tests verify no leftover .tmp files after writes.",
+      "gap": ""
+    },
+    {
+      "id": "S9-gotchas",
+      "title": "§9 All gotchas G1-G22 addressed",
+      "status": "PARTIAL",
+      "evidence": "G1(backward compat): COVERED. G2(concurrent writes): COVERED(atomic). G3(stale hash): COVERED(hash validation). G4(voter crash): COVERED(try/catch+timeout). G5(infinite reject): COVERED(maxRejectCycles). G6(state dir not found): COVERED. G7(rejection feedback): COVERED. G8(Ctrl+C): COVERED(inReviewGate flag+phase='interrupted'). G9(auto-commit+rejection): NOT HANDLED(no documentation). G10(hash collision): COVERED(16 chars, even more than spec). G11(parsing ambiguity): COVERED(strict checkTerminalPromise). G12(struggle during review): COVERED(by code structure—struggle counted before review dispatch). G13(dead loop): COVERED. G14(config hot-reload): NOT DOCUMENTED(config read once at start). G15(dual state): COVERED(unified). G16(fall through): COVERED(if/else). G17(custom prompt): COVERED(fallback). G18(invalid quorum): COVERED(validateReviewConfig). G19(old state): PARTIAL(handled at loop start, not in loadState). G20(context timing): COVERED. G21(orphaned voter): NOT HANDLED(timeout handles on restart). G22(cross-directory): MISSING(no runCwd).",
+      "gap": "G9(auto-commit+rejection) not documented. G14(config hot-reload) not documented. G22(cross-directory contamination) is CRITICAL and unmitigated — no runCwd field, no CWD validation."
+    },
+    {
+      "id": "S10-files-changed",
+      "title": "§10 All files changed as listed",
+      "status": "PARTIAL",
+      "evidence": "New files: src/review-gate.ts ✅, tests/review-gate.test.ts ✅, tests/as-review-cli.test.ts ✅. Modified: src/loop-helpers.ts ✅, ralph.ts ✅, src/runtime-config.ts ✅, src/types.ts ✅. Unchanged: completion.ts ✅. Checked: src/run-loop.ts ✅ (163 lines, no review-related changes needed, checkCompletion reused as-is).",
+      "gap": "src/parse-args.ts was listed as 'Modify' in §10 but as-review args are parsed inline in ralph.ts instead. parse-args.ts has 0 references to 'as-review' or 'review'. This is a deviation from the plan's file layout but functionally equivalent — the parsing happens, just in a different file."
+    },
+    {
+      "id": "S11-unit-tests",
+      "title": "§11.1 Unit tests T1-T22 (22 tests)",
+      "status": "PARTIAL",
+      "evidence": "36 test cases in review-gate.test.ts. Present: T1(hash generation) ✅, T2(3/3 approve) ✅, T3(2/3 not met) ✅, T4(single reject reset) ✅, T5(max cycles) ✅, T6(timeout calc) ✅, T7(disabled default) ✅, T9(state creation) ✅, T10(no tag→unrecognized) ✅, T11(no false positive) ✅, T12(feedback injection) ✅, T13(tasksMode+taskPromise) ✅(design), T15(abortPromise) ✅(design), T19(invalid quorum) ✅, T20(custom prompt) ✅, T21(old state) ✅, T22(context timing) ✅. Plus extra tests beyond plan: atomic saveState(3), quorum parsing(6), review config parsing(4), vote reset preservation, prompt rejection history.",
+      "gap": "MISSING test cases: T8(hash mismatch error — exists as I4 in CLI tests but not as a unit test), T14(tasksMode + completionPromise — review fires on final completion — no test), T16(Ctrl+C during review dispatch — no test for SIGINT signal handling), T18(struggle detection excluded during review — no test). 4 of 22 plan-specified unit tests are MISSING. Extra tests compensate in coverage but these specific behavioral tests are absent."
+    },
+    {
+      "id": "S11-integration-tests",
+      "title": "§11.2 Integration tests I1-I7 (7 tests)",
+      "status": "PARTIAL",
+      "evidence": "6 test cases in as-review-cli.test.ts: I1(approve via CLI) ✅, I2(reject via CLI with reason) ✅, I3(status via CLI) ✅, I4(invalid hash exit 1) ✅, I5(missing state dir exit 1) ✅, I6(dead loop vote recorded) ✅.",
+      "gap": "MISSING: I7(CWD mismatch — state file copied to different directory, vote attempted → exit 1 'CWD mismatch'). This test CANNOT be implemented because runCwd feature is entirely missing. This is a direct consequence of the S2-runcwd gap."
+    },
+    {
+      "id": "S13-verification-checklist",
+      "title": "§13 Verification checklist — all items",
+      "status": "PARTIAL",
+      "evidence": "inventory.json claims all items true. Actual audit finds: RalphState unified ✅, atomic saveState ✅, run-hash generated ✅(16 not 8 chars), runCwd captured ❌ MISSING, legacy preserved ✅, review gate intercepts ✅, inner agent unchanged ✅, as-review CLI works ✅(partial), vote reset ✅, rejection feedback ✅, rejection history ✅, max reject cycles ✅, voter timeout ✅, strict parsing ✅, no tag→auto-reject ✅, completion.ts not modified ✅, TOML parsing ✅, CLI args in parse-args ❌(inline in ralph.ts), custom prompt fallback ✅, hash AND cwd validation ❌(no cwd), invalid quorum ✅, tasksMode ✅, abortPromise ✅, Ctrl+C graceful ✅, struggle exclusion ✅(by structure), run-loop.ts checked ✅.",
+      "gap": "3 checklist items FAIL: (1) 'Run CWD captured at loop start, validated in as-review', (2) 'CLI args in src/parse-args.ts', (3) 'as-review CLI validates BOTH hash AND cwd'. inventory.json self-reports these as true but they are not."
+    }
+  ],
+  "overall_complete": false,
+  "critical_gaps": [
+    {
+      "id": "CG1",
+      "severity": "CRITICAL",
+      "section": "§2.2, §5.2, §6.1, §9.G22, §11.2.I7, §13",
+      "title": "runCwd feature entirely missing — no cross-directory contamination guard",
+      "detail": "Plan specifies runCwd field on RalphState, CWD capture at loop start, CWD validation in as-review CLI, and test I7 for CWD mismatch. NONE of this is implemented. Gotcha G22 (HIGH severity) is unmitigated. A state file copied between directories allows votes against the wrong Ralph instance.",
+      "remediation": "Add runCwd?: string to RalphState in loop-helpers.ts. Set runCwd: process.cwd() at state initialization (ralph.ts:3356). Add CWD validation in as-review CLI (ralph.ts ~line 939): if reviewState.runCwd !== process.cwd() → error. Add I7 test."
+    },
+    {
+      "id": "CG2",
+      "severity": "HIGH",
+      "section": "§11.1",
+      "title": "4 unit tests from plan T1-T22 are MISSING",
+      "detail": "T8(hash mismatch unit test), T14(tasksMode+completionPromise), T16(Ctrl+C during review), T18(struggle exclusion during review) — none have dedicated test cases. T14 and T16 are particularly important for behavioral correctness. T15(abortPromise) and T13(tasksMode+taskPromise) are design-verification stubs (expect(true).toBe(true)), not actual runtime tests.",
+      "remediation": "Add T8 as a unit test calling as-review logic directly with wrong hash. Add T14 testing that review fires when tasksMode is on AND final completionPromise detected. Add T16 testing SIGINT signal handler during inReviewGate=true. Add T18 verifying struggle counters don't increment during review wait."
+    },
+    {
+      "id": "CG3",
+      "severity": "MEDIUM",
+      "section": "§10, §13",
+      "title": "inventory.json self-reports 3 unmet checklist items as true",
+      "detail": "inventory.json verificationChecklist claims 'runCwd' items as true (not explicitly listed but implied by 'overall_complete'), but runCwd is not implemented. The parse-args checklist item is also incorrectly marked. Self-reported progress is unreliable for these items.",
+      "remediation": "Update inventory.json to reflect actual state. Mark runCwd-related items as false. Mark parse-args item as false (inline parsing is functional deviation from plan)."
+    },
+    {
+      "id": "CG4",
+      "severity": "LOW",
+      "section": "§2.1",
+      "title": "Run hash spec deviation: 16 hex chars instead of 8",
+      "detail": "Plan specifies randomBytes(4).toString('hex') = 8 chars for CLI ergonomics. Implementation uses SHA-256 derived 16 hex chars. More robust but deviates from 'short enough to type in CLI' design intent. 16 chars still works for copy-paste.",
+      "remediation": "Document the deviation in plan/progress as intentional improvement, or revert to 8-char simple random as originally spec'd."
+    }
+  ],
+  "summary": {
+    "total_requirements": 22,
+    "covered": 14,
+    "partial": 7,
+    "missing": 1,
+    "critical_gaps_count": 1,
+    "high_gaps_count": 1,
+    "medium_gaps_count": 1,
+    "low_gaps_count": 1
+  }
+}

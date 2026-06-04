@@ -64,3 +64,47 @@ export interface RalphRuntimeConfig {
    json_display?: "beautify" | "raw" | "text";
    output_buffer_bytes?: number;
 }
+
+// ── Review Gate Types ────────────────────────────────────────────────────────
+
+export interface ReviewVoter {
+   agent: string;
+   model: string;
+   promptFlag?: string; // CLI flag for prompt (default: "-p"). Codex uses "-q", etc.
+}
+
+export interface ReviewConfig {
+   enabled: boolean;
+   quorum: string;          // "X/Y" format
+   voterTimeout: string;    // Duration string ("10m")
+   maxRejectCycles: number; // Max consecutive rejections before force-stop
+   reviewPromptFile: string; // Optional: path to custom review prompt file
+   voters: ReviewVoter[];
+}
+
+export type ReviewVoteStatus = "pending" | "approved" | "rejected" | "timeout";
+
+export interface ReviewVote {
+   status: ReviewVoteStatus;
+   at: string;   // ISO timestamp
+   reason: string;
+}
+
+export type ReviewGatePhase =
+   | "disabled"
+   | "inner_complete"
+   | "waiting_review"
+   | "approved"
+   | "rejected"
+   | "interrupted";
+
+export interface ReviewGateState {
+   enabled: boolean;
+   quorum: string;
+   quorumRequired: number;
+   quorumTotal: number;
+   phase: ReviewGatePhase;
+   rejectCycleCount: number;
+   lastRejectionReasons: string[];
+   votes: Record<string, ReviewVote>;
+}

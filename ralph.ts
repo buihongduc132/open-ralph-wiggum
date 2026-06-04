@@ -7,7 +7,7 @@
  */
 
 import { $ } from "bun";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, lstatSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, lstatSync, renameSync } from "fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import { checkTerminalPromise, containsPromiseTag, escapeRegex, stripAnsi, tasksMarkdownAllComplete } from "./completion";
 import {
@@ -22,6 +22,18 @@ import { ARGS_TEMPLATES, type AgentBuildArgsOptions } from "./agent-builders";
 import { beautifyJsonLine, extractJsonCompletionText, isJsonModeAgent, type BeautifierConfig } from "./src/json-beautifier";
 import { StreamAccumulator } from "./src/stream-accumulator";
 import { stripFrontmatter } from "./template-utils";
+import { type RalphState as RalphStateBase } from "./src/loop-helpers";
+import {
+   generateRunHash,
+   createReviewGateState,
+   dispatchVoters,
+   resetVotes,
+   checkQuorum,
+   injectRejectionFeedback,
+   validateReviewConfig,
+} from "./src/review-gate";
+import { parseReviewConfig } from "./src/runtime-config";
+import type { ReviewConfig, ReviewGateState } from "./src/types";
 
 export const VERSION = "1.3.0";
 
@@ -1301,7 +1313,138 @@ Learn more: https://ghuntley.com/ralph/
       process.exit(0);
    }
 
+   // ── as-review subcommand ───────────────────────────────────────────────
+   // Handle "ralph as-review <action> --hash <hash> [--reason <text>] [--state-dir <path>]"
+   const asReviewIdx = args.indexOf("as-review");
+   if (asReviewIdx !== -1) {
+      const reviewArgs = args.slice(asReviewIdx + 1);
+      const action = reviewArgs[0]; // approve, reject, status
+
+      if (!action || !["approve", "reject", "status"].includes(action)) {
+         console.error("Error: as-review requires an action: approve, reject, or status");
+         console.error("Usage: ralph as-review <approve|reject|status> --hash <hash> [--reason <text>]");
+         process.exit(1);
+      }
+
+      // Parse --hash
+      const hashIdx = reviewArgs.indexOf("--hash");
+      if (hashIdx === -1 || !reviewArgs[hashIdx + 1]) {
+         console.error("Error: --hash is required for as-review commands");
+         process.exit(1);
+      }
+      const hash = reviewArgs[hashIdx + 1];
+
+      // Parse --reason
+      let reason = "";
+      const reasonIdx = reviewArgs.indexOf("--reason");
+      if (reasonIdx !== -1 && reviewArgs[reasonIdx + 1]) {
+         reason = reviewArgs[reasonIdx + 1];
+      }
+
+      // Load state file
+      if (!existsSync(statePath)) {
+         console.error("Error: No active Ralph state file found. Is Ralph running in this directory?");
+         process.exit(1);
+      }
+
+      const reviewState = (() => {
+         try {
+            return JSON.parse(readFileSync(statePath, "utf-8"));
+         } catch {
+            return null;
+         }
+      })();
+
+      if (!reviewState) {
+         console.error("Error: Failed to parse Ralph state file.");
+         process.exit(1);
+      }
+
+      if (reviewState.runHash !== hash) {
+         console.error(`Error: Hash mismatch. Provided: ${hash}, Current: ${reviewState.runHash || "(none)"}`);
+         process.exit(1);
+      }
+
+      // CWD validation: prevent cross-directory vote contamination (G22)
+      if (reviewState.runCwd && reviewState.runCwd !== process.cwd()) {
+         console.error(`Error: CWD mismatch. Ralph running in: ${reviewState.runCwd}, Current: ${process.cwd()}`);
+         process.exit(1);
+      }
+
+      // Warn if Ralph loop is dead (pid not running) but still allow vote
+      if (reviewState.active && reviewState.pid) {
+         try {
+            process.kill(reviewState.pid, 0); // signal 0 = existence check
+         } catch {
+            console.warn(`Warning: Ralph loop (pid ${reviewState.pid}) is not running. Vote will still be recorded.`);
+         }
+      }
+
+      if (action === "status") {
+         // Output status as JSON
+         const rg = reviewState.reviewGate;
+         console.log(JSON.stringify({
+            runHash: reviewState.runHash,
+            runCwd: reviewState.runCwd,
+            phase: rg?.phase ?? "disabled",
+            rejectCycleCount: rg?.rejectCycleCount ?? 0,
+            votes: rg?.votes ?? {},
+            lastRejectionReasons: rg?.lastRejectionReasons ?? [],
+         }, null, 2));
+         process.exit(0);
+      }
+
+      // approve or reject
+      const voterKey = "manual-vote";
+      if (!reviewState.reviewGate) {
+         console.error("Error: No review gate active in this Ralph run.");
+         process.exit(1);
+      }
+
+      const now = new Date().toISOString();
+      // Defensive: ensure votes object exists (corrupted state file guard)
+      if (!reviewState.reviewGate.votes) {
+         reviewState.reviewGate.votes = {};
+      }
+      if (action === "approve") {
+         reviewState.reviewGate.votes[voterKey] = { status: "approved", at: now, reason: "" };
+      } else {
+         reviewState.reviewGate.votes[voterKey] = { status: "rejected", at: now, reason };
+      }
+
+      // Write state back using atomic write
+      const tmpPath = `${statePath}.tmp-${process.pid}-${Date.now()}`;
+      writeFileSync(tmpPath, JSON.stringify(reviewState, null, 2));
+      renameSync(tmpPath, statePath);
+
+      console.log(JSON.stringify({
+         action,
+         voterKey,
+         hash,
+         status: action === "approve" ? "approved" : "rejected",
+         reason,
+         at: now,
+      }, null, 2));
+      process.exit(0);
+   }
+
    const runtimeTomlConfig = loadRuntimeTomlConfig(tomlConfigPath, explicitTomlConfigPath);
+
+   // Load review gate config from the same TOML file
+   let reviewConfig: ReviewConfig | null = null;
+   if (existsSync(tomlConfigPath)) {
+      try {
+         const raw = readFileSync(tomlConfigPath, "utf-8");
+         const parsed = Bun.TOML.parse(raw) as Record<string, unknown>;
+         reviewConfig = parseReviewConfig(parsed);
+         if (reviewConfig) {
+            validateReviewConfig(reviewConfig);
+         }
+      } catch (err) {
+         console.error(`Error: Invalid review config: ${err instanceof Error ? err.message : err}`);
+         process.exit(1);
+      }
+   }
 
    if (!customConfigPath && runtimeTomlConfig?.agent_config) {
       customConfigPath = runtimeTomlConfig.agent_config;
@@ -2507,32 +2650,8 @@ Learn more: https://ghuntley.com/ralph/
       process.exit(1);
    }
 
-   interface RalphState {
-      active: boolean;
-      iteration: number;
-      minIterations: number;
-      maxIterations: number;
-      completionPromise: string;
-      abortPromise?: string; // Optional abort signal for early exit
-      tasksMode: boolean;
-      taskPromise: string;
-      prompt: string;
-      promptTemplate?: string; // Custom prompt template path
-      startedAt: string;
-      pid?: number;
-      pidStartSignature?: string;
-      model: string;
-      agent: AgentType;
-      rotation?: string[];
-      rotationIndex?: number;
-      stallingTimeoutMs?: number;
-      blacklistDurationMs?: number;
-      stallingAction?: "stop" | "rotate";
-      blacklistedAgents?: BlacklistedAgent[];
-      stallRetries?: boolean;
-      stallRetryMinutes?: number;
-      fallbackBlacklist?: string[];
-   }
+   // RalphState imported from src/loop-helpers.ts (single source of truth)
+   type RalphState = RalphStateBase;
 
    function getFallbackKey(agent: AgentType, modelName: string): string {
       return `${agent}:${modelName}`;
@@ -2581,7 +2700,10 @@ Learn more: https://ghuntley.com/ralph/
       } else {
          mkdirSync(stateDir, { recursive: true });
       }
-      writeFileSync(statePath, JSON.stringify(state, null, 2));
+      // Atomic write: temp file + renameSync (POSIX guarantees atomicity)
+      const tmpPath = `${statePath}.tmp-${process.pid}-${Date.now()}`;
+      writeFileSync(tmpPath, JSON.stringify(state, null, 2));
+      renameSync(tmpPath, statePath);
    }
 
    function loadState(): RalphState | null {
@@ -3710,6 +3832,9 @@ Unable to read ${currentTasksFileLabel()}
          stallRetries,
          stallRetryMinutes,
          fallbackBlacklist: [],
+         runHash: generateRunHash(process.cwd(), stateDirInput),
+         runCwd: process.cwd(),
+         reviewGate: reviewConfig ? createReviewGateState(reviewConfig) : undefined,
       };
 
       // Ensure blacklistedAgents array exists (for backward compatibility)
@@ -3718,6 +3843,45 @@ Unable to read ${currentTasksFileLabel()}
       }
       if (!state.fallbackBlacklist) {
          state.fallbackBlacklist = [];
+      }
+      // Initialize review gate fields for backward compat (old state files)
+      if (!state.runHash) {
+         state.runHash = generateRunHash(process.cwd(), stateDirInput);
+      }
+      if (!state.runCwd) {
+         state.runCwd = process.cwd();
+      }
+      if (reviewConfig && !state.reviewGate) {
+         state.reviewGate = createReviewGateState(reviewConfig);
+      }
+
+      // Config sync on resume: ensure review gate state matches current config
+      if (resuming && reviewConfig && state.reviewGate) {
+         const freshGate = createReviewGateState(reviewConfig);
+         state.reviewGate.quorumRequired = freshGate.quorumRequired;
+         state.reviewGate.quorumTotal = freshGate.quorumTotal;
+         state.reviewGate.quorum = freshGate.quorum;
+         // Merge votes: keep existing for matching voters, add new, remove obsolete
+         const mergedVotes: Record<string, ReviewVote> = {};
+         for (const key of Object.keys(freshGate.votes)) {
+            mergedVotes[key] = state.reviewGate.votes?.[key]?.status === "approved" || state.reviewGate.votes?.[key]?.status === "rejected" || state.reviewGate.votes?.[key]?.status === "timeout"
+               ? state.reviewGate.votes[key]
+               : { status: "pending", at: "", reason: "" };
+         }
+         state.reviewGate.votes = mergedVotes;
+      }
+
+      // Crash recovery: detect stale review gate state from crashed previous run
+      if (resuming && state.reviewGate && state.reviewGate.phase === "waiting_review") {
+         console.warn(`\n⚠️ Detected stale review gate state (phase: waiting_review). Previous run may have crashed during voter dispatch.`);
+         console.warn(`   Resetting review gate to inner_complete for re-dispatch.`);
+         state.reviewGate.phase = "inner_complete";
+         // Reset all votes to pending (defensive: handle missing/corrupted votes)
+         const votes = state.reviewGate.votes || {};
+         for (const key of Object.keys(votes)) {
+            votes[key] = { status: "pending", at: "", reason: "" };
+         }
+         state.reviewGate.votes = votes;
       }
 
       // Update stalling config if resuming (allow runtime override)
@@ -3798,6 +3962,7 @@ Unable to read ${currentTasksFileLabel()}
 
       // Set up signal handler for graceful shutdown
       let stopping = false;
+      let inReviewGate = false; // Set to true during review gate dispatch
       process.on("SIGINT", () => {
          if (stopping) {
             console.log("\nForce stopping...");
@@ -3805,6 +3970,13 @@ Unable to read ${currentTasksFileLabel()}
          }
          stopping = true;
          console.log("\nGracefully stopping Ralph loop...");
+
+         // If we're in the review gate, preserve state with interrupted phase
+         if (inReviewGate && state.reviewGate) {
+            state.reviewGate.phase = "interrupted";
+            try { saveState(state); } catch { /* best-effort */ }
+            console.log("📋 Review gate interrupted — state preserved for manual review.");
+         }
 
          // Abort any pending stream operations
          if (currentAbortController) {
@@ -3831,8 +4003,10 @@ Unable to read ${currentTasksFileLabel()}
             }
          }
 
-         clearState();
-         clearPendingQuestions();
+         if (!inReviewGate) {
+            clearState();
+            clearPendingQuestions();
+         }
          console.log("Loop cancelled.");
 
          // Use setImmediate to allow the abort event to propagate
@@ -4346,21 +4520,84 @@ Unable to read ${currentTasksFileLabel()}
                   console.log(`\n⏳ Completion promise detected, but minimum iterations (${minIterations}) not yet reached.`);
                   console.log(`   Continuing to iteration ${state.iteration + 1}...`);
                 } else {
-                   console.log(`\n╔══════════════════════════════════════════════════════════════════╗`);
-                   console.log(`║  ✅ Completion promise detected: <promise>${completionPromise}</promise>`);
-                   console.log(`║  Task completed in ${state.iteration} iteration(s)`);
-                   console.log(`║  Total time: ${formatDurationLong(history.totalDurationMs)}`);
-                   console.log(`╚══════════════════════════════════════════════════════════════════╝`);
-                   // Only clear state if using default state directory
-                   // When using --state-dir (custom directory), preserve state for testing/inspection
-                   const defaultStateDir = join(process.cwd(), ".ralph");
-                   if (stateDirInput === defaultStateDir) {
-                      clearState();
-                      clearHistory();
-                      clearContext();
-                      clearPendingQuestions();
+                   // ── Review Gate Check ───────────────────────────────────────────
+                   if (reviewConfig?.enabled && state.reviewGate?.enabled) {
+                      // REVIEW GATE: skip cleanup and break, enter review flow
+                      console.log(`\n📋 Completion detected, dispatching review gate...`);
+                      console.log(`╔══════════════════════════════════════════════════════════════════╗`);
+                      console.log(`║  📋 Completion promise detected: <promise>${completionPromise}</promise>`);
+                      console.log(`║  Task completed in ${state.iteration} iteration(s)`);
+                      console.log(`║  Total time: ${formatDurationLong(history.totalDurationMs)}`);
+                      console.log(`║  REVIEW GATE ACTIVE — awaiting voter approval`);
+                      console.log(`╚══════════════════════════════════════════════════════════════════╝`);
+                      state.reviewGate.phase = "inner_complete";
+                      saveState(state);
+
+                      // Dispatch voters
+                      inReviewGate = true;
+                      const reviewResult = await dispatchVoters({
+                         state: state.reviewGate,
+                         config: reviewConfig,
+                         cwd: process.cwd(),
+                         prompt: state.prompt,
+                         iterationCount: state.iteration,
+                         contextPath,
+                         statePath,
+                         stateDir,
+                         runHash: state.runHash || "",
+                         saveStateFn: (rgState: ReviewGateState) => {
+                            state.reviewGate = rgState;
+                            saveState(state);
+                         },
+                      });
+
+                      state.reviewGate = reviewResult.state;
+                      saveState(state);
+                      inReviewGate = false;
+
+                      if (reviewResult.approved) {
+                         // QUORUM MET: now do cleanup and break (same as legacy)
+                         console.log(`\n╔══════════════════════════════════════════════════════════════════╗`);
+                         console.log(`║  ✅ Review approved! Loop completing.`);
+                         console.log(`╚══════════════════════════════════════════════════════════════════╝`);
+                         const defaultStateDir = join(process.cwd(), ".ralph");
+                         if (stateDirInput === defaultStateDir) {
+                            clearState();
+                            clearHistory();
+                            clearContext();
+                            clearPendingQuestions();
+                         }
+                         break;
+                      }
+
+                      // REJECTED: check max reject cycles
+                      if (state.reviewGate.rejectCycleCount >= reviewConfig.maxRejectCycles) {
+                         console.log(`\n❌ Max reject cycles reached (${state.reviewGate.rejectCycleCount}/${reviewConfig.maxRejectCycles}). Force-stopping loop.`);
+                         state.reviewGate.phase = "rejected";
+                         state.active = false;
+                         saveState(state);
+                         break;
+                      }
+
+                      // REJECTED: loop continues — rejection feedback already injected by dispatchVoters
+                      console.log(`\n🔄 Review rejected (cycle ${state.reviewGate.rejectCycleCount}/${reviewConfig.maxRejectCycles}). Continuing loop...`);
+                      // Do NOT break — loop continues to next iteration
+                   } else {
+                      // LEGACY: existing cleanup + break (unchanged)
+                      console.log(`\n╔══════════════════════════════════════════════════════════════════╗`);
+                      console.log(`║  ✅ Completion promise detected: <promise>${completionPromise}</promise>`);
+                      console.log(`║  Task completed in ${state.iteration} iteration(s)`);
+                      console.log(`║  Total time: ${formatDurationLong(history.totalDurationMs)}`);
+                      console.log(`╚══════════════════════════════════════════════════════════════════╝`);
+                      const defaultStateDir = join(process.cwd(), ".ralph");
+                      if (stateDirInput === defaultStateDir) {
+                         clearState();
+                         clearHistory();
+                         clearContext();
+                         clearPendingQuestions();
+                      }
+                      break;
                    }
-                   break;
                 }
             }
 
