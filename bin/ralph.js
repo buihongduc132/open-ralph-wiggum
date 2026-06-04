@@ -858,7 +858,12 @@ class StreamAccumulator {
     const combined = this._errorLineBuffer + chunk;
     const lines = combined.split(`
 `);
-    this._errorLineBuffer = lines.pop() ?? "";
+    const remaining = lines.pop() ?? "";
+    if (remaining.length > DEFAULT_TAIL_MAX_BYTES) {
+      this._errorLineBuffer = remaining.slice(-MAX_ERROR_LINE_LENGTH * 4);
+    } else {
+      this._errorLineBuffer = remaining;
+    }
     for (const line of lines) {
       if (this._errors.length >= MAX_ERRORS)
         break;
@@ -2186,7 +2191,7 @@ Learn more: https://ghuntley.com/ralph/
     const iterationDuration = Date.now() - params.iterationStart;
     const snapshotAfter = await captureFileSnapshot();
     const filesModified = getModifiedFilesSinceSnapshot(params.snapshotBefore, snapshotAfter);
-    const errors = params.preExtractedErrors?.length ? params.preExtractedErrors : extractErrors(`${params.result}
+    const errors = params.preExtractedErrors !== undefined ? params.preExtractedErrors : extractErrors(`${params.result}
 ${params.stderr}`);
     const iterationRecord = {
       iteration: params.iteration,

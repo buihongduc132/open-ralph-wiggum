@@ -1405,7 +1405,12 @@ Learn more: https://ghuntley.com/ralph/
       const iterationDuration = Date.now() - params.iterationStart;
       const snapshotAfter = await captureFileSnapshot();
       const filesModified = getModifiedFilesSinceSnapshot(params.snapshotBefore, snapshotAfter);
-      const errors = params.preExtractedErrors?.length ? params.preExtractedErrors : extractErrors(`${params.result}\n${params.stderr}`);
+      // Use pre-extracted errors when available (from StreamAccumulator).
+   // undefined = accumulators not used → fall back to full text scan.
+   // [] (empty) = accumulators used, found nothing → skip redundant scan.
+   const errors = params.preExtractedErrors !== undefined
+      ? params.preExtractedErrors
+      : extractErrors(`${params.result}\n${params.stderr}`);
 
       const iterationRecord: IterationHistory = {
          iteration: params.iteration,

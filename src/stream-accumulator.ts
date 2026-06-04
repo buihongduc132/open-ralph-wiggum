@@ -96,7 +96,14 @@ export class StreamAccumulator {
       const combined = this._errorLineBuffer + chunk;
       const lines = combined.split("\n");
       // Keep the last (potentially partial) line in the buffer for next call
-      this._errorLineBuffer = lines.pop() ?? "";
+      const remaining = lines.pop() ?? "";
+      // Cap error line buffer to prevent unbounded growth on newline-less streams.
+      // Use a generous limit that still allows long error lines to be detected.
+      if (remaining.length > DEFAULT_TAIL_MAX_BYTES) {
+         this._errorLineBuffer = remaining.slice(-MAX_ERROR_LINE_LENGTH * 4);
+      } else {
+         this._errorLineBuffer = remaining;
+      }
 
       for (const line of lines) {
          if (this._errors.length >= MAX_ERRORS) break;
