@@ -1,75 +1,64 @@
 # Iteration 7 — BACKWARD Verifier Loop Audit (I % 7 == 0)
 
-**Date**: 2026-06-03
+**Date**: 2026-06-04
 **Type**: READ-ONLY audit, no implementation changes
-**Auditor**: External (claude -p) + self-audit
+**Auditor**: Self-audit + external (claude -p)
 
 ## Test Results
 
-- `tests/deterministic-injection.test.ts`: **167 pass, 0 fail, 401 expect() calls**
-- Full suite: **1185 pass, 27 skip, 3 fail** (pre-existing stall-retry, NOT from our work)
+- Full suite: **1384 pass, 27 skip, 0 fail** (52.40s)
+- Injection tests: **364 tests, 0 failures**
 
-## Audit Areas
+## Backward Hunt Results
 
-### 1. TOML Parsing Correctness — 8/10
-- `Bun.TOML.parse()` handles edge cases correctly
-- Types match spec (RuleEntry, RulesConfig, StateInjectionConfig, RalphRulesToml)
-- **F1 (medium)**: No runtime schema validation. `at = "five"` silently skipped by modulo filter (`typeof e.at === "number"`). Not a bug — defense-in-depth is correct.
-- **F2 (low)**: Silent `catch` on corrupt TOML returns `null`. No user feedback. Acceptable since `null` = no injection.
+| Check | Result |
+|-------|--------|
+| TOML parsing correctness | ✅ PASS (9/10) |
+| Regex collision with {{iteration}} etc. | ✅ PASS (10/10) |
+| Append-mode scaffolding integrity | ✅ PASS (9/10) |
+| PLACEHOLDER gate fires every iteration | ✅ PASS (10/10) |
+| Implementation drift from plan | ✅ NO DRIFT (9/10) |
+| Over/under-engineering | ✅ WELL-CALIBRATED (9/10) |
 
-### 2. Regex Collision Safety — 9/10
-- `{{inject:*}}` regex: `/\{\{inject:([a-zA-Z0-9_-]+)\}\}/g`
-- Verified: Does NOT match `{{7}}`, `{{iteration}}`, `{{prompt}}`, `{{do it}}`
-- Only matches `{{inject:sync}}`, `{{inject:state}}`, etc.
-- Order-of-operations: inject resolved BEFORE standard vars — injected content CAN use `{{iteration}}`
+## External Verifier Score: 9.3/10
 
-### 3. Append-Mode Scaffolding — 8/10
-- `{ flag: "a" }` for append — correct
-- Idempotency: checks `existing.includes('[rules.X]')` before appending
-- **F4 (low)**: Substring match could false-positive on comments like `# See [rules.sync] for details`. Unlikely in practice.
-- Always scaffolds with PLACEHOLDER — gate catches it next iteration
-
-### 4. PLACEHOLDER Gate — 9/10
-- Case-insensitive: `/PLACEHOLDER/i` — verified with tests
-- Fires every iteration (no cache) — correct
-- `process.exit(1)` — fail-close design
-- **F6 (UX, low)**: Returns FIRST offending section only. Multiple sections require multiple fix-run cycles.
-
-### 5. Plan Compliance (T1–T8) — 9/10
-All 8 tasks COMPLETE and verified:
-- T1: Types (RuleEntry, RulesConfig, StateInjectionConfig, RalphRulesToml)
-- T2: loadRulesToml (stateDir → cwd fallback, null if missing)
-- T3: resolveInjectPlaceholders (modulo math, state injection, blind templating)
-- T4: scaffoldRulesToml (append-mode, idempotent, PLACEHOLDER)
-- T5: findPlaceholderRules (case-insensitive, all sections)
-- T6: --init-rules subcommand (no-op if exists, stateDir)
-- T7: ralph-run skill updated with injection docs
-- T8: tests (167 tests, 401 expect() calls)
-
-## Demotions
-
-**NONE**. No tasks demoted. All tests pass. No regressions found.
-
-## Findings Summary
+## Findings
 
 | ID | Severity | Description | Action |
 |----|----------|-------------|--------|
-| F1 | Medium | No runtime schema validation on parsed TOML | Acceptable — filter is defense-in-depth |
-| F2 | Low | Silent catch on corrupt TOML | Acceptable — null = opt-out |
-| F3 | Info | Injected rule content won't re-resolve (correct, untested) | Could add test |
-| F4 | Low | Substring idempotency check in scaffold | Low risk |
-| F5 | Info | Leading newline on append to empty file | Cosmetic |
-| F6 | UX | Returns first PLACEHOLDER only | Minor UX improvement |
-| F7 | Info | Gate only runs in custom template path | By design |
+| F10 | Minor (cosmetic) | `validateRulesToml` iterates `Object.entries(toml.rules)` even when rules is malformed (string/array), producing misleading per-character warnings | Next forward iteration: add early-out after malformed-rules warning |
+| F11 | Info | Previous findings F1-F9 from earlier audits all resolved in commits `84fa224`, `15c6d4e`, `2d33920` | N/A |
 
-## External Review Score
+## Previous Finding Resolution Verification
 
-- Correctness: 8/10
-- Edge case handling: 8/10
-- Test coverage quality: 9/10
-- Code cleanliness: 9/10
-- **Overall: 8.6/10**
+- F1 (schema validation): ✅ Fixed — `validateRulesToml()` validates all fields
+- F4 (substring idempotency): ✅ Fixed — `headerRegex` with proper anchoring
+- F5 (leading newline): ✅ Fixed — separator logic only adds `\n` when needed
+- F6, F7: ✅ Acceptable as-designed
+- F2, F3: ✅ Acceptable (null = opt-out, by design)
+
+## Demotions
+
+**NONE**. All T1-T8 remain **completed**. No regressions found.
+
+## All Tasks Status
+
+| Task | Status | Notes |
+|------|--------|-------|
+| T1 — TOML schema types | ✅ completed | RuleEntry, RulesConfig, StateInjectionConfig, RalphRulesToml |
+| T2 — loadRulesToml() | ✅ completed | stateDir→cwd, null if missing, no caching |
+| T3 — resolveInjectPlaceholders | ✅ completed | Cross-anchor bleed prevention, state isolation |
+| T4 — scaffoldRulesToml | ✅ completed | Append-mode, idempotent, header regex |
+| T5 — PLACEHOLDER gate | ✅ completed | F9 double-load, case-insensitive, every iteration |
+| T6 — init-rules subcommand | ✅ completed | No-op if exists, stateDir |
+| T7 — ralph-run skill update | ✅ completed | SKILL.md + references/rules-toml.md |
+| T8 — Tests | ✅ completed | 364 tests, comprehensive edge case coverage |
 
 ## Conclusion
 
-No demotions needed. All 8 tasks remain completed. Implementation is sound with no correctness bugs.
+No demotions. All 8 tasks remain completed. Implementation is sound. One cosmetic finding (F10) recorded for next forward iteration — non-blocking, does not affect correctness or safety.
+
+## Next Checkpoints
+
+- **I10** (I%5==0): SYNC — lateral alignment
+- **I11** (I%11==0): BACKWARD — mutation + CodeQL (READ-ONLY)
