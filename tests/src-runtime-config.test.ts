@@ -32,6 +32,7 @@ function spawnRalphWithToml(tomlContent: string): { exitCode: number; stderr: st
       "bun", "run", "ralph.ts",
       "--toml-config", tomlPath,
       "--state-dir", join(tmpDir, "state"),
+      "--no-commit",
       "test prompt",
    ], {
       cwd: process.cwd(),
