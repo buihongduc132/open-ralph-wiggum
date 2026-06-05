@@ -874,3 +874,7 @@ git push
 11. **Build artifact**: `bin/ralph` is the compiled binary (94MB, produced by `bun build ralph.ts --outfile bin/ralph --compile`). `bin/ralph.js` is an OLD bundled file that should NOT be used. `bin/ralph-dev.js` is a dev build. The correct rebuild command is `bun build ralph.ts --outfile bin/ralph --compile`. Verification should use `./bin/ralph --help` (not `node bin/ralph.js`).
 
 12. **The `writeAgentConfig` and `runRalph` helpers**: These ARE defined in `tests/custom-agent-types.test.ts` (lines 60-85). The plan's integration test code correctly uses these existing helpers.
+
+13. **Hermes `--profile` / `-p` flag**: This is a top-level hermes pre-parse flag (sets HERMES_HOME before module imports). It works alongside `-z`: `hermes -z "prompt" -p verifier --yolo`. In ralph, this is supported via the **pass-through `--` separator**: `ralph --agent hermes "do stuff" -- --profile verifier`. The extraFlags mechanism in the hermes args builder already handles this. No dedicated ralph flag needed — pass-through is the correct pattern, same as how codex/cursor-agent extra flags work.
+
+14. **Other hermes flags via pass-through**: Similarly, `--provider`, `--toolsets`, `--skills`, `--accept-hooks`, `--ignore-user-config`, `--ignore-rules`, `--worktree`, `--max-turns`, `--pass-session-id` are all supported via pass-through args after `--`. Only the core flags (`-z`, `-m`, `--yolo`) are hardcoded in the builder.
