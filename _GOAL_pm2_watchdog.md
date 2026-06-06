@@ -10,6 +10,10 @@ Watchdog over ALL ralph instances running in PM2. Sleep 1 hour, then check every
 
 ## Rules
 
+- _GOAL IMMUTABILITY: NEVER modify this _GOAL file via any ceremony or iteration.
+  Once created, it is committed and frozen. If scope changes, create a NEW _GOAL file.
+  The _GOAL drives the loop. The loop does NOT drive the _GOAL.
+- ALL work MUST be signed off by verifier loop AND claude -p.
 - NEVER modify any ralph's _GOAL file. You are a watchdog — you UNBLOCK, not re-plan.
 - NEVER modify any ralph's source code or working directory.
 - NEVER delete PM2 processes — only stop/restart.
