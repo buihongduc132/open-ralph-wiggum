@@ -17,7 +17,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-PROJECT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+PROJECT_ROOT=$(git rev-parse --show-toplevel)
 cd "$PROJECT_ROOT"
 TEST_GATE_FILE="$PROJECT_ROOT/.test-last-run"
 FOUR_HOURS_AGO=$(($(date +%s) - 14400))   # 4 × 60 × 60
