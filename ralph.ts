@@ -172,6 +172,8 @@ export interface RalphRuntimeConfig {
    reuse_skip_rotation?: boolean;
    reuse_skip_min_iterations?: boolean;
    reuse_skip_max_iterations?: boolean;
+   json_display?: "beautify" | "raw" | "text";
+   output_buffer_bytes?: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -720,6 +722,18 @@ export function loadRuntimeTomlConfig(configPath: string, explicit: boolean): Ra
       config.reuse_skip_rotation = normalizeRuntimeConfigValue("reuse_skip_rotation", parsed.reuse_skip_rotation, "boolean") as boolean | undefined;
       config.reuse_skip_min_iterations = normalizeRuntimeConfigValue("reuse_skip_min_iterations", parsed.reuse_skip_min_iterations, "boolean") as boolean | undefined;
       config.reuse_skip_max_iterations = normalizeRuntimeConfigValue("reuse_skip_max_iterations", parsed.reuse_skip_max_iterations, "boolean") as boolean | undefined;
+      config.json_display = normalizeRuntimeConfigValue("json_display", parsed.json_display, "string") as "beautify" | "raw" | "text" | undefined;
+      config.output_buffer_bytes = normalizeRuntimeConfigValue("output_buffer_bytes", parsed.output_buffer_bytes, "number") as number | undefined;
+
+      if (config.json_display !== undefined && !["beautify", "raw", "text"].includes(config.json_display)) {
+         console.error(`Error: Invalid json_display value '${config.json_display}'. Must be 'beautify', 'raw', or 'text'.`);
+         process.exit(1);
+      }
+
+      if (config.output_buffer_bytes !== undefined && config.output_buffer_bytes < 0) {
+         console.error("Error: output_buffer_bytes must be non-negative.");
+         process.exit(1);
+      }
 
       if (config.prompt_file) {
          config.prompt_file = resolveConfigRelativePath(configPath, config.prompt_file);

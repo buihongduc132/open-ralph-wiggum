@@ -74,10 +74,12 @@ function runRalphSync(tempDir: string, args: string[], timeoutMs = 15000): RunRe
     env: {
       ...process.env,
       NODE_ENV: "test",
+      HOME: tempDir,
       RALPH_OPENCODE_BINARY: fakeAgent,
       RALPH_CODEX_BINARY: fakeAgent,
       RALPH_CLAUDE_BINARY: fakeAgent,
       RALPH_COPILOT_BINARY: fakeAgent,
+      RALPH_CURSOR_BINARY: fakeAgent,
     },
   });
 
@@ -111,10 +113,12 @@ async function runRalph(tempDir: string, args: string[], timeoutMs = 30000): Pro
     env: {
       ...process.env,
       NODE_ENV: "test",
+      HOME: tempDir,
       RALPH_OPENCODE_BINARY: fakeAgent,
       RALPH_CODEX_BINARY: fakeAgent,
       RALPH_CLAUDE_BINARY: fakeAgent,
       RALPH_COPILOT_BINARY: fakeAgent,
+      RALPH_CURSOR_BINARY: fakeAgent,
     },
   });
 

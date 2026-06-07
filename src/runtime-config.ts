@@ -86,6 +86,18 @@ export function loadRuntimeTomlConfig(configPath: string, explicit: boolean): Ra
       config.extra_agent_flags = normalizeRuntimeConfigValue("extra_agent_flags", parsed.extra_agent_flags, "string[]") as string[] | undefined;
       config.stall_retries = normalizeRuntimeConfigValue("stall_retries", parsed.stall_retries, "boolean") as boolean | undefined;
       config.stall_retry_minutes = normalizeRuntimeConfigValue("stall_retry_minutes", parsed.stall_retry_minutes, "number") as number | undefined;
+      config.json_display = normalizeRuntimeConfigValue("json_display", parsed.json_display, "string") as "beautify" | "raw" | "text" | undefined;
+      config.output_buffer_bytes = normalizeRuntimeConfigValue("output_buffer_bytes", parsed.output_buffer_bytes, "number") as number | undefined;
+
+      if (config.json_display !== undefined && !["beautify", "raw", "text"].includes(config.json_display)) {
+         console.error(`Error: Invalid json_display value '${config.json_display}'. Must be 'beautify', 'raw', or 'text'.`);
+         process.exit(1);
+      }
+
+      if (config.output_buffer_bytes !== undefined && config.output_buffer_bytes < 0) {
+         console.error("Error: output_buffer_bytes must be non-negative.");
+         process.exit(1);
+      }
 
       if (config.prompt_file) {
          config.prompt_file = resolveConfigRelativePath(configPath, config.prompt_file);
