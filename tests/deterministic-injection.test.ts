@@ -6352,7 +6352,7 @@ prompt = "from cwd"
 
     const result = loadRulesToml(testDir);
     expect(result).not.toBeNull();
-    expect(result!.rules.test.name).toBe("from-statedir");
+    expect(result!.rules!.test.name).toBe("from-statedir");
 
     // Cleanup both
     rmSync(testDir, { recursive: true, force: true });

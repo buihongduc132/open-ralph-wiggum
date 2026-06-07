@@ -222,7 +222,7 @@ describe("ralph-agent-config module", () => {
          };
          const config = createAgentConfig(json);
          expect(config.configName).toBe("Test Agent");
-         expect(config.type).toBe("test-agent");
+         expect(config.type as string).toBe("test-agent");
          const args = config.buildArgs("hello world", "gpt-4");
          expect(args).toContain("run");
          expect(args).toContain("hello world");
@@ -388,7 +388,7 @@ describe("ralph-agent-config module", () => {
    describe("ENV_TEMPLATES", () => {
       it("default template returns process.env copy", () => {
          const env = ENV_TEMPLATES["default"]({});
-         expect(env.HOME).toBe(process.env.HOME);
+         expect(env.HOME).toBe(process.env.HOME as string);
       });
    });
 
@@ -403,7 +403,7 @@ describe("ralph-agent-config module", () => {
 
       it("each agent has all required fields", () => {
          for (const [type, agent] of Object.entries(BUILT_IN_AGENTS)) {
-            expect(agent.type).toBe(type);
+            expect(agent.type as string).toBe(type);
             expect(agent.command).toBeTruthy();
             expect(agent.configName).toBeTruthy();
             expect(typeof agent.buildArgs).toBe("function");

@@ -45,6 +45,7 @@ function writeStateFile(runHash: string, reviewGate?: Record<string, unknown>) {
       agent: "opencode",
       runHash,
       runCwd: tmpDir,  // Capture CWD for cross-directory validation
+      pid: process.pid,
       reviewGate: reviewGate ?? {
          enabled: true,
          quorum: "1/1",

@@ -10,7 +10,7 @@ export type AgentEnvOptions = { filterPlugins?: boolean; allowAllPermissions?: b
 export interface AgentConfig {
    type: AgentType;
    command: string;
-   buildArgs: (prompt: string, model: string, options?: import("./agent-builders").AgentBuildArgsOptions) => string[];
+   buildArgs: (prompt: string, model: string, options?: import("../agent-builders").AgentBuildArgsOptions) => string[];
    buildEnv: (options: AgentEnvOptions) => Record<string, string>;
    parseToolOutput: (line: string) => string | null;
    configName: string;

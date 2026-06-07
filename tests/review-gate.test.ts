@@ -27,6 +27,7 @@ import {
    dispatchVoters,
 } from "../src/review-gate";
 import { parseReviewConfig } from "../src/runtime-config";
+import type { ReviewConfig } from "../src/types";
 
 let tmpDir: string;
 let statePath: string;
@@ -393,6 +394,7 @@ describe("Phase 2 — Review Gate Logic", () => {
          quorum: "1/1",
          voterTimeout: "10m",
          maxRejectCycles: 5,
+         batchSize: 3,
          reviewPromptFile: "",
          voters: [{ agent: "pi", model: "test" }],
       });
@@ -516,6 +518,7 @@ describe("Phase 3 — Edge Cases", () => {
          quorum: "1/1",
          voterTimeout: "10m",
          maxRejectCycles: 5,
+         batchSize: 3,
          reviewPromptFile: "",
          voters: [{ agent: "pi", model: "test" }],
       });
@@ -549,6 +552,7 @@ describe("Phase 3 — Edge Cases", () => {
          quorum: "2/2",
          voterTimeout: "10m",
          maxRejectCycles: 3,
+         batchSize: 3,
          reviewPromptFile: "",
          voters: [
             { agent: "pi", model: "test-1" },
@@ -636,6 +640,7 @@ describe("Phase 3 — Edge Cases", () => {
          quorum: "1/1",
          voterTimeout: "10m",
          maxRejectCycles: 5,
+         batchSize: 3,
          reviewPromptFile: "",
          voters: [{ agent: "pi", model: "test" }],
       });
@@ -657,21 +662,22 @@ describe("Phase 3 — Edge Cases", () => {
       // BEFORE the review gate is entered, so review wait time is invisible
       // to the stall detector.
       //
-      // Verify that the review gate state can be in 'dispatching' phase
+      // Verify that the review gate state can be in 'waiting_review' phase
       // without affecting stalling counters.
       const gateState = createReviewGateState({
          enabled: true,
          quorum: "1/1",
          voterTimeout: "10m",
          maxRejectCycles: 5,
+         batchSize: 3,
          reviewPromptFile: "",
          voters: [{ agent: "pi", model: "test" }],
       });
-      gateState.phase = "dispatching";
+      gateState.phase = "waiting_review";
 
       // The state records the phase but stalling counters are separate
       // Struggle indicators live in RalphHistory, not in ReviewGateState
-      expect(gateState.phase).toBe("dispatching");
+      expect(gateState.phase).toBe("waiting_review");
       expect(gateState.rejectCycleCount).toBe(0);
    });
 
@@ -684,6 +690,7 @@ describe("Phase 3 — Edge Cases", () => {
          quorum: "2/3",
          voterTimeout: "10m",
          maxRejectCycles: 5,
+         batchSize: 3,
          reviewPromptFile: "",
          voters: [
             { agent: "pi", model: "test" },

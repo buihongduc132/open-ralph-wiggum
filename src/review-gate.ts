@@ -8,7 +8,7 @@ import { randomBytes, createHash } from "crypto";
 import { existsSync, readFileSync, writeFileSync, appendFileSync, renameSync } from "fs";
 import { $ } from "bun";
 import { checkTerminalPromise } from "../completion";
-import type { ReviewConfig, ReviewGateState, ReviewVote, ReviewGatePhase } from "./types";
+import type { ReviewConfig, ReviewGateState, ReviewVote, ReviewGatePhase, ReviewVoter } from "./types";
 
 // ── Run Hash ────────────────────────────────────────────────────────────────
 

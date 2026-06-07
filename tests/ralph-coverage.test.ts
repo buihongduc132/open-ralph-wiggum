@@ -92,7 +92,7 @@ function runRalphSync(tempDir: string, args: string[], timeoutMs = 15000): RunRe
 
   // Actually wait for process to exit
   const result: RunResult = {
-    exitCode: proc.exitCode,
+    exitCode: proc.exitCode ?? 0,
     stdout: "",
     stderr: "",
   };

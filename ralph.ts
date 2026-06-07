@@ -32,7 +32,7 @@ import {
    validateReviewConfig,
 } from "./src/review-gate";
 import { parseReviewConfig } from "./src/runtime-config";
-import type { ReviewConfig, ReviewGateState } from "./src/types";
+import type { ReviewConfig, ReviewGateState, ReviewVote } from "./src/types";
 
 export const VERSION = "1.3.0";
 
@@ -1100,6 +1100,14 @@ export const BUILT_IN_AGENTS: Record<AgentType, AgentConfig> = {
       buildEnv: ENV_TEMPLATES["default"],
       parseToolOutput: PARSE_PATTERNS["copilot"],
       configName: "Copilot CLI",
+   },
+   "cursor-agent": {
+      type: "cursor-agent",
+      command: resolveCommand("cursor-agent", process.env.RALPH_CURSOR_BINARY),
+      buildArgs: ARGS_TEMPLATES["claude-code"],
+      buildEnv: ENV_TEMPLATES["default"],
+      parseToolOutput: PARSE_PATTERNS["claude-code"],
+      configName: "Cursor Agent",
    },
 };
 
@@ -3182,6 +3190,7 @@ Unable to read ${currentTasksFileLabel()}
          heartbeatIntervalMs: number;
          iterationStart: number;
          agent: AgentConfig;
+         extraFlags?: string[];
          onHeartbeatTimer?: (timer: ReturnType<typeof setInterval>) => void;
          abortSignal?: AbortSignal;
          stallingTimeoutMs?: number;
@@ -3240,7 +3249,7 @@ Unable to read ${currentTasksFileLabel()}
 
          // JSON beautifier: use for JSON-mode agents
          let outputLines: string[];
-         const extraFlags = options.agent.extraFlags;
+         const extraFlags = options.extraFlags;
          if (isJsonModeAgent(options.agent.type, extraFlags)) {
             const cfg: BeautifierConfig = {
                mode: "beautify",
@@ -3700,12 +3709,6 @@ Unable to read ${currentTasksFileLabel()}
            }
         }
 
-       if (ownership.status === "already-running") {
-          console.error(`Error: Ralph loop is already running with PID ${ownership.ownerPid}.`);
-          console.error(`Stop the existing process or clear ${statePath} if it is stale.`);
-          process.exit(1);
-       }
-
        if (resuming) {
           // existingState is guaranteed non-null when status === "resume"
           const state = existingState!;
@@ -4112,6 +4115,7 @@ Unable to read ${currentTasksFileLabel()}
                   heartbeatIntervalMs: heartbeatIntervalMs,
                   iterationStart,
                   agent: agentConfig,
+                  extraFlags: extraAgentFlags,
                   abortSignal: abortController.signal,
                   stallingTimeoutMs: state.stallingTimeoutMs,
                   preStartTimeoutMs,
@@ -4221,6 +4225,7 @@ Unable to read ${currentTasksFileLabel()}
                   heartbeatIntervalMs: heartbeatIntervalMs,
                   iterationStart,
                   agent: agentConfig,
+                  extraFlags: extraAgentFlags,
                   stallingTimeoutMs: state.stallingTimeoutMs,
                   preStartTimeoutMs,
                   suppressOutput: true,

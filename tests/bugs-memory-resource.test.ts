@@ -36,7 +36,6 @@ describe("BUG: pruneExpiredBlacklistedAgents doesn't validate durationMs is posi
 describe("BUG: pruneExpiredBlacklistedAgents NaN durationMs makes entry immortal [HIGH]", () => {
   it("NaN durationMs causes entry to never expire", () => {
     const entries: BlacklistedAgent[] = [
-      // @ts-expect-error — testing runtime type mismatch from malformed data
       { agent: "opencode", blacklistedAt: new Date().toISOString(), durationMs: NaN },
     ];
     const farFuture = Date.now() + 100 * 365 * 24 * 60 * 60 * 1000; // 100 years

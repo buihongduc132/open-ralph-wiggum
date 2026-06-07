@@ -312,23 +312,23 @@ assertNotEmpty(extractJsonCompletionText(
 process.stdout.write("\n[11] StreamAccumulator\n");
 
 const smallAcc = new StreamAccumulator({ tailMaxBytes: 100 });
-smallAcc.append("hello ", false);
-smallAcc.append("world", false);
+smallAcc.append("hello ");
+smallAcc.append("world");
 assert(smallAcc.tail === "hello world", "small accumulator keeps text");
 assert(smallAcc.totalBytes === 11, "totalBytes tracks correctly");
 
 // Rolling trim
 const trimAcc = new StreamAccumulator({ tailMaxBytes: 10 });
 for (let i = 0; i < 100; i++) {
-  trimAcc.append("x".repeat(5), false);
+  trimAcc.append("x".repeat(5));
 }
 assert(trimAcc.tail.length <= 20, "rolling buffer trimmed to ≤2x threshold");
 
 // Error extraction
 const errorAcc = new StreamAccumulator({ tailMaxBytes: 1024 });
-errorAcc.append("normal output\n", false);
-errorAcc.append("Error: something failed\n", true);
-errorAcc.append("Another error occurred\n", true);
+errorAcc.append("normal output\n");
+errorAcc.append("Error: something failed\n");
+errorAcc.append("Another error occurred\n");
 const errors = errorAcc.errors;
 assert(errors.length >= 1, "errors captured from error chunks");
 

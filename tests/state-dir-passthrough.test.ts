@@ -430,7 +430,7 @@ describe("verify: --prompt-template with empty file falls back to CLI prompt", (
     */
    it("unit: empty string from loadCustomPromptTemplate must NOT trigger early return", () => {
       // Simulate what loadCustomPromptTemplate returns for an empty file
-      const customPrompt = ""; // empty file after stripFrontmatter and variable substitution
+      const customPrompt: string = ""; // empty file after stripFrontmatter and variable substitution
 
       // Current broken check (ralph.ts:2184):
       //   if (customPrompt) return customPrompt;

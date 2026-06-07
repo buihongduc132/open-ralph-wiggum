@@ -284,4 +284,12 @@ export const BUILT_IN_AGENTS: Record<AgentType, AgentConfig> = {
       parseToolOutput: PARSE_PATTERNS["copilot"],
       configName: "Copilot CLI",
    },
+   "cursor-agent": {
+      type: "cursor-agent",
+      command: resolveCommand("cursor-agent", process.env.RALPH_CURSOR_BINARY),
+      buildArgs: ARGS_TEMPLATES["claude-code"],
+      buildEnv: ENV_TEMPLATES["default"],
+      parseToolOutput: PARSE_PATTERNS["claude-code"],
+      configName: "Cursor Agent",
+   },
 };

@@ -231,7 +231,7 @@ describe("UPSTREAM-COMPLIANCE: default env template is transparent", () => {
          ["--max-iterations", "1", "--model", TEST_MODEL],
       );
       expect(result.exitCode).toBe(0);
-      expect(result.envDump["HOME"]).toBe(process.env["HOME"]);
+      expect(result.envDump["HOME"]).toBe(process.env["HOME"] as string);
    });
 
    it("GREEN: default template does NOT set OPENCODE_CONFIG", async () => {

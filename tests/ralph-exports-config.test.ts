@@ -426,7 +426,7 @@ describe("createAgentConfig — inline args", () => {
       args: ["run", "{{prompt}}", "--flag"],
     };
     const config = createAgentConfig(json);
-    expect(config.type).toBe("custom");
+    expect(config.type as string).toBe("custom");
     expect(config.configName).toBe("Custom");
     const builtArgs = config.buildArgs("hello world", "", {});
     expect(builtArgs).toEqual(["run", "hello world", "--flag"]);
@@ -664,7 +664,7 @@ describe("createAgentConfig — template fallback", () => {
     };
     const config = createAgentConfig(json);
     // Should use default template
-    expect(config.type).toBe("custom");
+    expect(config.type as string).toBe("custom");
     expect(config.configName).toBe("Custom");
   });
 
@@ -679,7 +679,7 @@ describe("createAgentConfig — template fallback", () => {
     };
     const config = createAgentConfig(json);
     // Should fall back to default without crashing
-    expect(config.type).toBe("custom");
+    expect(config.type as string).toBe("custom");
     const builtArgs = config.buildArgs("test", "", {});
     expect(builtArgs).toContain("test");
   });

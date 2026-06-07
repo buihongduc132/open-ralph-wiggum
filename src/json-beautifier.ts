@@ -312,9 +312,9 @@ function claudeRetry(p: Record<string, unknown>, cfg: BeautifierConfig): string[
   const maxAttempts = typeof info.maxAttempts === "number" ? info.maxAttempts : "?";
   const delayMs = typeof info.delayMs === "number" ? info.delayMs : 0;
   // Handle both errorMessage and lastError field names
-  const rawError = typeof (info as Record<string, unknown>).errorMessage === "string"
-    ? (info as Record<string, unknown>).errorMessage
-    : typeof info.lastError === "string" ? info.lastError : "";
+  const rawError: string = typeof (info as Record<string, unknown>).errorMessage === "string"
+    ? String((info as Record<string, unknown>).errorMessage)
+    : typeof info.lastError === "string" ? String(info.lastError) : "";
   let lastError = rawError;
   if (lastError.length > 40) lastError = lastError.slice(0, 40) + "...";
 
