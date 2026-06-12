@@ -139,3 +139,8 @@ build/
 
 # Beads / Dolt files (added by bd init)
 .beads-credential-key
+
+tests/fixtures/goal-parser/
+.codeql-databases/
+package-lock.json
+goals/

@@ -63,6 +63,10 @@ export interface RalphRuntimeConfig {
    stall_retry_minutes?: number;
    json_display?: "beautify" | "raw" | "text";
    output_buffer_bytes?: number;
+   // Goal mode (opt-in)
+   goal?: string;
+   goal_dir?: string;
+   goal_promise?: string;
 }
 
 // ── Review Gate Types ────────────────────────────────────────────────────────

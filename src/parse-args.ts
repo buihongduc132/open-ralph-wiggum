@@ -137,6 +137,12 @@ export interface ParsedMainArgs {
    stallingActionProvided: boolean;
    stallRetriesProvided: boolean;
    stallRetryMinutesProvided: boolean;
+   // Goal mode (opt-in)
+   goalPath: string;
+   goalDir: string;
+   initGoal: string;
+   listGoals: boolean;
+   goalStatus: boolean;
 }
 
 export function getDefaultMainArgs(): ParsedMainArgs {
@@ -177,6 +183,12 @@ export function getDefaultMainArgs(): ParsedMainArgs {
       stallingActionProvided: false,
       stallRetriesProvided: false,
       stallRetryMinutesProvided: false,
+      // Goal mode (opt-in)
+      goalPath: "",
+      goalDir: "",
+      initGoal: "",
+      listGoals: false,
+      goalStatus: false,
    };
 }
 
@@ -225,6 +237,13 @@ export function applyTomlConfig(result: ParsedMainArgs, config: RalphRuntimeConf
    if (config.stall_retry_minutes !== undefined) {
       result.stallRetryMinutes = config.stall_retry_minutes;
       result.stallRetryMinutesProvided = true;
+   }
+   // Goal mode (opt-in)
+   if (config.goal) result.goalPath = config.goal;
+   if (config.goal_dir) result.goalDir = config.goal_dir;
+   // goal_promise only applies when goal mode is active (opt-in)
+   if (config.goal_promise && (config.goal || config.goal_dir)) {
+      result.completionPromise = config.goal_promise;
    }
 }
 
@@ -370,6 +389,28 @@ export function parseMainArgs(args: string[], validAgents: string[]): ParsedMain
          }
          result.stallRetryMinutes = Number(val);
          result.stallRetryMinutesProvided = true;
+      } else if (arg === "--goal") {
+         const val = args[++i];
+         if (!val) {
+            throw new Error("--goal requires a path to goal.md");
+         }
+         result.goalPath = val;
+      } else if (arg === "--goal-dir") {
+         const val = args[++i];
+         if (!val) {
+            throw new Error("--goal-dir requires a directory path");
+         }
+         result.goalDir = val;
+      } else if (arg === "--init-goal") {
+         const val = args[++i];
+         if (!val) {
+            throw new Error("--init-goal requires a title");
+         }
+         result.initGoal = val;
+      } else if (arg === "--list-goals") {
+         result.listGoals = true;
+      } else if (arg === "--goal-status") {
+         result.goalStatus = true;
       } else if (arg === "--state-dir") {
          i++;
       } else if (arg === "--toml-config") {

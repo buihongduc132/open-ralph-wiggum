@@ -61,7 +61,10 @@
     "@types/bun": "^1.3.5"
   },
   "lint-staged": {
-    "*.ts": ["bun build --dry-run", "tsc --noEmit --pretty false"],
+    "*.ts": [
+      "bun build --dry-run",
+      "tsc --noEmit --pretty false"
+    ],
     "*.{json,md}": []
   },
   "dependencies": {

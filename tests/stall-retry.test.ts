@@ -119,7 +119,7 @@ describe("stall retries", () => {
       "--no-stream",
       "--no-questions",
       "--no-commit",
-      "--pre-start-timeout", "5000",
+      "--pre-start-timeout", "1000",
     ]);
 
     // Ralph exits 0 when completion promise detected.
