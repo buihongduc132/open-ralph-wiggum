@@ -1002,6 +1002,77 @@ The `--status` command shows which agent and model was used for each iteration:
    #3  1m 28s  opencode / claude-sonnet-4  Bash(2) Edit(1)
 ```
 
+## Goal Inventory
+
+Goal inventory mode lets Ralph track progress across multiple goals stored as Markdown files in a `goals/` directory. Each goal has a TOML-based state file for phase tracking.
+
+### Goal Directory Structure
+
+```
+goals/
+  my-feature/
+    goal.md          # Goal definition (Markdown)
+    goal.state.json  # Phase tracking state (auto-managed)
+  another-fix/
+    goal.md
+    goal.state.json
+```
+
+### Goal Markdown Format
+
+```markdown
+---
+slug: my-feature
+title: My Feature
+
+---
+
+# My Feature
+
+## Facts (what must be true when done)
+
+- [ ] All tests pass
+- [ ] Feature works as documented
+```
+
+### CLI Flags
+
+| Flag | Description |
+|------|-------------|
+| `--list-goals [dir]` | List all goals with their progress |
+| `--goal-status` | Show current goal progress (requires `--goal` or `--goal-dir`) |
+| `--init-goal "title"` | Create a new goal scaffold |
+| `--goal <path>` | Path to a specific goal.md file |
+| `--goal-dir <dir>` | Directory containing goal subdirectories |
+
+### TOML Configuration
+
+Goal settings can also be configured in your `.ralph/config.toml`:
+
+```toml
+# Use a specific goal
+goal = "goals/my-feature/goal.md"
+
+# Or use a goal directory
+goal_dir = "goals"
+```
+
+### Example Usage
+
+```bash
+# List all goals
+ralph --list-goals
+
+# Create a new goal
+ralph --init-goal "Add authentication"
+
+# Show current goal status
+ralph --goal-status --goal goals/add-auth/goal.md
+
+# Run Ralph with goal tracking
+ralph "Implement the auth feature" --goal goals/add-auth/goal.md --max-iterations 10
+```
+
 ## Learn More
 
 - [Original Ralph Wiggum technique by Geoffrey Huntley](https://ghuntley.com/ralph/)
