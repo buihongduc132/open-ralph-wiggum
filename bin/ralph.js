@@ -1,545 +1,25 @@
 #!/usr/bin/env bun
 // @bun
-var __require = import.meta.require;
+var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
+  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
+}) : x)(function(x) {
+  if (typeof require !== "undefined")
+    return require.apply(this, arguments);
+  throw Error('Dynamic require of "' + x + '" is not supported');
+});
 
 // ralph.ts
 var {$ } = globalThis.Bun;
 import { existsSync, readFileSync as readFileSync2, writeFileSync, mkdirSync, statSync, lstatSync } from "fs";
 import { dirname, isAbsolute, join, relative, resolve } from "path";
 
-// src/strip-ansi.ts
-var ANSI_PATTERN = /\x1b\[[0-9;]*[A-Za-z]/g;
+// completion.ts
+var ANSI_PATTERN = /\[[0-9;]*m/g;
 function stripAnsi(input) {
   return input.replace(ANSI_PATTERN, "");
 }
-
-// src/json-beautifier.ts
-var ANSI = {
-  cyan: (s) => `\x1B[36m${s}\x1B[0m`,
-  yellow: (s) => `\x1B[33m${s}\x1B[0m`,
-  gray: (s) => `\x1B[90m${s}\x1B[0m`,
-  green: (s) => `\x1B[32m${s}\x1B[0m`,
-  red: (s) => `\x1B[31m${s}\x1B[0m`
-};
-var INTRINSIC_JSON_AGENTS = new Set(["claude-code", "cursor-agent"]);
-var JSON_FLAGS = new Set([
-  "--json"
-]);
-var ADAPTER_REGISTRY = new Map([
-  ["claude-code", claudeAdapter],
-  ["cursor-agent", cursorAgentAdapter],
-  ["codex", codexAdapter],
-  ["gemini", geminiAdapter]
-]);
-function isJsonModeAgent(agentType, extraFlags) {
-  if (INTRINSIC_JSON_AGENTS.has(agentType))
-    return true;
-  if (extraFlags && extraFlags.length > 0) {
-    for (let i = 0;i < extraFlags.length; i++) {
-      if (JSON_FLAGS.has(extraFlags[i]))
-        return true;
-      if (extraFlags[i] === "--output-format" && extraFlags[i + 1] === "stream-json")
-        return true;
-      if (extraFlags[i] === "--output-format=stream-json")
-        return true;
-    }
-  }
-  return false;
-}
-function beautifyJsonLine(rawLine, cfg) {
-  if (cfg.mode === "raw")
-    return [rawLine];
-  const firstChar = rawLine.charCodeAt(0);
-  let line = rawLine;
-  if (firstChar === 123) {} else if (firstChar === 27) {
-    const stripped = stripAnsi(rawLine).trim();
-    if (stripped.charCodeAt(0) === 123) {
-      line = stripped;
-    } else {
-      return [rawLine];
-    }
-  } else {
-    return [rawLine];
-  }
-  let payload;
-  try {
-    payload = JSON.parse(line);
-  } catch {
-    return [rawLine];
-  }
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return [rawLine];
-  }
-  const record = payload;
-  if (cfg.mode === "text") {
-    return textExtract(record, cfg.agentType);
-  }
-  const adapter = ADAPTER_REGISTRY.get(cfg.agentType);
-  if (adapter) {
-    try {
-      return adapter(record, cfg);
-    } catch {
-      return [rawLine];
-    }
-  }
-  try {
-    return genericAdapter(record, cfg);
-  } catch {
-    return [rawLine];
-  }
-}
-function claudeAdapter(p, cfg) {
-  const t = typeof p.type === "string" ? p.type : "";
-  switch (t) {
-    case "assistant":
-      return claudeAssistant(p, cfg);
-    case "content_block_delta":
-      return claudeContentBlockDelta(p, cfg);
-    case "content_block_start":
-      return claudeContentBlockStart(p, cfg);
-    case "result":
-      return claudeResult(p, cfg);
-    case "error":
-      return claudeError(p, cfg);
-    case "auto_retry_start":
-      return claudeRetry(p, cfg);
-    case "tool_result":
-    case "stream_event":
-    case "content_block_stop":
-      return [];
-    default:
-      return [];
-  }
-}
-function claudeAssistant(p, cfg) {
-  const lines = [];
-  const msg = p.message;
-  if (msg && typeof msg === "object") {
-    const model = typeof msg.model === "string" ? msg.model : "unknown";
-    lines.push(ANSI.cyan(`\uD83E\uDD16 ${model}`));
-    const content = msg.content;
-    if (Array.isArray(content)) {
-      for (const block of content) {
-        if (!block || typeof block !== "object")
-          continue;
-        const b = block;
-        if (b.type === "tool_use") {
-          if (cfg.verboseTools && typeof b.name === "string") {
-            lines.push(ANSI.yellow(`\uD83D\uDD27 ${b.name}`));
-          }
-          continue;
-        }
-        if (b.type === "thinking" && typeof b.thinking === "string") {
-          if (cfg.showThinking) {
-            for (const s of b.thinking.split(/\r?\n/)) {
-              const trimmed = s.trim();
-              if (trimmed)
-                lines.push(ANSI.gray(`\uD83D\uDCAD ${trimmed}`));
-            }
-          }
-          continue;
-        }
-        if (typeof b.text === "string") {
-          for (const s of b.text.split(/\r?\n/)) {
-            const trimmed = s.trim();
-            if (trimmed)
-              lines.push(trimmed);
-          }
-        }
-      }
-    }
-  }
-  if (p.delta && typeof p.delta === "object") {
-    const delta = p.delta;
-    if (typeof delta.text === "string") {
-      for (const s of delta.text.split(/\r?\n/)) {
-        const trimmed = s.trim();
-        if (trimmed)
-          lines.push(trimmed);
-      }
-    }
-    if (typeof delta.thinking === "string" && cfg.showThinking) {
-      for (const s of delta.thinking.split(/\r?\n/)) {
-        const trimmed = s.trim();
-        if (trimmed)
-          lines.push(ANSI.gray(`\uD83D\uDCAD ${trimmed}`));
-      }
-    }
-    if (typeof delta.content === "string") {
-      for (const s of delta.content.split(/\r?\n/)) {
-        const trimmed = s.trim();
-        if (trimmed)
-          lines.push(trimmed);
-      }
-    }
-  }
-  return lines;
-}
-function claudeContentBlockDelta(p, cfg) {
-  const delta = p.delta;
-  if (!delta || typeof delta !== "object")
-    return [];
-  const lines = [];
-  const deltaType = typeof delta.type === "string" ? delta.type : "";
-  if (deltaType === "thinking_delta") {
-    if (!cfg.showThinking)
-      return [];
-    if (typeof delta.thinking === "string") {
-      for (const s of delta.thinking.split(/\r?\n/)) {
-        const trimmed = s.trim();
-        if (trimmed)
-          lines.push(ANSI.gray(`\uD83D\uDCAD ${trimmed}`));
-      }
-    }
-    return lines;
-  }
-  if (typeof delta.text === "string") {
-    for (const s of delta.text.split(/\r?\n/)) {
-      const trimmed = s.trim();
-      if (trimmed)
-        lines.push(trimmed);
-    }
-  }
-  return lines;
-}
-function claudeContentBlockStart(p, cfg) {
-  const cb = p.content_block;
-  if (!cb || typeof cb !== "object")
-    return [];
-  const cbType = typeof cb.type === "string" ? cb.type : "";
-  if (cbType === "tool_use") {
-    if (!cfg.verboseTools)
-      return [];
-    const name = typeof cb.name === "string" ? cb.name : "unknown";
-    return [ANSI.yellow(`\uD83D\uDD27 ${name}`)];
-  }
-  return [];
-}
-function claudeResult(p, cfg) {
-  const result = typeof p.result === "string" ? p.result : "";
-  if (cfg.showCost) {
-    const durationMs = typeof p.duration_ms === "number" ? p.duration_ms : 0;
-    const costUsd = typeof p.total_cost_usd === "number" ? p.total_cost_usd : typeof p.cost_usd === "number" ? p.cost_usd : 0;
-    const seconds = (durationMs / 1000).toFixed(1);
-    const costStr = costUsd < 0.01 ? `$${costUsd.toFixed(4)}` : `$${costUsd.toFixed(2)}`;
-    const lines = [];
-    lines.push(ANSI.green(`\u2705 ${result} (${seconds}s, ${costStr})`));
-    return lines;
-  }
-  return [ANSI.green(`\u2705 ${result}`)];
-}
-function claudeError(p, cfg) {
-  if (!cfg.showError)
-    return [];
-  let message;
-  if (p.error && typeof p.error === "object") {
-    const err = p.error;
-    message = typeof err.message === "string" ? err.message : String(p.error);
-  } else {
-    message = String(p.error ?? "Unknown error");
-  }
-  if (message.length > cfg.maxErrorLength) {
-    message = message.slice(0, cfg.maxErrorLength) + "...";
-  }
-  return [ANSI.red(`\u274C ${message}`)];
-}
-function claudeRetry(p, cfg) {
-  if (!cfg.showRetry)
-    return [];
-  const info = p.retryInfo && typeof p.retryInfo === "object" ? p.retryInfo : p;
-  const attempt = typeof info.attempt === "number" ? info.attempt : "?";
-  const maxAttempts = typeof info.maxAttempts === "number" ? info.maxAttempts : "?";
-  const delayMs = typeof info.delayMs === "number" ? info.delayMs : 0;
-  const rawError = typeof info.errorMessage === "string" ? info.errorMessage : typeof info.lastError === "string" ? info.lastError : "";
-  let lastError = rawError;
-  if (lastError.length > 40)
-    lastError = lastError.slice(0, 40) + "...";
-  const delayStr = delayMs < 60000 ? `${Math.round(delayMs / 1000)}s` : delayMs < 3600000 ? `${Math.round(delayMs / 60000)}m` : `${Math.round(delayMs / 3600000)}h`;
-  const parts = [`\uD83D\uDD04 Retry ${attempt}/${maxAttempts} in ${delayStr}`];
-  if (lastError)
-    parts.push(`(${lastError})`);
-  return [ANSI.yellow(parts.join(" "))];
-}
-function cursorAgentAdapter(p, cfg) {
-  const lines = [];
-  const t = typeof p.type === "string" ? p.type : "";
-  if (t === "assistant") {
-    if (p.message && typeof p.message === "object") {
-      const msg = p.message;
-      if (Array.isArray(msg.content)) {
-        for (const block of msg.content) {
-          if (!block || typeof block !== "object")
-            continue;
-          const b = block;
-          if (typeof b.text === "string") {
-            for (const s of b.text.split(/\r?\n/)) {
-              const trimmed = s.trim();
-              if (trimmed)
-                lines.push(trimmed);
-            }
-          }
-        }
-      }
-    }
-  } else if (t === "tool_call") {
-    const tc = p.tool_call;
-    if (tc && typeof tc === "object") {
-      const toolKey = Object.keys(tc).find((k) => k.endsWith("ToolCall"));
-      if (toolKey) {
-        const toolName = toolKey.replace("ToolCall", "");
-        const toolData = tc[toolKey];
-        if (toolData?.args && typeof toolData.args === "object") {
-          const args = toolData.args;
-          if (toolName.toLowerCase() === "shell" && typeof args.command === "string") {
-            lines.push(ANSI.yellow(`\uD83D\uDD27 SHELL ${args.command}`));
-          } else if (typeof args.path === "string") {
-            lines.push(ANSI.yellow(`\uD83D\uDD27 ${toolName.toUpperCase()} ${args.path}`));
-          } else {
-            lines.push(ANSI.yellow(`\uD83D\uDD27 ${toolName.toUpperCase()}`));
-          }
-        } else {
-          lines.push(ANSI.yellow(`\uD83D\uDD27 ${toolName.toUpperCase()}`));
-        }
-      }
-    }
-  } else if (t === "result") {
-    if (typeof p.result === "string" && p.result.trim()) {
-      const subtype = typeof p.subtype === "string" ? ` (${p.subtype})` : "";
-      lines.push(ANSI.green(`\u2705 ${p.result.trim()}${subtype}`));
-    }
-  } else if (t === "error") {
-    if (cfg.showError) {
-      let msg;
-      if (p.error && typeof p.error === "object") {
-        msg = typeof p.error.message === "string" ? p.error.message : String(p.error);
-      } else {
-        msg = String(p.error ?? "Unknown error");
-      }
-      if (msg.length > cfg.maxErrorLength)
-        msg = msg.slice(0, cfg.maxErrorLength) + "...";
-      lines.push(ANSI.red(`\u274C ${msg}`));
-    }
-  }
-  return lines;
-}
-function codexAdapter(p, cfg) {
-  const t = typeof p.type === "string" ? p.type : "";
-  if (t === "message") {
-    if (p.content && typeof p.content === "string") {
-      const lines = [];
-      for (const s of p.content.split(/\r?\n/)) {
-        const trimmed = s.trim();
-        if (trimmed)
-          lines.push(trimmed);
-      }
-      return lines;
-    }
-    if (Array.isArray(p.content)) {
-      const lines = [];
-      for (const block of p.content) {
-        if (!block || typeof block !== "object")
-          continue;
-        const b = block;
-        if (typeof b.text === "string") {
-          for (const s of b.text.split(/\r?\n/)) {
-            const trimmed = s.trim();
-            if (trimmed)
-              lines.push(trimmed);
-          }
-        }
-      }
-      return lines;
-    }
-    return [];
-  }
-  if (t === "tool_call") {
-    const name = typeof p.name === "string" ? p.name : "unknown";
-    return [ANSI.yellow(`\uD83D\uDD27 ${name}`)];
-  }
-  if (t === "complete") {
-    const output = typeof p.output === "string" ? p.output : "";
-    return [ANSI.green(`\u2705 ${output || "Done"}`)];
-  }
-  if (t === "error") {
-    if (!cfg.showError)
-      return [];
-    let msg = typeof p.message === "string" ? p.message : String(p.error ?? "Unknown error");
-    if (msg.length > cfg.maxErrorLength)
-      msg = msg.slice(0, cfg.maxErrorLength) + "...";
-    return [ANSI.red(`\u274C ${msg}`)];
-  }
-  return [];
-}
-function geminiAdapter(p, cfg) {
-  if (typeof p.text === "string" && p.text.trim()) {
-    const lines = [];
-    for (const s of p.text.split(/\r?\n/)) {
-      const trimmed = s.trim();
-      if (trimmed)
-        lines.push(trimmed);
-    }
-    return lines;
-  }
-  if (p.toolCall || p.tool_call) {
-    const tc = p.toolCall || p.tool_call;
-    const name = typeof tc.name === "string" ? tc.name : "unknown";
-    return [ANSI.yellow(`\uD83D\uDD27 ${name}`)];
-  }
-  if (p.error) {
-    if (!cfg.showError)
-      return [];
-    let msg;
-    if (typeof p.error === "object") {
-      msg = typeof p.error.message === "string" ? p.error.message : String(p.error);
-    } else {
-      msg = String(p.error);
-    }
-    if (msg.length > cfg.maxErrorLength)
-      msg = msg.slice(0, cfg.maxErrorLength) + "...";
-    return [ANSI.red(`\u274C ${msg}`)];
-  }
-  const t = typeof p.type === "string" ? p.type : "";
-  if (t === "result" || t === "complete") {
-    const output = typeof p.result === "string" ? p.result : typeof p.output === "string" ? p.output : "";
-    if (output.trim())
-      return [ANSI.green(`\u2705 ${output.trim()}`)];
-    return [];
-  }
-  if (typeof p.content === "string" && p.content.trim()) {
-    return [p.content.trim()];
-  }
-  return [];
-}
-function genericAdapter(p, cfg) {
-  if (p.error && typeof p.error === "object") {
-    if (cfg && !cfg.showError)
-      return [];
-    const err = p.error;
-    if (typeof err.message === "string") {
-      const truncated = cfg && err.message.length > cfg.maxErrorLength ? err.message.slice(0, cfg.maxErrorLength) + "..." : err.message;
-      return [ANSI.red(`\u274C ${truncated}`)];
-    }
-  }
-  if (typeof p.message === "string") {
-    return [p.message];
-  }
-  if (typeof p.error === "string") {
-    if (cfg && !cfg.showError)
-      return [];
-    const truncated = cfg && p.error.length > cfg.maxErrorLength ? p.error.slice(0, cfg.maxErrorLength) + "..." : p.error;
-    return [ANSI.red(`\u274C ${truncated}`)];
-  }
-  return [JSON.stringify(p)];
-}
-function textExtract(p, agentType) {
-  const lines = [];
-  const addText = (value) => {
-    if (typeof value !== "string")
-      return;
-    for (const s of value.split(/\r?\n/)) {
-      const trimmed = s.trim();
-      if (trimmed)
-        lines.push(trimmed);
-    }
-  };
-  const addContent = (content) => {
-    if (typeof content === "string") {
-      addText(content);
-      return;
-    }
-    if (!Array.isArray(content))
-      return;
-    for (const block of content) {
-      if (!block || typeof block !== "object")
-        continue;
-      const b = block;
-      if (b.type === "tool_use")
-        continue;
-      addText(b.text);
-      addText(b.thinking);
-      if (typeof b.content === "string")
-        addText(b.content);
-    }
-  };
-  const t = typeof p.type === "string" ? p.type : "";
-  if (t === "assistant") {
-    if (p.message && typeof p.message === "object") {
-      addContent(p.message.content);
-    }
-    if (p.delta && typeof p.delta === "object") {
-      const delta = p.delta;
-      addText(delta.text);
-      addText(delta.thinking);
-      addText(delta.content);
-    }
-  } else if (t === "content_block_delta") {
-    if (p.delta && typeof p.delta === "object") {
-      const delta = p.delta;
-      const deltaType = typeof delta.type === "string" ? delta.type : "";
-      if (deltaType === "thinking_delta") {
-        addText(delta.thinking);
-      } else {
-        addText(delta.text);
-      }
-    }
-  } else if (t === "stream_event") {
-    if (p.event && typeof p.event === "object") {
-      const event = p.event;
-      if (event.delta && typeof event.delta === "object") {
-        const delta = event.delta;
-        if (delta.type === "text_delta" && typeof delta.text === "string") {
-          addText(delta.text);
-        }
-      }
-    }
-  } else if (t === "result") {
-    addText(p.result);
-  } else if (t === "message") {
-    addContent(p.content);
-  } else if (t === "complete") {
-    addText(p.output);
-  } else if (t === "error") {
-    if (p.error && typeof p.error === "object") {
-      addText(p.error.message);
-    } else {
-      addText(p.error);
-    }
-  }
-  if (t !== "assistant" && t !== "content_block_delta" && t !== "stream_event" && t !== "result" && t !== "message" && t !== "complete" && t !== "error") {
-    addText(p.text);
-    if (typeof p.content === "string")
-      addText(p.content);
-  }
-  return lines;
-}
-function extractJsonCompletionText(rawLine, agentType) {
-  const firstChar = rawLine.charCodeAt(0);
-  let line = rawLine;
-  if (firstChar === 123) {} else if (firstChar === 27) {
-    const stripped = stripAnsi(rawLine).trim();
-    if (stripped.charCodeAt(0) === 123) {
-      line = stripped;
-    } else {
-      return [rawLine];
-    }
-  } else {
-    return [rawLine];
-  }
-  let payload;
-  try {
-    payload = JSON.parse(line);
-  } catch {
-    return [rawLine];
-  }
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return [rawLine];
-  }
-  return textExtract(payload, agentType);
-}
-
-// completion.ts
 function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function getLastNonEmptyLine(output) {
   const lines = stripAnsi(output).replace(/\r\n/g, `
@@ -552,7 +32,7 @@ function checkTerminalPromise(output, promise) {
   if (!lastLine)
     return false;
   const escapedPromise = escapeRegex(promise);
-  const pattern = new RegExp(`^<promise>\\s*${escapedPromise}\\s*</promise>$`);
+  const pattern = new RegExp(`^<promise>\\s*${escapedPromise}\\s*</promise>$`, "i");
   return pattern.test(lastLine);
 }
 function containsPromiseTag(output, promise) {
@@ -564,7 +44,7 @@ function tasksMarkdownAllComplete(tasksMarkdown) {
   const lines = tasksMarkdown.split(/\r?\n/);
   let sawTask = false;
   for (const line of lines) {
-    const match = line.match(/^-\s+\[([ xX\/])\]\s+/);
+    const match = line.match(/^\s*-\s+\[([ xX\/])\]\s+/);
     if (!match)
       continue;
     sawTask = true;
@@ -576,7 +56,7 @@ function tasksMarkdownAllComplete(tasksMarkdown) {
 }
 
 // loop-runtime.ts
-import { readFileSync } from "fs";
+var {readFileSync} = (() => ({}));
 
 class StreamActivityTracker {
   now;
@@ -586,7 +66,7 @@ class StreamActivityTracker {
     this.activityAt = this.now();
   }
   markChunk(chunk) {
-    if (chunk.length > 0 && chunk.trim().length > 0) {
+    if (chunk.length > 0) {
       this.activityAt = this.now();
     }
   }
@@ -659,50 +139,24 @@ function decideLoopOwnership(existingState, currentPid = process.pid) {
 function pruneExpiredBlacklistedAgents(entries, nowMs) {
   const active = [];
   const expiredAgents = [];
-  const seen = new Set;
   for (const entry of entries) {
     const blacklistedTime = new Date(entry.blacklistedAt).getTime();
-    const durationMs = Number(entry.durationMs);
-    if (Number.isNaN(blacklistedTime) || Number.isNaN(durationMs)) {
-      expiredAgents.push(entry.agent);
-      continue;
-    }
-    if (durationMs <= 0) {
-      if (seen.has(entry.agent))
-        continue;
-      seen.add(entry.agent);
-      active.push(entry);
-      continue;
-    }
-    const expiryTime = blacklistedTime + durationMs;
+    const expiryTime = blacklistedTime + entry.durationMs;
     if (nowMs >= expiryTime) {
       expiredAgents.push(entry.agent);
       continue;
     }
-    if (seen.has(entry.agent))
-      continue;
-    seen.add(entry.agent);
     active.push(entry);
   }
   return { active, expiredAgents };
 }
 function selectRotationEntry(rotation, rotationIndex, blacklistedAgents) {
-  if (rotation.length === 0) {
-    return {
-      entry: "",
-      rotationIndex: 0,
-      skippedAgents: [],
-      clearedBlacklist: false
-    };
-  }
   const normalizedIndex = (rotationIndex % rotation.length + rotation.length) % rotation.length;
   const blacklisted = new Set(blacklistedAgents.map((entry) => entry.agent));
   const skippedAgents = [];
   for (let attempts = 0;attempts < rotation.length; attempts++) {
     const currentIndex = (normalizedIndex + attempts) % rotation.length;
     const entry = rotation[currentIndex];
-    if (!entry.includes(":"))
-      continue;
     const [agent] = entry.split(":");
     if (!blacklisted.has(agent)) {
       return {
@@ -714,9 +168,8 @@ function selectRotationEntry(rotation, rotationIndex, blacklistedAgents) {
     }
     skippedAgents.push(agent);
   }
-  const fallbackEntry = rotation[normalizedIndex];
   return {
-    entry: fallbackEntry.includes(":") ? fallbackEntry : ":",
+    entry: rotation[normalizedIndex],
     rotationIndex: normalizedIndex,
     skippedAgents,
     clearedBlacklist: true
@@ -806,111 +259,17 @@ var ARGS_TEMPLATES = {
   omox: runBuilder
 };
 
-// src/stream-accumulator.ts
-var DEFAULT_TAIL_MAX_BYTES = 2 * 1024 * 1024;
-var MAX_ERRORS = 10;
-var MAX_ERROR_LINE_LENGTH = 200;
-
-class StreamAccumulator {
-  _tail = "";
-  _errors = [];
-  _errorSet = new Set;
-  _totalBytes = 0;
-  tailMaxBytes;
-  _errorLineBuffer = "";
-  constructor(options) {
-    this.tailMaxBytes = options?.tailMaxBytes ?? DEFAULT_TAIL_MAX_BYTES;
-  }
-  append(chunk) {
-    if (chunk.length === 0)
-      return;
-    this._totalBytes += chunk.length;
-    this._tail += chunk;
-    if (this._tail.length >= this.tailMaxBytes * 2) {
-      this._tail = this._tail.slice(-this.tailMaxBytes);
-    }
-    if (this._errors.length < MAX_ERRORS) {
-      this.extractErrorsFromChunk(chunk);
-    }
-  }
-  get tail() {
-    return this._tail;
-  }
-  get errors() {
-    if (this._errorLineBuffer.length > 0 && this._errors.length < MAX_ERRORS) {
-      const line = this._errorLineBuffer;
-      this._errorLineBuffer = "";
-      this.scanLineForError(line);
-    }
-    return this._errors;
-  }
-  get totalBytes() {
-    return this._totalBytes;
-  }
-  reset() {
-    this._tail = "";
-    this._errors = [];
-    this._errorSet.clear();
-    this._totalBytes = 0;
-    this._errorLineBuffer = "";
-  }
-  extractErrorsFromChunk(chunk) {
-    const combined = this._errorLineBuffer + chunk;
-    const lines = combined.split(`
-`);
-    const remaining = lines.pop() ?? "";
-    if (remaining.length > DEFAULT_TAIL_MAX_BYTES) {
-      this._errorLineBuffer = remaining.slice(-MAX_ERROR_LINE_LENGTH * 4);
-    } else {
-      this._errorLineBuffer = remaining;
-    }
-    for (const line of lines) {
-      if (this._errors.length >= MAX_ERRORS)
-        break;
-      this.scanLineForError(line);
-    }
-  }
-  scanLineForError(line) {
-    const lower = line.toLowerCase();
-    const isMatch = lower.includes("error:") || lower.includes("failed:") || lower.includes("exception:") || lower.includes("typeerror") || lower.includes("syntaxerror") || lower.includes("referenceerror") || lower.includes("test") && lower.includes("fail");
-    if (!isMatch)
-      return;
-    const cleaned = line.trim().substring(0, MAX_ERROR_LINE_LENGTH);
-    if (cleaned && !this._errorSet.has(cleaned)) {
-      this._errorSet.add(cleaned);
-      this._errors.push(cleaned);
-    }
-  }
-}
-
 // template-utils.ts
 function stripFrontmatter(content) {
-  const fmMatch = content.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+  const fmMatch = content.match(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---\r?\n/);
   if (fmMatch) {
-    if (isYamlFrontmatter(fmMatch[1])) {
-      return content.slice(fmMatch[0].length);
-    }
-    return content;
+    return content.slice(fmMatch[0].length);
   }
-  const eofMatch = content.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n---$/);
+  const eofMatch = content.match(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---$/);
   if (eofMatch) {
-    if (isYamlFrontmatter(eofMatch[1])) {
-      return content.slice(eofMatch[0].length);
-    }
-    return content;
+    return content.slice(eofMatch[0].length);
   }
   return content;
-}
-function isYamlFrontmatter(body) {
-  const lines = body.split(/\r?\n/).filter((l) => l.trim().length > 0);
-  if (lines.length === 0)
-    return true;
-  return lines.every((line) => {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("#"))
-      return true;
-    return /^[a-zA-Z_][a-zA-Z0-9_-]*\s*:/.test(trimmed);
-  });
 }
 
 // ralph.ts
@@ -930,29 +289,6 @@ function setStatePaths(nextStateDir) {
   tasksPath = join(stateDir, "ralph-tasks.md");
   questionsPath = join(stateDir, "ralph-questions.json");
 }
-function ensureStateDir() {
-  if (existsSync(stateDir)) {
-    try {
-      const stats = statSync(stateDir);
-      if (!stats.isDirectory()) {
-        const linkStats = lstatSync(stateDir);
-        console.error(`
-\u274C Ralph Initialization Failed`);
-        console.error(`   ${stateDir} exists but is not a directory!`);
-        console.error(`   Type: ${linkStats?.isSymbolicLink() ? "symlink" : "file"}`);
-        console.error(`
-Fix: rm ${stateDir}  # remove the file/symlink`);
-        console.error(`     mkdir ${stateDir}  # then recreate as a directory`);
-        process.exit(1);
-      }
-    } catch (err) {
-      console.error(`
-\u274C Ralph Initialization Failed`);
-      console.error(`   Cannot access ${stateDir}: ${err}`);
-      process.exit(1);
-    }
-  }
-}
 function formatStatePath(path) {
   const rel = relative(process.cwd(), path);
   if (!rel || rel === "")
@@ -961,15 +297,11 @@ function formatStatePath(path) {
     return rel;
   return path;
 }
-function currentStateDirLabel() {
-  return formatStatePath(stateDir);
-}
 function currentTasksFileLabel() {
   return formatStatePath(tasksPath);
 }
 var customConfigPath = "";
 var initConfigPath = undefined;
-var AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot", "cursor-agent"];
 var DEFAULT_CONFIG_PATH = join(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
 var stateDirInput = join(process.cwd(), ".ralph");
 var PARSE_PATTERNS = {
@@ -1000,17 +332,6 @@ var defaultParseToolOutput = (line) => {
 };
 PARSE_PATTERNS["codex"] = defaultParseToolOutput;
 PARSE_PATTERNS["copilot"] = defaultParseToolOutput;
-PARSE_PATTERNS["pi"] = (line) => {
-  try {
-    const evt = JSON.parse(line);
-    if (evt.type === "turn_end" && evt.toolResults?.length > 0) {
-      return evt.toolResults[0].toolName || null;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-};
 function loadPluginsFromConfig(configPath) {
   if (!existsSync(configPath)) {
     return [];
@@ -1203,26 +524,6 @@ function getDefaultTomlConfig() {
 # model = ""
 
 # =============================================================================
-# STATE REUSE
-# =============================================================================
-
-# How to handle config drift when resuming an existing loop:
-# "strict"  = error on any mismatch (backward compat default)
-# "relaxed" = warn on mismatches, skip most fields (recommended)
-# "off"     = skip all drift checks (except hard-block fields)
-# reuse_check = "strict"
-
-# Per-field overrides (only effective in strict/relaxed mode):
-# reuse_skip_model = false
-# reuse_skip_agent = false
-# reuse_skip_rotation = false
-# reuse_skip_min_iterations = false
-# reuse_skip_max_iterations = false
-
-# NOTE: completion_promise and tasks_mode CANNOT be skipped.
-# Changing these silently corrupts the loop lifecycle.
-
-# =============================================================================
 # AGENT ROTATION
 # =============================================================================
 
@@ -1325,12 +626,6 @@ function getDefaultTomlConfig() {
 
 # Extra flags to pass to the agent
 # extra_agent_flags = ["--verbose", "--no-git"]
-
-# How to display JSON agent output: "beautify" (default), "raw", or "text"
-# json_display = "beautify"
-
-# Max bytes of agent output to keep per iteration (default: 2MB, 0 = unlimited)
-# output_buffer_bytes = 2097152
 `;
 }
 function normalizeRuntimeConfigValue(path, value, expected) {
@@ -1406,14 +701,6 @@ function loadRuntimeTomlConfig(configPath, explicit) {
     config.extra_agent_flags = normalizeRuntimeConfigValue("extra_agent_flags", parsed.extra_agent_flags, "string[]");
     config.stall_retries = normalizeRuntimeConfigValue("stall_retries", parsed.stall_retries, "boolean");
     config.stall_retry_minutes = normalizeRuntimeConfigValue("stall_retry_minutes", parsed.stall_retry_minutes, "number");
-    config.reuse_check = normalizeRuntimeConfigValue("reuse_check", parsed.reuse_check, "string");
-    config.reuse_skip_model = normalizeRuntimeConfigValue("reuse_skip_model", parsed.reuse_skip_model, "boolean");
-    config.reuse_skip_agent = normalizeRuntimeConfigValue("reuse_skip_agent", parsed.reuse_skip_agent, "boolean");
-    config.reuse_skip_rotation = normalizeRuntimeConfigValue("reuse_skip_rotation", parsed.reuse_skip_rotation, "boolean");
-    config.reuse_skip_min_iterations = normalizeRuntimeConfigValue("reuse_skip_min_iterations", parsed.reuse_skip_min_iterations, "boolean");
-    config.reuse_skip_max_iterations = normalizeRuntimeConfigValue("reuse_skip_max_iterations", parsed.reuse_skip_max_iterations, "boolean");
-    config.json_display = normalizeRuntimeConfigValue("json_display", parsed.json_display, "string");
-    config.output_buffer_bytes = normalizeRuntimeConfigValue("output_buffer_bytes", parsed.output_buffer_bytes, "number");
     if (config.prompt_file) {
       config.prompt_file = resolveConfigRelativePath(configPath, config.prompt_file);
     }
@@ -1429,9 +716,6 @@ function loadRuntimeTomlConfig(configPath, explicit) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
-}
-function getAgentBinaryEnvName(agentType) {
-  return `RALPH_${agentType.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_BINARY`;
 }
 function resolveCommand(cmd, envOverride, basePath) {
   if (envOverride)
@@ -1937,6 +1221,74 @@ Unable to read ${currentTasksFileLabel()}
     return output.includes("ralph-wiggum is not yet ready for use. This is a placeholder package.");
   }, detectModelNotFoundError = function(output) {
     return output.includes("ProviderModelNotFoundError") || output.includes("Provider returned error") || output.includes("model not found") || output.includes("No model configured") || output.includes(".split is not a function");
+  }, extractClaudeStreamDisplayLines = function(rawLine) {
+    const cleanLine = stripAnsi(rawLine).trim();
+    if (!cleanLine.startsWith("{")) {
+      return [rawLine];
+    }
+    let payload;
+    try {
+      payload = JSON.parse(cleanLine);
+    } catch {
+      return [rawLine];
+    }
+    if (!payload || typeof payload !== "object") {
+      return [];
+    }
+    const lines = [];
+    const addText = (value) => {
+      if (typeof value !== "string")
+        return;
+      for (const splitLine of value.split(/\r?\n/)) {
+        const trimmed = splitLine.trim();
+        if (trimmed)
+          lines.push(trimmed);
+      }
+    };
+    const addContentText = (content) => {
+      if (typeof content === "string") {
+        addText(content);
+        return;
+      }
+      if (!Array.isArray(content))
+        return;
+      for (const block of content) {
+        if (!block || typeof block !== "object")
+          continue;
+        const blockRecord = block;
+        if (blockRecord.type === "tool_use")
+          continue;
+        addText(blockRecord.text);
+        addText(blockRecord.thinking);
+        if (typeof blockRecord.content === "string") {
+          addText(blockRecord.content);
+        }
+      }
+    };
+    const payloadRecord = payload;
+    const payloadType = typeof payloadRecord.type === "string" ? payloadRecord.type : "";
+    if (payloadType === "assistant") {
+      if (payloadRecord.message && typeof payloadRecord.message === "object") {
+        const message = payloadRecord.message;
+        addContentText(message.content);
+      }
+      if (payloadRecord.delta && typeof payloadRecord.delta === "object") {
+        const delta = payloadRecord.delta;
+        addText(delta.text);
+        addText(delta.thinking);
+        addText(delta.content);
+      }
+    } else if (payloadType === "result") {
+      addText(payloadRecord.result);
+    } else if (payloadType === "error") {
+      if (payloadRecord.error && typeof payloadRecord.error === "object") {
+        const error = payloadRecord.error;
+        addText(error.message);
+      } else {
+        addText(payloadRecord.error);
+      }
+    }
+    return lines;
   }, formatDuration = function(ms) {
     const totalSeconds = Math.max(0, Math.floor(ms / 1000));
     const hours = Math.floor(totalSeconds / 3600);
@@ -2047,7 +1399,6 @@ Iteration Summary`);
     }
   }
   setStatePaths(stateDirInput);
-  ensureStateDir();
   if (!tomlConfigPath) {
     tomlConfigPath = join(stateDir, "config.toml");
   }
@@ -2113,8 +1464,6 @@ Options:
   --prompt-template PATH  Use custom prompt template (supports variables)
   --no-stream         Buffer agent output and print at the end
   --verbose-tools     Print every tool line (disable compact tool summary)
-  --json-display MODE How to display JSON agent output: beautify (default), raw, or text
-  --output-buffer-bytes N  Max bytes of agent output to keep per iteration (default: 2097152, 0=unlimited)
   --questions         Enable interactive question handling (default: enabled)
   --no-questions      Disable interactive question handling (agent will loop on questions)
   --no-plugins        Disable non-auth OpenCode plugins for this run (opencode only)
@@ -2191,7 +1540,7 @@ Learn more: https://ghuntley.com/ralph/
     const iterationDuration = Date.now() - params.iterationStart;
     const snapshotAfter = await captureFileSnapshot();
     const filesModified = getModifiedFilesSinceSnapshot(params.snapshotBefore, snapshotAfter);
-    const errors = params.preExtractedErrors !== undefined ? params.preExtractedErrors : extractErrors(`${params.result}
+    const errors = extractErrors(`${params.result}
 ${params.stderr}`);
     const iterationRecord = {
       iteration: params.iteration,
@@ -2632,14 +1981,6 @@ ${newEntry}`);
   let maxIterationsProvided = false;
   let minIterationsProvided = false;
   let reuseState = false;
-  let reuseCheck = "strict";
-  let reuseSkipModel = false;
-  let reuseSkipAgent = false;
-  let reuseSkipRotation = false;
-  let reuseSkipMinIterations = false;
-  let reuseSkipMaxIterations = false;
-  let jsonDisplay = "beautify";
-  let outputBufferBytes = 2 * 1024 * 1024;
   const promptParts = [];
   let extraAgentFlags = [];
   let passthroughAgentFlags = [];
@@ -2713,49 +2054,6 @@ ${newEntry}`);
     if (runtimeTomlConfig.stall_retry_minutes !== undefined) {
       stallRetryMinutes = runtimeTomlConfig.stall_retry_minutes;
       stallRetryMinutesProvided = true;
-    }
-    if (runtimeTomlConfig.reuse_check) {
-      const validModes = ["strict", "relaxed", "off"];
-      if (!validModes.includes(runtimeTomlConfig.reuse_check)) {
-        console.error(`Error: Invalid reuse_check '${runtimeTomlConfig.reuse_check}'. Must be one of: ${validModes.join(", ")}`);
-        process.exit(1);
-      }
-      reuseCheck = runtimeTomlConfig.reuse_check;
-    }
-    if (runtimeTomlConfig.reuse_skip_model !== undefined)
-      reuseSkipModel = runtimeTomlConfig.reuse_skip_model;
-    if (runtimeTomlConfig.reuse_skip_agent !== undefined)
-      reuseSkipAgent = runtimeTomlConfig.reuse_skip_agent;
-    if (runtimeTomlConfig.reuse_skip_rotation !== undefined)
-      reuseSkipRotation = runtimeTomlConfig.reuse_skip_rotation;
-    if (runtimeTomlConfig.reuse_skip_min_iterations !== undefined)
-      reuseSkipMinIterations = runtimeTomlConfig.reuse_skip_min_iterations;
-    if (runtimeTomlConfig.reuse_skip_max_iterations !== undefined)
-      reuseSkipMaxIterations = runtimeTomlConfig.reuse_skip_max_iterations;
-    if (runtimeTomlConfig.json_display) {
-      const valid = ["beautify", "raw", "text"];
-      if (!valid.includes(runtimeTomlConfig.json_display)) {
-        console.error(`Error: Invalid json_display '${runtimeTomlConfig.json_display}'. Must be one of: ${valid.join(", ")}`);
-        process.exit(1);
-      }
-      jsonDisplay = runtimeTomlConfig.json_display;
-    }
-    if (runtimeTomlConfig.output_buffer_bytes !== undefined) {
-      if (runtimeTomlConfig.output_buffer_bytes < 0) {
-        console.error(`Error: output_buffer_bytes must be non-negative`);
-        process.exit(1);
-      }
-      outputBufferBytes = runtimeTomlConfig.output_buffer_bytes;
-    }
-  }
-  if (!runtimeTomlConfig?.reuse_check && process.env.RALPH_REUSE_CHECK) {
-    const envVal = process.env.RALPH_REUSE_CHECK;
-    const validModes = ["strict", "relaxed", "off"];
-    if (validModes.includes(envVal)) {
-      reuseCheck = envVal;
-    } else {
-      console.error(`Error: Invalid RALPH_REUSE_CHECK '${envVal}'. Must be one of: ${validModes.join(", ")}`);
-      process.exit(1);
     }
   }
   for (let i = 0;i < args.length; i++) {
@@ -2878,20 +2176,6 @@ ${newEntry}`);
       streamOutput = true;
     } else if (arg === "--verbose-tools") {
       verboseTools = true;
-    } else if (arg === "--json-display") {
-      const val = args[++i];
-      if (val !== "beautify" && val !== "raw" && val !== "text") {
-        console.error("Error: --json-display requires 'beautify', 'raw', or 'text'");
-        process.exit(1);
-      }
-      jsonDisplay = val;
-    } else if (arg === "--output-buffer-bytes") {
-      const val = args[++i];
-      if (!val || Number.isNaN(Number(val)) || Number(val) < 0) {
-        console.error("Error: --output-buffer-bytes requires a non-negative number");
-        process.exit(1);
-      }
-      outputBufferBytes = Number(val);
     } else if (arg === "--no-commit") {
       autoCommit = false;
     } else if (arg === "--no-plugins") {
@@ -2974,7 +2258,6 @@ ${newEntry}`);
       i++;
     }
   }
-  ensureStateDir();
   const usingCustomStateDir = stateDir !== resolve(process.cwd(), ".ralph");
   if (usingCustomStateDir && autoCommit) {
     console.error("Error: --state-dir currently requires --no-commit.");
@@ -3058,9 +2341,6 @@ Your answer: `, (answer) => {
     const toolCounts = new Map;
     let stdoutText = "";
     let stderrText = "";
-    const outputBufferBytes2 = options.outputBufferBytes ?? 2 * 1024 * 1024;
-    const stdoutAcc = outputBufferBytes2 > 0 ? new StreamAccumulator({ tailMaxBytes: outputBufferBytes2 }) : null;
-    const stderrAcc = outputBufferBytes2 > 0 ? new StreamAccumulator({ tailMaxBytes: Math.min(outputBufferBytes2, 512 * 1024) }) : null;
     let lastPrintedAt = Date.now();
     const activityTracker = new StreamActivityTracker;
     let lastToolSummaryAt = 0;
@@ -3098,29 +2378,10 @@ Your answer: `, (answer) => {
     const handleLine = (line, isError, displayedPrefixLength = 0) => {
       activityTracker.markLine();
       const tool = parseToolOutput(line);
-      let outputLines;
-      if (isJsonModeAgent(options.agent.type, options.extraFlags)) {
-        const cfg = {
-          mode: options.jsonDisplay ?? "beautify",
-          agentType: options.agent.type,
-          verboseTools: !!options.verboseTools,
-          showThinking: true,
-          showRetry: true,
-          showError: true,
-          showCost: true,
-          maxErrorLength: 120
-        };
-        outputLines = beautifyJsonLine(line, cfg);
-      } else {
-        outputLines = [line];
-      }
+      const outputLines = options.agent.type === "claude-code" ? extractClaudeStreamDisplayLines(line) : [line];
       let completionPromiseSeen = false;
       if (!isError && promisePattern) {
         completionPromiseSeen = outputLines.some((outputLine) => promisePattern.test(outputLine.trim()));
-        if (!completionPromiseSeen && isJsonModeAgent(options.agent.type, options.extraFlags)) {
-          const extracted = extractJsonCompletionText(line, options.agent.type);
-          completionPromiseSeen = extracted.some((el) => promisePattern.test(el.trim()));
-        }
       }
       if (tool) {
         toolCounts.set(tool, (toolCounts.get(tool) ?? 0) + 1);
@@ -3203,7 +2464,7 @@ Your answer: `, (answer) => {
             handleLine(line, isError, partialCharsDisplayed);
             partialCharsDisplayed = 0;
           }
-          if (options.flushPartialLines && !options.suppressOutput && !isJsonModeAgent(options.agent.type, options.extraFlags) && buffer.length > partialCharsDisplayed) {
+          if (options.flushPartialLines && !options.suppressOutput && options.agent.type !== "claude-code" && buffer.length > partialCharsDisplayed) {
             writeOutput(buffer.slice(partialCharsDisplayed), isError);
             partialCharsDisplayed = buffer.length;
             lastPrintedAt = Date.now();
@@ -3290,18 +2551,10 @@ Your answer: `, (answer) => {
     try {
       await Promise.all([
         streamText(proc.stdout, (chunk) => {
-          if (stdoutAcc) {
-            stdoutAcc.append(chunk);
-          } else {
-            stdoutText += chunk;
-          }
+          stdoutText += chunk;
         }, false),
         streamText(proc.stderr, (chunk) => {
-          if (stderrAcc) {
-            stderrAcc.append(chunk);
-          } else {
-            stderrText += chunk;
-          }
+          stderrText += chunk;
         }, true)
       ]);
     } finally {
@@ -3313,39 +2566,7 @@ Your answer: `, (answer) => {
     if (compactTools) {
       maybePrintToolSummary(true);
     }
-    const finalStdout = stdoutAcc ? stdoutAcc.tail : stdoutText;
-    const finalStderr = stderrAcc ? stderrAcc.tail : stderrText;
-    const allErrors = [];
-    const errorSet = new Set;
-    if (stdoutAcc) {
-      for (const e of stdoutAcc.errors) {
-        if (!errorSet.has(e)) {
-          errorSet.add(e);
-          allErrors.push(e);
-        }
-      }
-    }
-    if (stderrAcc) {
-      for (const e of stderrAcc.errors) {
-        if (!errorSet.has(e)) {
-          errorSet.add(e);
-          allErrors.push(e);
-        }
-      }
-    }
-    const finalErrors = allErrors;
-    const finalBytes = stdoutAcc ? stdoutAcc.totalBytes : stdoutText.length;
-    return {
-      stdoutText: finalStdout,
-      stderrText: finalStderr,
-      toolCounts,
-      stalled,
-      stalledForMs,
-      preStartStalled: stalled && !firstOutputReceived,
-      terminatedAfterPromise,
-      errors: finalErrors,
-      totalOutputBytes: finalBytes
-    };
+    return { stdoutText, stderrText, toolCounts, stalled, stalledForMs, preStartStalled: stalled && !firstOutputReceived, terminatedAfterPromise };
   }
   async function captureFileSnapshot() {
     const files = new Map;
@@ -3391,82 +2612,27 @@ Your answer: `, (answer) => {
     }
     const resuming = ownership.status === "resume";
     if (existingState?.active && !reuseState) {
-      let isFieldSkipped = function(field) {
-        if (reuseCheck === "off")
-          return true;
-        if (reuseCheck === "relaxed") {
-          switch (field) {
-            case "model":
-              return true;
-            case "rotation":
-              return true;
-            case "minIterations":
-              return true;
-            case "maxIterations":
-              return true;
-            case "agent":
-              return true;
-            default:
-              return false;
-          }
-        }
-        switch (field) {
-          case "model":
-            return reuseSkipModel;
-          case "agent":
-            return reuseSkipAgent;
-          case "rotation":
-            return reuseSkipRotation;
-          case "minIterations":
-            return reuseSkipMinIterations;
-          case "maxIterations":
-            return reuseSkipMaxIterations;
-          default:
-            return false;
-        }
-      };
       const mismatches = [];
-      const warnings = [];
+      if (existingState.agent !== agentType) {
+        mismatches.push(`agent (stored: ${existingState.agent}, current: ${agentType})`);
+      }
+      if (existingState.model && existingState.model !== model && model !== "") {
+        mismatches.push(`model (stored: ${existingState.model}, current: ${model})`);
+      }
+      if (existingState.minIterations !== minIterations && minIterationsProvided) {
+        mismatches.push(`min-iterations (stored: ${existingState.minIterations}, current: ${minIterations})`);
+      }
+      if (existingState.maxIterations !== maxIterations && maxIterationsProvided) {
+        mismatches.push(`max-iterations (stored: ${existingState.maxIterations}, current: ${maxIterations})`);
+      }
       if (existingState.completionPromise !== completionPromise) {
         mismatches.push(`completion-promise (stored: ${existingState.completionPromise}, current: ${completionPromise})`);
       }
+      if (!!existingState.rotation !== !!rotation || existingState.rotation && rotation && JSON.stringify(existingState.rotation.sort()) !== JSON.stringify([...rotation].sort())) {
+        mismatches.push("rotation");
+      }
       if (existingState.tasksMode !== tasksMode) {
         mismatches.push(`tasks mode (stored: ${existingState.tasksMode}, current: ${tasksMode})`);
-      }
-      if (existingState.agent !== agentType) {
-        if (isFieldSkipped("agent")) {
-          warnings.push(`\u26A0\uFE0F  agent drift tolerated: ${existingState.agent} \u2192 ${agentType}`);
-        } else {
-          mismatches.push(`agent (stored: ${existingState.agent}, current: ${agentType})`);
-        }
-      }
-      if (existingState.model && existingState.model !== model && model !== "") {
-        if (isFieldSkipped("model")) {
-          warnings.push(`\u26A0\uFE0F  model drift tolerated: ${existingState.model} \u2192 ${model}`);
-        } else {
-          mismatches.push(`model (stored: ${existingState.model}, current: ${model})`);
-        }
-      }
-      if (existingState.minIterations !== minIterations && minIterationsProvided) {
-        if (isFieldSkipped("minIterations")) {
-          warnings.push(`\u26A0\uFE0F  min-iterations drift tolerated: ${existingState.minIterations} \u2192 ${minIterations}`);
-        } else {
-          mismatches.push(`min-iterations (stored: ${existingState.minIterations}, current: ${minIterations})`);
-        }
-      }
-      if (existingState.maxIterations !== maxIterations && maxIterationsProvided) {
-        if (isFieldSkipped("maxIterations")) {
-          warnings.push(`\u26A0\uFE0F  max-iterations drift tolerated: ${existingState.maxIterations} \u2192 ${maxIterations}`);
-        } else {
-          mismatches.push(`max-iterations (stored: ${existingState.maxIterations}, current: ${maxIterations})`);
-        }
-      }
-      if (!!existingState.rotation !== !!rotation || existingState.rotation && rotation && JSON.stringify(existingState.rotation.sort()) !== JSON.stringify([...rotation].sort())) {
-        if (isFieldSkipped("rotation")) {
-          warnings.push("\u26A0\uFE0F  rotation drift tolerated: stored \u2192 current");
-        } else {
-          mismatches.push("rotation");
-        }
       }
       if (mismatches.length > 0) {
         console.error(`
@@ -3479,9 +2645,6 @@ To reuse the existing state, pass --reuse-state:`);
 To start fresh, clear the state file:`);
         console.error(`   rm ${statePath}`);
         process.exit(1);
-      }
-      for (const w of warnings) {
-        console.error(w);
       }
     }
     if (ownership.status === "already-running") {
@@ -3776,7 +2939,6 @@ Gracefully stopping Ralph loop...`);
         let stderr = "";
         let toolCounts = new Map;
         let terminatedAfterPromise = false;
-        let streamedErrors;
         if (streamOutput) {
           const abortController = new AbortController;
           currentAbortController = abortController;
@@ -3793,11 +2955,7 @@ Gracefully stopping Ralph loop...`);
             onHeartbeatTimer: (timer) => {
               currentHeartbeatTimer = timer;
             },
-            flushPartialLines: !allowAllPermissions,
-            outputBufferBytes,
-            jsonDisplay,
-            verboseTools,
-            extraFlags: extraAgentFlags
+            flushPartialLines: !allowAllPermissions
           });
           currentHeartbeatTimer = null;
           currentAbortController = null;
@@ -3805,7 +2963,6 @@ Gracefully stopping Ralph loop...`);
           stderr = streamed.stderrText;
           toolCounts = streamed.toolCounts;
           terminatedAfterPromise = streamed.terminatedAfterPromise;
-          streamedErrors = streamed.errors;
           const isPreStartStalled = streamed.preStartStalled;
           if (streamed.stalled || isPreStartStalled) {
             const stallType = isPreStartStalled ? "Pre-start" : "";
@@ -3845,8 +3002,7 @@ Gracefully stopping Ralph loop...`);
               stderr,
               exitCode: stalledExitCode,
               completionDetected: false,
-              snapshotBefore,
-              preExtractedErrors: streamed.errors
+              snapshotBefore
             });
             if (state.stallingAction === "rotate" && state.rotation && state.rotation.length > 0) {
               const blacklistEntry = {
@@ -3890,17 +3046,12 @@ Gracefully stopping Ralph loop...`);
             suppressOutput: true,
             onHeartbeatTimer: (timer) => {
               currentHeartbeatTimer = timer;
-            },
-            outputBufferBytes,
-            jsonDisplay,
-            verboseTools,
-            extraFlags: extraAgentFlags
+            }
           });
           currentHeartbeatTimer = null;
           result = buffered.stdoutText;
           stderr = buffered.stderrText;
           toolCounts = buffered.toolCounts;
-          streamedErrors = buffered.errors;
           const isPreStartStalled = buffered.preStartStalled;
           if (buffered.stalled || isPreStartStalled) {
             const stallType = isPreStartStalled ? "Pre-start" : "";
@@ -3931,8 +3082,7 @@ Gracefully stopping Ralph loop...`);
               stderr,
               exitCode: stalledExitCode,
               completionDetected: false,
-              snapshotBefore,
-              preExtractedErrors: buffered.errors
+              snapshotBefore
             });
             if (state.stallingAction === "rotate" && state.rotation && state.rotation.length > 0) {
               const blacklistEntry = {
@@ -4017,8 +3167,7 @@ ${stderr}`;
           stderr,
           exitCode,
           completionDetected,
-          snapshotBefore,
-          preExtractedErrors: streamedErrors
+          snapshotBefore
         });
         const struggle = history.struggleIndicators;
         if (state.iteration > 2 && (struggle.noProgressIterations >= 3 || struggle.shortIterations >= 3)) {
@@ -4249,26 +3398,7 @@ ${answerContext}`);
   });
 }
 export {
-  setStatePaths,
-  resolveConfigRelativePath,
   resolveCommand,
-  normalizeRuntimeConfigValue,
-  loadRuntimeTomlConfig,
-  loadPluginsFromConfig,
   loadAgentConfig,
-  getDefaultTomlConfig,
-  getDefaultConfig,
-  getAgentBinaryEnvName,
-  formatStatePath,
-  ensureRalphConfig,
-  defaultParseToolOutput,
-  currentTasksFileLabel,
-  currentStateDirLabel,
-  createAgentConfig,
-  VERSION,
-  PARSE_PATTERNS,
-  ENV_TEMPLATES,
-  DEFAULT_CONFIG_PATH,
-  BUILT_IN_AGENTS,
-  AGENT_TYPES
+  createAgentConfig
 };

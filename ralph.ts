@@ -2619,6 +2619,7 @@ Learn more: https://ghuntley.com/ralph/
       console.error("Error: --no-stream cannot be used when interactive permission prompts are enabled.");
       console.error("Use --stream, or re-enable auto-approval with --allow-all.");
       process.exit(1);
+
    }
 
    // RalphState imported from src/loop-helpers.ts (single source of truth)
