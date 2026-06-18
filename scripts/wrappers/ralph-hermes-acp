@@ -1,0 +1,519 @@
+#!/usr/bin/env python3
+"""
+ralph-hermes-acp — ralph-wiggum wrapper that drives `hermes acp` via JSON-RPC.
+
+WHY: Hermes CLI has no --output-format json (NousResearch/hermes-agent#3326,
+#30053, #360 — all open). `hermes chat -q -Q` buffers the entire response,
+which trips ralph's pre-start stall detector (ralph.ts:3678, =stalling/10
+= 12min default) on any long task. Hermes speaks ACP natively via the
+`hermes acp` subcommand — JSON-RPC over stdio with streaming
+session/update notifications. This wrapper speaks ACP and streams
+assistant deltas to stdout in real time, killing the false-positive.
+
+PROTOCOL (verified 2026-06-19 against hermes-agent 0.16.0):
+
+  initialize → {protocolVersion:1, agentInfo, agentCapabilities, authMethods[]}
+  authenticate (best-effort, if authMethods non-empty)
+  session/new {cwd, mcpServers:[]} → {sessionId, models[], modes[]}
+  session/prompt {sessionId, prompt:[{type:text,text}]} → {stopReason, usage}
+
+  Notifications (server→client, method=session/update):
+    agent_message_chunk    content:{type:text,text}        → stdout (flush)
+    agent_thought_chunk    content:{type:text,text}        → stderr (debug)
+    tool_call              title:"terminal: cmd"           → stderr "Tool: <name>"
+    tool_call_update       status, content                 → stderr (debug)
+    usage_update           size, used                      → ignored
+    available_commands_update                              → ignored
+
+ARG PARSING (matches existing ralph-hermes wrapper):
+  ralph-hermes-acp [--model X] [--full-auto] [-- <extra...>] <prompt>
+
+ENV:
+  RALPH_HERMES_ACP_BINARY   override the agent binary (default "hermes acp")
+  RALPH_HERMES_ACP_DEBUG    if set, child stderr is kept on parent stderr
+  RALPH_HERMES_ACP_HEARTBEAT_SILENCE  seconds of silence before a heartbeat
+                            line is emitted to stderr (default 30)
+  RALPH_HERMES_ACP_HEARTBEAT_INTERVAL poll interval for the heartbeat (default 1.0)
+
+THROTTLING:
+  agent_thought_chunk notifications are NOT emitted to stderr (Hermes streams
+  thought deltas char-by-char, which would flood stderr with one line per
+  token). Instead a background heartbeat thread emits a single `[thinking]`
+  line to stderr when no stdout/stderr activity has occurred for longer than
+  RALPH_HERMES_ACP_HEARTBEAT_SILENCE seconds. This keeps ralph's pre-start
+  stall detector fed without the per-token flood.
+"""
+from __future__ import annotations
+
+import json
+import os
+import signal
+import subprocess
+import sys
+import threading
+import time
+from typing import Optional
+
+
+PROTOCOL_VERSION = 1
+CLIENT_INFO = {"name": "ralph-hermes-acp", "version": "1.0.0"}
+
+DEFAULT_HEARTBEAT_SILENCE = 30.0
+DEFAULT_HEARTBEAT_INTERVAL = 1.0
+
+
+class ActivityTracker:
+    """Tracks time of last stdout/stderr activity for heartbeat decisions.
+
+    Thread-safe. The heartbeat thread polls seconds_since() and emits a
+    `[thinking]` line once the silence threshold is exceeded.
+    """
+
+    def __init__(self, silence_threshold: float, interval: float):
+        self._lock = threading.Lock()
+        self._last = time.time()
+        self.silence_threshold = silence_threshold
+        self.interval = interval
+
+    def touch(self) -> None:
+        with self._lock:
+            self._last = time.time()
+
+    def seconds_since(self) -> float:
+        with self._lock:
+            return time.time() - self._last
+
+
+class AcpError(Exception):
+    pass
+
+
+def parse_args(argv: list[str]) -> tuple[str, str, list[str]]:
+    """Parse ralph wrapper args. Returns (prompt, model, extra)."""
+    model = ""
+    extra: list[str] = []
+    positional: list[str] = []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--model":
+            if i + 1 >= len(argv):
+                raise SystemExit("--model requires a value")
+            model = argv[i + 1]
+            i += 2
+            continue
+        if a == "--full-auto":
+            # ACP has no equivalent; auto-approve is implicit in yolo-style runs.
+            # Accepted for arg compatibility with the ralph-hermes wrapper.
+            i += 1
+            continue
+        if a == "--":
+            extra.extend(argv[i + 1 :])
+            break
+        positional.append(a)
+        i += 1
+    prompt = " ".join(positional).strip()
+    return prompt, model, extra
+
+
+def _send_jsonrpc(proc: subprocess.Popen, obj: dict) -> None:
+    line = (json.dumps(obj) + "\n").encode()
+    try:
+        proc.stdin.write(line)
+        proc.stdin.flush()
+    except (BrokenPipeError, OSError) as e:
+        raise AcpError(f"failed to write to agent stdin: {e}")
+
+
+class AcpClient:
+    """Minimal ACP JSON-RPC client over stdio."""
+
+    def __init__(self, proc: subprocess.Popen):
+        self.proc = proc
+        self._next_id = 1
+        self._lock = threading.Lock()
+        # id -> {"result":..., "error":...}
+        self._responses: dict[int, dict] = {}
+        self._response_cv = threading.Condition()
+        # notifications queued for the main thread
+        self.notifications: list[dict] = []
+        self.notif_cv = threading.Condition()
+        self._stop = False
+        self._reader: Optional[threading.Thread] = None
+
+    def next_id(self) -> int:
+        with self._lock:
+            n = self._next_id
+            self._next_id += 1
+            return n
+
+    def start(self) -> None:
+        self._reader = threading.Thread(target=self._read_loop, daemon=True)
+        self._reader.start()
+
+    def _read_loop(self) -> None:
+        """Read JSON-RPC lines from agent stdout, dispatch by id/method."""
+        buf = b""
+        stream = self.proc.stdout
+        if stream is None:
+            return
+        while not self._stop:
+            try:
+                ch = stream.read(1)
+            except (OSError, ValueError):
+                break
+            if not ch:
+                break
+            buf += ch
+            if ch != b"\n":
+                continue
+            line = buf.decode(errors="replace").strip()
+            buf = b""
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                # Not JSON-RPC — ignore (agent shouldn't write non-JSON to stdout
+                # in ACP mode, but be defensive).
+                continue
+            if "id" in msg and ("result" in msg or "error" in msg):
+                with self._response_cv:
+                    self._responses[msg["id"]] = msg
+                    self._response_cv.notify_all()
+            elif "method" in msg and "id" not in msg:
+                # Notification
+                with self.notif_cv:
+                    self.notifications.append(msg)
+                    self.notif_cv.notify_all()
+            # Requests from agent to us (not expected for this client) — ignored.
+
+    def request(self, method: str, params: dict, timeout: float = 60.0) -> dict:
+        rid = self.next_id()
+        _send_jsonrpc(self.proc, {"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
+        deadline = time.time() + timeout
+        with self._response_cv:
+            while rid not in self._responses:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    raise AcpError(f"timeout waiting for response to {method} (id={rid})")
+                self._response_cv.wait(timeout=remaining)
+            msg = self._responses.pop(rid)
+        if "error" in msg and msg["error"]:
+            err = msg["error"]
+            raise AcpError(f"{method} RPC error: {err}")
+        return msg.get("result", {})
+
+    def drain_notifications(self) -> list[dict]:
+        with self.notif_cv:
+            got = self.notifications
+            self.notifications = []
+            return got
+
+    def stop(self) -> None:
+        self._stop = True
+
+
+def _emit_stdout(text: str) -> None:
+    if not text:
+        return
+    sys.stdout.write(text)
+    sys.stdout.flush()
+
+
+def _emit_stderr(text: str) -> None:
+    if not text:
+        return
+    sys.stderr.write(text)
+    if not text.endswith("\n"):
+        sys.stderr.write("\n")
+    sys.stderr.flush()
+
+
+# Global activity tracker — set in run(), read by _process_notification and
+# the heartbeat thread. Module-level so _process_notification (which is also
+# imported by tests) can touch it without threading it through every call.
+_ACTIVITY: Optional[ActivityTracker] = None
+
+
+def _heartbeat_loop(stop_flag: dict, tracker: ActivityTracker) -> None:
+    """Emit `[thinking]` to stderr when silence exceeds the threshold.
+
+    Resetting the tracker after each emit keeps the cadence at one heartbeat
+    per silence-threshold window of continued quiet.
+    """
+    while not stop_flag.get("stop"):
+        time.sleep(tracker.interval)
+        if stop_flag.get("stop"):
+            break
+        if tracker.seconds_since() >= tracker.silence_threshold:
+            _emit_stderr("[thinking]")
+            tracker.touch()
+
+
+def _tool_name_from_title(title: str) -> str:
+    """'terminal: echo hello-world' -> 'terminal'. 'foo' -> 'foo'."""
+    if not title:
+        return "unknown"
+    if ":" in title:
+        return title.split(":", 1)[0].strip()
+    return title.strip()
+
+
+def _env_float(name: str, default: float) -> float:
+    """Read a float from env; fall back to default on any parsing error."""
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _reset_activity() -> None:
+    """Clear the global activity tracker (used by tests between runs)."""
+    global _ACTIVITY
+    _ACTIVITY = None
+
+
+def _process_notification(notif: dict) -> Optional[str]:
+    """Returns 'end' if prompt should be considered complete by other means;
+    otherwise None. Side effects: writes to stdout/stderr, touches the global
+    activity tracker so the heartbeat thread knows there was activity."""
+    params = notif.get("params", {}) or {}
+    update = params.get("update", {}) or {}
+    su = update.get("sessionUpdate")
+    if su == "agent_message_chunk":
+        content = update.get("content", {}) or {}
+        if content.get("type") == "text" and content.get("text"):
+            _emit_stdout(content["text"])
+            if _ACTIVITY is not None:
+                _ACTIVITY.touch()
+        return None
+    if su == "agent_thought_chunk":
+        # Thinking deltas are streamed char-by-char by Hermes. Emitting one
+        # stderr line per token floods stderr with hundreds of `[thought] x`
+        # lines. We suppress per-token emission entirely; the heartbeat thread
+        # keeps ralph's stall detector fed during long thinking phases.
+        # Touch the tracker so a heartbeat doesn't fire mid-stream.
+        if _ACTIVITY is not None:
+            _ACTIVITY.touch()
+        return None
+    if su == "tool_call":
+        title = update.get("title", "") or ""
+        tool_name = _tool_name_from_title(title)
+        _emit_stderr(f"Tool: {tool_name}")
+        if _ACTIVITY is not None:
+            _ACTIVITY.touch()
+        return None
+    if su == "tool_call_update":
+        # Optional progress: emit a debug line on stderr so ralph's
+        # defaultParseToolOutput (matches 'Tool:|Using|Called|Running') keeps
+        # seeing activity during long tool calls.
+        status = update.get("status", "")
+        tool_call_id = update.get("toolCallId", "")
+        if status:
+            _emit_stderr(f"[tool {tool_call_id}] {status}")
+            if _ACTIVITY is not None:
+                _ACTIVITY.touch()
+        return None
+    # usage_update, available_commands_update, etc. — ignored (still counts as
+    # activity because we drained the notification; ralph only needs to see
+    # stdout/stderr bytes flowing, which thought/tool lines provide).
+    return None
+
+
+def run(prompt: str, model: str, extra: list[str], binary: str) -> int:
+    if not prompt:
+        _emit_stderr("ralph-hermes-acp: no prompt provided")
+        return 2
+
+    # Track signal for exit code determination
+    received_signal = {"signum": 0}
+
+    # Spawn agent. stderr → DEVNULL by default (hermes acp is noisy with INFO
+    # logs); flip via RALPH_HERMES_ACP_DEBUG=1 to keep them on parent stderr.
+    debug = bool(os.environ.get("RALPH_HERMES_ACP_DEBUG"))
+    child_stderr = None if debug else subprocess.DEVNULL
+
+    # shell=True is intentional: `binary` may be "hermes acp" (two tokens) or a
+    # full "python3 /path/to/mock.py" string from tests.
+    try:
+        proc = subprocess.Popen(
+            binary,
+            shell=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=child_stderr,
+            bufsize=0,
+        )
+    except FileNotFoundError as e:
+        _emit_stderr(f"ralph-hermes-acp: failed to spawn agent binary {binary!r}: {e}")
+        return 127
+
+    client = AcpClient(proc)
+    client.start()
+
+    # Activity tracker + heartbeat thread: emit `[thinking]` to stderr when
+    # no stdout/stderr activity has occurred for >silence seconds. This feeds
+    # ralph's pre-start stall detector during long thinking phases WITHOUT
+    # flooding stderr with per-token `[thought]` lines.
+    silence = _env_float("RALPH_HERMES_ACP_HEARTBEAT_SILENCE", DEFAULT_HEARTBEAT_SILENCE)
+    hb_interval = _env_float("RALPH_HERMES_ACP_HEARTBEAT_INTERVAL", DEFAULT_HEARTBEAT_INTERVAL)
+    tracker = ActivityTracker(silence_threshold=silence, interval=hb_interval)
+    heartbeat_stop = {"stop": False}
+
+    global _ACTIVITY
+    _ACTIVITY = tracker
+    heartbeat_thread = threading.Thread(
+        target=_heartbeat_loop, args=(heartbeat_stop, tracker), daemon=True
+    )
+    heartbeat_thread.start()
+
+    shutting_down = {"flag": False}
+
+    def _on_signal(signum, _frame):
+        received_signal["signum"] = signum
+        shutting_down["flag"] = True
+        client.stop()
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+        # Force exit on second signal
+        if signum in (signal.SIGTERM, signal.SIGINT):
+            # Give the reader a moment, then hard-exit
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            # os._exit bypasses Python exception machinery — guaranteed
+            # exit code matches the signal semantics (143=SIGTERM, 130=SIGINT)
+            os._exit(143 if signum == signal.SIGTERM else 130)
+
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
+
+    exit_code = 0
+    try:
+        # initialize
+        init = client.request("initialize", {
+            "protocolVersion": PROTOCOL_VERSION,
+            "clientCapabilities": {},
+            "clientInfo": CLIENT_INFO,
+        }, timeout=30.0)
+        # authenticate (best-effort)
+        auth_methods = init.get("authMethods") or []
+        if auth_methods:
+            try:
+                client.request("authenticate", {"methodId": auth_methods[0]["id"]}, timeout=30.0)
+            except AcpError as e:
+                _emit_stderr(f"[auth skipped] {e}")
+        # session/new
+        new_sess = client.request("session/new", {
+            "cwd": os.getcwd(),
+            "mcpServers": [],
+        }, timeout=30.0)
+        session_id = new_sess.get("sessionId")
+        if not session_id:
+            _emit_stderr(f"ralph-hermes-acp: session/new returned no sessionId: {new_sess}")
+            return 1
+
+        # set model (best-effort)
+        if model:
+            try:
+                client.request("session/setModel", {
+                    "sessionId": session_id,
+                    "modelId": model,
+                }, timeout=15.0)
+            except AcpError:
+                # Try the unstable name (older ACP SDKs)
+                try:
+                    client.request("session/unstable_setSessionModel", {
+                        "sessionId": session_id,
+                        "modelId": model,
+                    }, timeout=15.0)
+                except AcpError as e:
+                    _emit_stderr(f"[set-model skipped] {e}")
+
+        # session/prompt — fire request, then drain notifications until response
+        rid = client.next_id()
+        _send_jsonrpc(proc, {
+            "jsonrpc": "2.0", "id": rid, "method": "session/prompt",
+            "params": {"sessionId": session_id, "prompt": [{"type": "text", "text": prompt}]},
+        })
+
+        # Wait for prompt response while streaming notifications
+        prompt_result: Optional[dict] = None
+        deadline = time.time() + (4 * 3600)  # 4h ceiling — ralph owns real stall logic
+        with client._response_cv:
+            while rid not in client._responses:
+                # Drain any pending notifications outside the lock
+                client._response_cv.release()
+                notifs = client.drain_notifications()
+                for n in notifs:
+                    _process_notification(n)
+                time.sleep(0.02)
+                if time.time() > deadline:
+                    raise AcpError("prompt timeout (4h ceiling)")
+                client._response_cv.acquire()
+            prompt_result = client._responses.pop(rid)
+
+        # Drain any trailing notifications
+        for n in client.drain_notifications():
+            _process_notification(n)
+
+        if "error" in prompt_result and prompt_result["error"]:
+            _emit_stderr(f"prompt RPC error: {prompt_result['error']}")
+            exit_code = 1
+        else:
+            stop_reason = (prompt_result.get("result") or {}).get("stopReason", "")
+            if stop_reason == "end_turn":
+                exit_code = 0
+            elif stop_reason == "cancelled":
+                exit_code = 130
+            elif stop_reason == "error":
+                _emit_stderr(f"agent returned stopReason=error")
+                exit_code = 1
+            else:
+                _emit_stderr(f"agent returned stopReason={stop_reason!r}")
+                exit_code = 1
+
+    except AcpError as e:
+        _emit_stderr(f"ralph-hermes-acp: {e}")
+        exit_code = 1
+    except KeyboardInterrupt:
+        received_signal["signum"] = signal.SIGINT
+        shutting_down["flag"] = True
+        exit_code = 130
+    finally:
+        heartbeat_stop["stop"] = True
+        _reset_activity()
+        client.stop()
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except (subprocess.TimeoutExpired, OSError):
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+    # Honor signal exit codes even if we got here via normal flow
+    if received_signal["signum"] == signal.SIGTERM:
+        return 143
+    if received_signal["signum"] == signal.SIGINT:
+        return 130
+    return exit_code
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    prompt, model, extra = parse_args(argv)
+    binary = os.environ.get("RALPH_HERMES_ACP_BINARY") or "hermes acp"
+    return run(prompt, model, extra, binary)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
