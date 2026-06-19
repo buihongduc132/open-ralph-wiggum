@@ -1,6 +1,6 @@
-"""Failing-first tests for ralph-hermes-acp wrapper.
+"""Failing-first tests for ralph-acp wrapper.
 
-Run: cd /tmp/ralph-hermes-acp-tests && python3 -m pytest -xvs test_wrapper.py
+Run: cd /tmp/ralph-acp-tests && python3 -m pytest -xvs test_wrapper.py
 """
 import json
 import os
@@ -14,8 +14,8 @@ import pytest
 
 TEST_DIR = Path(__file__).parent.resolve()
 REPO_ROOT = TEST_DIR.parent.parent
-# Vendored copy is the source of truth; config dir symlinks here.
-WRAPPER = REPO_ROOT / "scripts" / "wrappers" / "ralph-hermes-acp"
+# Generic ACP transport wrapper (was ralph-hermes-acp).
+WRAPPER = REPO_ROOT / "scripts" / "wrappers" / "ralph-acp"
 MOCK_SERVER = TEST_DIR / "mock_acp_server.py"
 
 

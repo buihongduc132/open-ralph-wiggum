@@ -1,14 +1,26 @@
 #!/usr/bin/env python3
 """
-ralph-hermes-acp — ralph-wiggum wrapper that drives `hermes acp` via JSON-RPC.
+ralph-acp — generic ACP (Agent Client Protocol) transport for ralph-wiggum
+wrappers. Drives ANY ACP-speaking agent (hermes acp, gemini --acp, codex-acp,
+claude-agent-acp) via JSON-RPC over stdio, with no per-agent code duplication.
 
-WHY: Hermes CLI has no --output-format json (NousResearch/hermes-agent#3326,
-#30053, #360 — all open). `hermes chat -q -Q` buffers the entire response,
-which trips ralph's pre-start stall detector (ralph.ts:3678, =stalling/10
-= 12min default) on any long task. Hermes speaks ACP natively via the
-`hermes acp` subcommand — JSON-RPC over stdio with streaming
-session/update notifications. This wrapper speaks ACP and streams
+WHY: Agent CLIs (e.g. hermes) may lack --output-format json and buffer the
+entire response, tripping ralph's pre-start stall detector (ralph.ts:3678,
+=stalling/10 = 12min default). Speaking ACP natively (JSON-RPC over stdio
+with streaming session/update notifications) lets this wrapper stream
 assistant deltas to stdout in real time, killing the false-positive.
+
+AGENT IDENTITY (zero-code agent addition):
+  The agent is selected via, in precedence order:
+    1. RALPH_ACP_AGENT env (explicit override)
+    2. argv[0] basename — `ralph-acp-<agent>` symlinks all resolve to this
+       binary; the suffix `<agent>` selects the identity. The legacy
+       `ralph-hermes-acp` symlink maps to identity `hermes`.
+    3. default `acp`
+  Identity drives CLIENT_INFO.name (`ralph-acp-<agent>`) and the default
+  binary command via the dispatch table. Override the binary entirely with
+  RALPH_ACP_BINARY. Adding a new agent = one symlink + (optional) dispatch
+  entry — no code copy.
 
 PROTOCOL (verified 2026-06-19 against hermes-agent 0.16.0):
 
@@ -26,21 +38,22 @@ PROTOCOL (verified 2026-06-19 against hermes-agent 0.16.0):
     available_commands_update                              → ignored
 
 ARG PARSING (matches existing ralph-hermes wrapper):
-  ralph-hermes-acp [--model X] [--full-auto] [-- <extra...>] <prompt>
+  ralph-acp [--model X] [--full-auto] [-- <extra...>] <prompt>
 
-ENV:
-  RALPH_HERMES_ACP_BINARY   override the agent binary (default "hermes acp")
-  RALPH_HERMES_ACP_DEBUG    if set, child stderr is kept on parent stderr
-  RALPH_HERMES_ACP_HEARTBEAT_SILENCE  seconds of silence before a heartbeat
-                            line is emitted to stderr (default 30)
-  RALPH_HERMES_ACP_HEARTBEAT_INTERVAL poll interval for the heartbeat (default 1.0)
+ENV (RALPH_ACP_* canonical; RALPH_HERMES_ACP_* honored as deprecated fallback):
+  RALPH_ACP_AGENT            override agent identity (wins over argv[0])
+  RALPH_ACP_BINARY           override the agent binary (default: dispatch table)
+  RALPH_ACP_DEBUG            if set, child stderr is kept on parent stderr
+  RALPH_ACP_HEARTBEAT_SILENCE  seconds of silence before a heartbeat
+                             line is emitted to stderr (default 30)
+  RALPH_ACP_HEARTBEAT_INTERVAL poll interval for the heartbeat (default 1.0)
 
 THROTTLING:
-  agent_thought_chunk notifications are NOT emitted to stderr (Hermes streams
+  agent_thought_chunk notifications are NOT emitted to stderr (agents stream
   thought deltas char-by-char, which would flood stderr with one line per
   token). Instead a background heartbeat thread emits a single `[thinking]`
   line to stderr when no stdout/stderr activity has occurred for longer than
-  RALPH_HERMES_ACP_HEARTBEAT_SILENCE seconds. This keeps ralph's pre-start
+  RALPH_ACP_HEARTBEAT_SILENCE seconds. This keeps ralph's pre-start
   stall detector fed without the per-token flood.
 """
 from __future__ import annotations
@@ -56,10 +69,98 @@ from typing import Optional
 
 
 PROTOCOL_VERSION = 1
-CLIENT_INFO = {"name": "ralph-hermes-acp", "version": "1.0.0"}
 
 DEFAULT_HEARTBEAT_SILENCE = 30.0
 DEFAULT_HEARTBEAT_INTERVAL = 1.0
+
+# Per-agent binary dispatch table. Keyed by agent identity (derived from
+# argv[0] basename `ralph-acp-<agent>` or RALPH_ACP_AGENT). Users override
+# via RALPH_ACP_BINARY. Unknown agents fall back to `ralph-acp-<agent>`
+# (user must install) with a stderr warning.
+_AGENT_DISPATCH: dict[str, str] = {
+    "hermes": "hermes acp",
+    "gemini": "gemini --acp",
+    "codex": "codex-acp",
+    "claude": "npx -y @agentclientprotocol/claude-agent-acp",
+}
+
+# Tracks legacy env keys that have already emitted a deprecation warning
+# in this invocation, so the warning is truly one-shot per key.
+_WARNED_KEYS: set[str] = set()
+
+
+def _detect_agent_identity(argv0: Optional[str], env: dict) -> str:
+    """Resolve agent identity. Precedence: RALPH_ACP_AGENT env > argv[0]
+    basename > legacy `ralph-hermes-acp` symlink > default `acp`.
+
+    The identity drives CLIENT_INFO.name and the default binary command
+    (via _AGENT_DISPATCH).
+    """
+    explicit = env.get("RALPH_ACP_AGENT", "").strip()
+    if explicit:
+        return explicit
+    if argv0:
+        base = os.path.basename(argv0)
+        # Legacy symlink: ralph-hermes-acp → hermes identity (back-compat).
+        if base == "ralph-hermes-acp":
+            return "hermes"
+        prefix = "ralph-acp-"
+        if base.startswith(prefix):
+            candidate = base[len(prefix):]
+            # Guard against malformed symlinks like "ralph-acp-" (trailing
+            # dash, no suffix) that would otherwise yield an empty identity.
+            if candidate:
+                return candidate
+    return "acp"
+
+
+def _client_info_name(agent: str) -> str:
+    """CLIENT_INFO.name is `ralph-acp-<agent>` (dynamic, not hardcoded)."""
+    return f"ralph-acp-{agent}"
+
+
+def _client_info(agent: str) -> dict:
+    return {"name": _client_info_name(agent), "version": "1.0.0"}
+
+
+def _get_env(key: str, legacy_key: str, default, env: Optional[dict] = None):
+    """Read a config value honoring RALPH_ACP_* precedence with legacy
+    RALPH_HERMES_ACP_* fallback. Emits a one-shot deprecation warning to
+    stderr when the legacy prefix is the source of the value.
+
+    `env` defaults to os.environ so unit tests can inject a controlled dict.
+    """
+    src = env if env is not None else os.environ
+    if key in src and src[key] != "":
+        return src[key]
+    if legacy_key in src and src[legacy_key] != "":
+        # One-shot deprecation warning per legacy key (module-level set
+        # deduplicates across calls within a single invocation).
+        if legacy_key not in _WARNED_KEYS:
+            _WARNED_KEYS.add(legacy_key)
+            _emit_stderr(
+                f"[ralph-acp] deprecation: {legacy_key} is deprecated; use {key}. "
+                f"See generic-acp-transport change."
+            )
+        return src[legacy_key]
+    return default
+
+
+def _resolve_binary(agent: str, env: Optional[dict] = None) -> str:
+    """Resolve the agent binary command. RALPH_ACP_BINARY (or legacy
+    RALPH_HERMES_ACP_BINARY) wins; otherwise the dispatch table; otherwise
+    `ralph-acp-<agent>` with a warning (user must install)."""
+    src = env if env is not None else os.environ
+    override = _get_env("RALPH_ACP_BINARY", "RALPH_HERMES_ACP_BINARY", None, env=src)
+    if override:
+        return override
+    if agent in _AGENT_DISPATCH:
+        return _AGENT_DISPATCH[agent]
+    _emit_stderr(
+        f"[ralph-acp] warning: agent '{agent}' not in dispatch table; "
+        f"defaulting to 'ralph-acp-{agent}' (install it or set RALPH_ACP_BINARY)."
+    )
+    return f"ralph-acp-{agent}"
 
 
 class ActivityTracker:
@@ -261,9 +362,16 @@ def _tool_name_from_title(title: str) -> str:
 
 
 def _env_float(name: str, default: float) -> float:
-    """Read a float from env; fall back to default on any parsing error."""
-    raw = os.environ.get(name)
-    if not raw:
+    """Read a float config honoring RALPH_ACP_* precedence with legacy
+    RALPH_HERMES_ACP_* fallback (and a deprecation warning when legacy is
+    the source)."""
+    legacy = (
+        "RALPH_HERMES_ACP_" + name[len("RALPH_ACP_"):]
+        if name.startswith("RALPH_ACP_")
+        else name
+    )
+    raw = _get_env(name, legacy, None)
+    if raw is None or raw == "":
         return default
     try:
         return float(raw)
@@ -324,17 +432,22 @@ def _process_notification(notif: dict) -> Optional[str]:
     return None
 
 
-def run(prompt: str, model: str, extra: list[str], binary: str) -> int:
+def run(prompt: str, model: str, extra: list[str], binary: str,
+       client_info: Optional[dict] = None) -> int:
     if not prompt:
-        _emit_stderr("ralph-hermes-acp: no prompt provided")
+        _emit_stderr("ralph-acp: no prompt provided")
         return 2
+
+    if client_info is None:
+        client_info = _client_info("acp")
 
     # Track signal for exit code determination
     received_signal = {"signum": 0}
 
-    # Spawn agent. stderr → DEVNULL by default (hermes acp is noisy with INFO
-    # logs); flip via RALPH_HERMES_ACP_DEBUG=1 to keep them on parent stderr.
-    debug = bool(os.environ.get("RALPH_HERMES_ACP_DEBUG"))
+    # Spawn agent. stderr → DEVNULL by default (agent stdout is noisy with INFO
+    # logs); flip via RALPH_ACP_DEBUG=1 (legacy RALPH_HERMES_ACP_DEBUG=1) to
+    # keep them on parent stderr.
+    debug = bool(_get_env("RALPH_ACP_DEBUG", "RALPH_HERMES_ACP_DEBUG", False))
     child_stderr = None if debug else subprocess.DEVNULL
 
     # shell=True is intentional: `binary` may be "hermes acp" (two tokens) or a
@@ -349,7 +462,7 @@ def run(prompt: str, model: str, extra: list[str], binary: str) -> int:
             bufsize=0,
         )
     except FileNotFoundError as e:
-        _emit_stderr(f"ralph-hermes-acp: failed to spawn agent binary {binary!r}: {e}")
+        _emit_stderr(f"ralph-acp: failed to spawn agent binary {binary!r}: {e}")
         return 127
 
     client = AcpClient(proc)
@@ -359,8 +472,8 @@ def run(prompt: str, model: str, extra: list[str], binary: str) -> int:
     # no stdout/stderr activity has occurred for >silence seconds. This feeds
     # ralph's pre-start stall detector during long thinking phases WITHOUT
     # flooding stderr with per-token `[thought]` lines.
-    silence = _env_float("RALPH_HERMES_ACP_HEARTBEAT_SILENCE", DEFAULT_HEARTBEAT_SILENCE)
-    hb_interval = _env_float("RALPH_HERMES_ACP_HEARTBEAT_INTERVAL", DEFAULT_HEARTBEAT_INTERVAL)
+    silence = _env_float("RALPH_ACP_HEARTBEAT_SILENCE", DEFAULT_HEARTBEAT_SILENCE)
+    hb_interval = _env_float("RALPH_ACP_HEARTBEAT_INTERVAL", DEFAULT_HEARTBEAT_INTERVAL)
     tracker = ActivityTracker(silence_threshold=silence, interval=hb_interval)
     heartbeat_stop = {"stop": False}
 
@@ -401,7 +514,7 @@ def run(prompt: str, model: str, extra: list[str], binary: str) -> int:
         init = client.request("initialize", {
             "protocolVersion": PROTOCOL_VERSION,
             "clientCapabilities": {},
-            "clientInfo": CLIENT_INFO,
+            "clientInfo": client_info,
         }, timeout=30.0)
         # authenticate (best-effort)
         auth_methods = init.get("authMethods") or []
@@ -417,7 +530,7 @@ def run(prompt: str, model: str, extra: list[str], binary: str) -> int:
         }, timeout=30.0)
         session_id = new_sess.get("sessionId")
         if not session_id:
-            _emit_stderr(f"ralph-hermes-acp: session/new returned no sessionId: {new_sess}")
+            _emit_stderr(f"ralph-acp: session/new returned no sessionId: {new_sess}")
             return 1
 
         # set model (best-effort)
@@ -481,7 +594,7 @@ def run(prompt: str, model: str, extra: list[str], binary: str) -> int:
                 exit_code = 1
 
     except AcpError as e:
-        _emit_stderr(f"ralph-hermes-acp: {e}")
+        _emit_stderr(f"ralph-acp: {e}")
         exit_code = 1
     except KeyboardInterrupt:
         received_signal["signum"] = signal.SIGINT
@@ -509,10 +622,12 @@ def run(prompt: str, model: str, extra: list[str], binary: str) -> int:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
-    prompt, model, extra = parse_args(argv)
-    binary = os.environ.get("RALPH_HERMES_ACP_BINARY") or "hermes acp"
-    return run(prompt, model, extra, binary)
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    prompt, model, extra = parse_args(raw_argv)
+    argv0 = sys.argv[0] if sys.argv else None
+    agent = _detect_agent_identity(argv0, os.environ)
+    binary = _resolve_binary(agent, os.environ)
+    return run(prompt, model, extra, binary, client_info=_client_info(agent))
 
 
 if __name__ == "__main__":

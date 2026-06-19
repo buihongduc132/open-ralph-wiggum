@@ -1,4 +1,4 @@
-"""Unit tests for ralph-hermes-acp internals.
+"""Unit tests for ralph-acp (generic ACP transport) internals.
 
 These import the wrapper module directly (via the `wrapper_mod` fixture) to
 exercise functions that subprocess tests can't reach — argument parsing,
@@ -64,18 +64,21 @@ def test_tool_name_from_title_empty(wrapper_mod):
 # _env_float
 # ─────────────────────────────────────────────────────────────────────────────
 def test_env_float_default(wrapper_mod, monkeypatch):
+    # Clear BOTH canonical and legacy so the fallback path can't falsify
+    # the default assertion.
+    monkeypatch.delenv("RALPH_ACP_HEARTBEAT_SILENCE", raising=False)
     monkeypatch.delenv("RALPH_HERMES_ACP_HEARTBEAT_SILENCE", raising=False)
-    assert wrapper_mod._env_float("RALPH_HERMES_ACP_HEARTBEAT_SILENCE", 30.0) == 30.0
+    assert wrapper_mod._env_float("RALPH_ACP_HEARTBEAT_SILENCE", 30.0) == 30.0
 
 
 def test_env_float_parsed(wrapper_mod, monkeypatch):
-    monkeypatch.setenv("RALPH_HERMES_ACP_HEARTBEAT_SILENCE", "0.5")
-    assert wrapper_mod._env_float("RALPH_HERMES_ACP_HEARTBEAT_SILENCE", 30.0) == 0.5
+    monkeypatch.setenv("RALPH_ACP_HEARTBEAT_SILENCE", "0.5")
+    assert wrapper_mod._env_float("RALPH_ACP_HEARTBEAT_SILENCE", 30.0) == 0.5
 
 
 def test_env_float_garbage_falls_back(wrapper_mod, monkeypatch):
-    monkeypatch.setenv("RALPH_HERMES_ACP_HEARTBEAT_SILENCE", "not-a-number")
-    assert wrapper_mod._env_float("RALPH_HERMES_ACP_HEARTBEAT_SILENCE", 30.0) == 30.0
+    monkeypatch.setenv("RALPH_ACP_HEARTBEAT_SILENCE", "not-a-number")
+    assert wrapper_mod._env_float("RALPH_ACP_HEARTBEAT_SILENCE", 30.0) == 30.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -278,15 +281,15 @@ def test_run_binary_not_found(wrapper_mod, monkeypatch, capsys):
 # main() arg wiring
 # ─────────────────────────────────────────────────────────────────────────────
 def test_main_no_args_returns_2(wrapper_mod, monkeypatch, capsys):
-    monkeypatch.setattr("sys.argv", ["ralph-hermes-acp"])
+    monkeypatch.setattr("sys.argv", ["ralph-acp"])
     rc = wrapper_mod.main()
     assert rc == 2
 
 
 def test_main_uses_env_binary(wrapper_mod, monkeypatch, tmp_path):
-    """main() should honor RALPH_HERMES_ACP_BINARY and reach run()."""
-    monkeypatch.setattr("sys.argv", ["ralph-hermes-acp", "hi"])
-    monkeypatch.setenv("RALPH_HERMES_ACP_BINARY", "echo")
+    """main() should honor RALPH_ACP_BINARY and reach run()."""
+    monkeypatch.setattr("sys.argv", ["ralph-acp", "hi"])
+    monkeypatch.setenv("RALPH_ACP_BINARY", "echo")
     # `echo` is not a JSON-RPC server — the wrapper should fail fast on
     # initialize timeout and return non-zero (1), NOT crash.
     rc = wrapper_mod.main()
