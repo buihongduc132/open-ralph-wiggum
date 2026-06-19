@@ -29,7 +29,10 @@ def wrapper_mod():
 
 @pytest.fixture(autouse=True)
 def _reset_activity_global(wrapper_mod):
-    """Ensure the module-level _ACTIVITY tracker never leaks between tests."""
+    """Ensure module-level state (_ACTIVITY, _WARNED_KEYS) never leaks
+    between tests."""
     wrapper_mod._reset_activity()
+    wrapper_mod._WARNED_KEYS.clear()
     yield
     wrapper_mod._reset_activity()
+    wrapper_mod._WARNED_KEYS.clear()

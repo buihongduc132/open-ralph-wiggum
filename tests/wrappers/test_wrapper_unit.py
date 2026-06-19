@@ -64,7 +64,10 @@ def test_tool_name_from_title_empty(wrapper_mod):
 # _env_float
 # ─────────────────────────────────────────────────────────────────────────────
 def test_env_float_default(wrapper_mod, monkeypatch):
+    # Clear BOTH canonical and legacy so the fallback path can't falsify
+    # the default assertion.
     monkeypatch.delenv("RALPH_ACP_HEARTBEAT_SILENCE", raising=False)
+    monkeypatch.delenv("RALPH_HERMES_ACP_HEARTBEAT_SILENCE", raising=False)
     assert wrapper_mod._env_float("RALPH_ACP_HEARTBEAT_SILENCE", 30.0) == 30.0
 
 

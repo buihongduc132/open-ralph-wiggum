@@ -142,6 +142,23 @@ def test_detect_identity_legacy_hermes_acp_argv0(wrapper_mod):
     assert wrapper_mod._detect_agent_identity("ralph-hermes-acp", {}) == "hermes"
 
 
+def test_detect_identity_malformed_trailing_dash(wrapper_mod):
+    """A malformed symlink 'ralph-acp-' (trailing dash, no suffix) must NOT
+    yield an empty identity — it falls through to the default 'acp'."""
+    assert wrapper_mod._detect_agent_identity("ralph-acp-", {}) == "acp"
+
+
+def test_get_env_deprecation_warning_is_one_shot(wrapper_mod, capsys):
+    """Repeated reads of the same legacy key emit the warning only once."""
+    env = {"RALPH_HERMES_ACP_BINARY": "old"}
+    wrapper_mod._get_env("RALPH_ACP_BINARY", "RALPH_HERMES_ACP_BINARY", "d", env=env)
+    wrapper_mod._get_env("RALPH_ACP_BINARY", "RALPH_HERMES_ACP_BINARY", "d", env=env)
+    wrapper_mod._get_env("RALPH_ACP_BINARY", "RALPH_HERMES_ACP_BINARY", "d", env=env)
+    err = capsys.readouterr().err
+    warning_lines = [l for l in err.splitlines() if "deprecat" in l.lower()]
+    assert len(warning_lines) == 1, f"expected one warning line, got {len(warning_lines)}: {err!r}"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Integration: main() sends CLIENT_INFO.name reflecting argv[0] identity
 # ─────────────────────────────────────────────────────────────────────────────
