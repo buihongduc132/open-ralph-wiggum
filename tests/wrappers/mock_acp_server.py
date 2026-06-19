@@ -38,6 +38,11 @@ def handle_request(req):
     log_event({"kind": "request", "method": method, "id": rid, "params_keys": list(params.keys())})
 
     if method == "initialize":
+        # Capture clientInfo.name when MOCK_CAPTURE_CLIENT_INFO=1 (used by the
+        # generic-acp-transport tests to assert dynamic CLIENT_INFO).
+        if os.environ.get("MOCK_CAPTURE_CLIENT_INFO") == "1":
+            ci = params.get("clientInfo") or {}
+            log_event({"kind": "client_info", "clientInfoName": ci.get("name", "")})
         # authMethods configurable via env MOCK_AUTH_METHODS (JSON list of
         # {"id": "...", "kind": "..."}). Empty by default (no auth needed).
         try:

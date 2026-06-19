@@ -211,3 +211,27 @@ RALPH_HERMES_ACP_DEBUG=1 ralph --agent hermes-acp "task"
 - Track NousResearch/hermes-agent#3326 — if/when hermes adds
   `--output-format json`, this wrapper can be deprecated in favor of a
   thin CLI shim.
+
+## Follow-up (2026-06-19): Generic ACP transport
+
+The "Future work → generic ACP transport" item above is now done (openspec
+change `generic-acp-transport`). The hermes-specific wrapper was generalized:
+
+- `scripts/wrappers/ralph-hermes-acp` → **`scripts/wrappers/ralph-acp`**
+  (single generic binary, no per-agent code duplication).
+- Agent identity derived from argv[0] (`ralph-acp-<agent>` symlinks) or
+  `RALPH_ACP_AGENT`; dispatch table maps known agents
+  (hermes→`hermes acp`, gemini→`gemini --acp`, codex→`codex-acp`,
+  claude→`npx -y @agentclientprotocol/claude-agent-acp`).
+- `RALPH_ACP_*` is the canonical env prefix; `RALPH_HERMES_ACP_*` honored as
+  deprecated fallback (one-shot stderr warning when used).
+- `CLIENT_INFO.name` is now dynamic: `ralph-acp-<agent>`.
+- Adding a new ACP agent = one symlink + (optional) dispatch entry — zero
+  code copy.
+- Back-compat: `~/.config/open-ralph-wiggum/wrappers/ralph-hermes-acp`
+  symlink repointed at the generic binary; identity resolves to `hermes`,
+  so existing `agents.json` `type: "hermes-acp"` entries are unchanged.
+
+Spec: `openspec/changes/generic-acp-transport/specs/acp-transport/spec.md`
+(7 requirements, 18 scenarios). Tests: `tests/wrappers/test_acp_transport.py`
++ updated `test_ralph_acp.py`/`test_wrapper_*.py`. Coverage 90%.

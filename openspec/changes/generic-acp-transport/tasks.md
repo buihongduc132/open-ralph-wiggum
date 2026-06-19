@@ -1,14 +1,14 @@
 ## 1. TDD: Red tests for new behavior
 
-- [ ] 1.1 Add tests for argv[0] agent-identity detection (`ralph-acp-hermes` → `hermes`, `ralph-acp-gemini` → `gemini`, `ralph-acp` → `acp`)
-- [ ] 1.2 Add tests for `RALPH_ACP_AGENT` env override (env wins over argv[0])
-- [ ] 1.3 Add tests for `RALPH_ACP_*` env prefix precedence over legacy `RALPH_HERMES_ACP_*`
-- [ ] 1.4 Add tests for legacy prefix fallback + deprecation warning on stderr
-- [ ] 1.5 Add tests for per-agent dispatch table (hermes→`hermes acp`, gemini→`gemini --acp`, codex→`codex-acp`, claude→`npx -y ...`)
-- [ ] 1.6 Add tests for `RALPH_ACP_BINARY` override bypassing dispatch table
-- [ ] 1.7 Add tests for dynamic `CLIENT_INFO.name` (`ralph-acp-<agent>` format)
-- [ ] 1.8 Add tests for unknown agent fallback (warning + default binary)
-- [ ] 1.9 Run tests — confirm RED (all new tests fail)
+- [x] 1.1 Add tests for argv[0] agent-identity detection (`ralph-acp-hermes` → `hermes`, `ralph-acp-gemini` → `gemini`, `ralph-acp` → `acp`)
+- [x] 1.2 Add tests for `RALPH_ACP_AGENT` env override (env wins over argv[0])
+- [x] 1.3 Add tests for `RALPH_ACP_*` env prefix precedence over legacy `RALPH_HERMES_ACP_*`
+- [x] 1.4 Add tests for legacy prefix fallback + deprecation warning on stderr
+- [x] 1.5 Add tests for per-agent dispatch table (hermes→`hermes acp`, gemini→`gemini --acp`, codex→`codex-acp`, claude→`npx -y ...`)
+- [x] 1.6 Add tests for `RALPH_ACP_BINARY` override bypassing dispatch table
+- [x] 1.7 Add tests for dynamic `CLIENT_INFO.name` (`ralph-acp-<agent>` format)
+- [x] 1.8 Add tests for unknown agent fallback (warning + default binary)
+- [x] 1.9 Run tests — confirm RED (all new tests fail) — 23 failed as expected
 
 ## 2. Refactor: Rename + generalize
 
@@ -44,12 +44,12 @@
 
 ## 6. E2E verification
 
-- [ ] 6.1 Run `ralph-dev --agent hermes-acp --min-iterations 1 "Output exactly: refactor-ok"` — verify exit 0, promise detected, ≤3 stderr lines
-- [ ] 6.2 Verify legacy env var still works: `RALPH_HERMES_ACP_DEBUG=1 ralph-dev --agent hermes-acp "task"` shows deprecation warning + child stderr
-- [ ] 6.3 Verify zero-code agent addition: create `ralph-acp-gemini` symlink, run mock test, confirm identity detection
+- [x] 6.1 Run `ralph-dev --agent hermes-acp --min-iterations 1 "Output exactly: refactor-ok"` — exit 0, promise detected, 1 iteration 17s
+- [x] 6.2 Verify legacy env var still works: `RALPH_HERMES_ACP_BINARY=...` shows deprecation warning + child runs (exit 0)
+- [x] 6.3 Verify zero-code agent addition: create `ralph-acp-gemini` symlink, run mock test, confirm identity detection (`clientInfoName: ralph-acp-gemini`)
 
 ## 7. Docs + cleanup
 
-- [ ] 7.1 Add follow-up note to `flow/findings/2026-06-19/2026-06-19_hermes-acp-transport.md` pointing at generic transport
-- [ ] 7.2 Update wrapper docstring to reflect generic transport (not hermes-specific)
-- [ ] 7.3 Commit + push all changes
+- [x] 7.1 Add follow-up note to `flow/findings/2026-06-19/2026-06-19_hermes-acp-transport.md` pointing at generic transport
+- [x] 7.2 Update wrapper docstring to reflect generic transport (not hermes-specific)
+- [x] 7.3 Commit + push all changes

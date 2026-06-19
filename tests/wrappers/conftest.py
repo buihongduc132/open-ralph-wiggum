@@ -12,15 +12,15 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-WRAPPER_PATH = REPO_ROOT / "scripts" / "wrappers" / "ralph-hermes-acp"
+WRAPPER_PATH = REPO_ROOT / "scripts" / "wrappers" / "ralph-acp"
 
 
 @pytest.fixture(scope="session")
 def wrapper_mod():
     # The wrapper has no .py extension, so spec_from_file_location returns
     # None. Use SourceFileLoader directly to load it as a module.
-    loader = importlib.machinery.SourceFileLoader("ralph_hermes_acp", str(WRAPPER_PATH))
-    spec = importlib.util.spec_from_loader("ralph_hermes_acp", loader)
+    loader = importlib.machinery.SourceFileLoader("ralph_acp", str(WRAPPER_PATH))
+    spec = importlib.util.spec_from_loader("ralph_acp", loader)
     assert spec is not None, "could not build spec for wrapper"
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)

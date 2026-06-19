@@ -1,4 +1,4 @@
-"""run()-level tests for ralph-hermes-acp.
+"""run()-level tests for ralph-acp (generic ACP transport).
 
 These call wrapper_mod.run() directly (in-process, so coverage counts) with
 the mock ACP server as the binary. They exercise the full initialize →
@@ -17,7 +17,7 @@ MOCK_SERVER = TEST_DIR / "mock_acp_server.py"
 
 def _setup_env(tmp_path, monkeypatch, script_events=None, **extra_env):
     """Configure env for an in-process run() call against the mock server."""
-    monkeypatch.setenv("RALPH_HERMES_ACP_BINARY", f"{sys.executable} {MOCK_SERVER}")
+    monkeypatch.setenv("RALPH_ACP_BINARY", f"{sys.executable} {MOCK_SERVER}")
     script_path = tmp_path / "mock.script.json"
     log_path = tmp_path / "mock.log"
     monkeypatch.setenv("MOCK_LOG", str(log_path))
@@ -27,7 +27,7 @@ def _setup_env(tmp_path, monkeypatch, script_events=None, **extra_env):
     for k, v in extra_env.items():
         monkeypatch.setenv(k, v)
     # Speed up heartbeat so it can't fire during short tests.
-    monkeypatch.setenv("RALPH_HERMES_ACP_HEARTBEAT_SILENCE", "60")
+    monkeypatch.setenv("RALPH_ACP_HEARTBEAT_SILENCE", "60")
     return log_path
 
 
