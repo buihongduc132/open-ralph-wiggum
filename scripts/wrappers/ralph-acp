@@ -256,10 +256,14 @@ def parse_args(argv: list[str]) -> tuple[str, str, list[str], list[str]]:
     Returns (prompt, model, extra, binary_extra).
 
     ``extra`` holds passthrough flags collected after ``--`` (backward compat
-    with callers that ignore it). ``binary_extra`` is the subset of those flags
-    that should be forwarded to the spawned agent binary — currently
+    with callers that ignore it). ``binary_extra`` is the subset of flags that
+    should be forwarded to the spawned agent binary — currently
     ``-p``/``--profile <name>`` and ``--accept-hooks`` / ``--yolo`` which
     ``hermes acp`` understands natively.
+
+    ``-p``/``--profile`` is recognized ANYWHERE in the arg list (not just
+    after ``--``) because ralph-dev's ``default`` argsTemplate injects
+    passthrough flags before the prompt without a ``--`` separator.
     """
     model = ""
     extra: list[str] = []
@@ -277,6 +281,23 @@ def parse_args(argv: list[str]) -> tuple[str, str, list[str], list[str]]:
             # ACP has no equivalent; auto-approve is implicit in yolo-style runs.
             # Accepted for arg compatibility with the ralph-hermes wrapper.
             extra.append("--yolo")
+            i += 1
+            continue
+        if a in ("-p", "--profile"):
+            # Profile flags can appear before -- (ralph-dev's default
+            # argsTemplate injects them before the prompt). Forward them.
+            if i + 1 >= len(argv):
+                raise SystemExit(f"{a} requires a value")
+            extra.append(a)
+            extra.append(argv[i + 1])
+            i += 2
+            continue
+        if a.startswith("--profile="):
+            extra.append(a)
+            i += 1
+            continue
+        if a in ("--yolo", "-y", "--accept-hooks"):
+            extra.append(a)
             i += 1
             continue
         if a == "--":
