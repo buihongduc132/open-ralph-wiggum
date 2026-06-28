@@ -86,7 +86,11 @@ def test_dispatch_table_entries(wrapper_mod):
     assert d["claude"] == "npx -y @agentclientprotocol/claude-agent-acp"
 
 
-def test_resolve_binary_dispatch_default(wrapper_mod):
+def test_resolve_binary_dispatch_default(wrapper_mod, monkeypatch):
+    # Binary resolution now resolves through wrapper scripts on real PATH.
+    # For test isolation, simulate binaries not being found so the raw
+    # dispatch table string is returned as-is.
+    monkeypatch.setattr("shutil.which", lambda name: None)
     assert wrapper_mod._resolve_binary("hermes", {}) == "hermes acp"
     assert wrapper_mod._resolve_binary("gemini", {}) == "gemini --acp"
     assert wrapper_mod._resolve_binary("codex", {}) == "codex-acp"

@@ -18,31 +18,54 @@ import pytest
 # parse_args
 # ─────────────────────────────────────────────────────────────────────────────
 def test_parse_args_basic(wrapper_mod):
-    prompt, model, extra = wrapper_mod.parse_args(["hello", "world"])
+    prompt, model, extra, binary_extra = wrapper_mod.parse_args(["hello", "world"])
     assert prompt == "hello world"
     assert model == ""
     assert extra == []
+    assert binary_extra == []
 
 
 def test_parse_args_model_and_extra(wrapper_mod):
-    prompt, model, extra = wrapper_mod.parse_args(
+    prompt, model, extra, binary_extra = wrapper_mod.parse_args(
         ["--model", "gpt-x", "do", "it", "--", "--flag", "val"]
     )
     assert prompt == "do it"
     assert model == "gpt-x"
     assert extra == ["--flag", "val"]
+    assert binary_extra == []
 
 
 def test_parse_args_full_auto_accepted(wrapper_mod):
-    prompt, model, extra = wrapper_mod.parse_args(["--full-auto", "run"])
+    prompt, model, extra, binary_extra = wrapper_mod.parse_args(["--full-auto", "run"])
     assert prompt == "run"
     assert model == ""
-    assert extra == []
+    # --full-auto maps to --yolo which the binary accepts
+    assert extra == ["--yolo"]
+    assert binary_extra == ["--yolo"]
 
 
 def test_parse_args_model_requires_value(wrapper_mod):
     with pytest.raises(SystemExit):
         wrapper_mod.parse_args(["--model"])
+
+
+def test_parse_args_profile_passthrough(wrapper_mod):
+    """-p <profile> after -- should be extracted into binary_extra."""
+    prompt, model, extra, binary_extra = wrapper_mod.parse_args(
+        ["do", "it", "--", "-p", "h-user-assist"]
+    )
+    assert prompt == "do it"
+    assert extra == ["-p", "h-user-assist"]
+    assert binary_extra == ["-p", "h-user-assist"]
+
+
+def test_parse_args_profile_equals_passthrough(wrapper_mod):
+    """--profile=<name> after -- should be extracted into binary_extra."""
+    prompt, model, extra, binary_extra = wrapper_mod.parse_args(
+        ["do", "it", "--", "--profile=h-user-assist"]
+    )
+    assert prompt == "do it"
+    assert binary_extra == ["--profile=h-user-assist"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

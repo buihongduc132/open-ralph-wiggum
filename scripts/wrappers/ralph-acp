@@ -149,18 +149,79 @@ def _get_env(key: str, legacy_key: str, default, env: Optional[dict] = None):
 def _resolve_binary(agent: str, env: Optional[dict] = None) -> str:
     """Resolve the agent binary command. RALPH_ACP_BINARY (or legacy
     RALPH_HERMES_ACP_BINARY) wins; otherwise the dispatch table; otherwise
-    `ralph-acp-<agent>` with a warning (user must install)."""
+    `ralph-acp-<agent>` with a warning (user must install).
+
+    For the hermes dispatch entry, we resolve through the wrapper script to
+    the real venv binary to avoid HOME-dependent shell wrappers that break
+    under sandboxed environments (e.g. hermes profile sandboxes).
+    """
     src = env if env is not None else os.environ
     override = _get_env("RALPH_ACP_BINARY", "RALPH_HERMES_ACP_BINARY", None, env=src)
     if override:
         return override
     if agent in _AGENT_DISPATCH:
-        return _AGENT_DISPATCH[agent]
+        binary_spec = _AGENT_DISPATCH[agent]
+        # For multi-token specs like "hermes acp", resolve the leading binary
+        # through `which` and then through readlink to bypass wrapper scripts
+        # that may depend on $HOME or other env vars not present in the
+        # sandboxed profile environment.
+        parts = binary_spec.split(None, 1)
+        if len(parts) >= 2:
+            leading = parts[0]
+            remainder = parts[1]
+            resolved_leading = _resolve_through_wrapper(leading)
+            return f"{resolved_leading} {remainder}"
+        return binary_spec
     _emit_stderr(
         f"[ralph-acp] warning: agent '{agent}' not in dispatch table; "
         f"defaulting to 'ralph-acp-{agent}' (install it or set RALPH_ACP_BINARY)."
     )
     return f"ralph-acp-{agent}"
+
+
+def _resolve_through_wrapper(name: str) -> str:
+    """Resolve a binary through shell wrapper scripts to find the real one.
+
+    Many agent CLIs are installed via wrapper scripts (e.g. ``hermes`` wraps
+    the venv binary with env sourcing). These wrappers may depend on $HOME or
+    other env vars that aren't present in sandboxed environments (like hermes
+    profile sandboxes). This function scans the wrapper script for the final
+    ``exec <real_binary> "$@"`` line and returns the real binary path.
+    """
+    import shutil
+    path = shutil.which(name)
+    if not path:
+        return name
+    # Try readlink for symlinks first
+    try:
+        real = os.path.realpath(path)
+        if real != path and os.access(real, os.X_OK):
+            return real
+    except OSError:
+        pass
+    # For shell wrapper scripts, scan for the last `exec` line which typically
+    # points to the real binary. We scan ALL lines (not just the first) because
+    # wrapper scripts often have `source` or other commands before `exec`.
+    try:
+        with open(path, "r") as f:
+            lines = f.readlines()
+        # Find the LAST exec line in the script (the real entry point)
+        for line in reversed(lines):
+            stripped = line.strip()
+            if stripped.startswith("exec "):
+                parts = stripped.split()
+                if len(parts) >= 2:
+                    candidate = parts[1]
+                    # Resolve variable references like $HOME/bin/...
+                    candidate = os.path.expandvars(candidate)
+                    # Skip if it's another variable reference
+                    if candidate.startswith("$"):
+                        continue
+                    if os.path.isabs(candidate) and os.access(candidate, os.X_OK):
+                        return candidate
+    except (OSError, UnicodeDecodeError):
+        pass
+    return path
 
 
 class ActivityTracker:
@@ -189,8 +250,17 @@ class AcpError(Exception):
     pass
 
 
-def parse_args(argv: list[str]) -> tuple[str, str, list[str]]:
-    """Parse ralph wrapper args. Returns (prompt, model, extra)."""
+def parse_args(argv: list[str]) -> tuple[str, str, list[str], list[str]]:
+    """Parse ralph wrapper args.
+
+    Returns (prompt, model, extra, binary_extra).
+
+    ``extra`` holds passthrough flags collected after ``--`` (backward compat
+    with callers that ignore it). ``binary_extra`` is the subset of those flags
+    that should be forwarded to the spawned agent binary — currently
+    ``-p``/``--profile <name>`` and ``--accept-hooks`` / ``--yolo`` which
+    ``hermes acp`` understands natively.
+    """
     model = ""
     extra: list[str] = []
     positional: list[str] = []
@@ -206,6 +276,7 @@ def parse_args(argv: list[str]) -> tuple[str, str, list[str]]:
         if a == "--full-auto":
             # ACP has no equivalent; auto-approve is implicit in yolo-style runs.
             # Accepted for arg compatibility with the ralph-hermes wrapper.
+            extra.append("--yolo")
             i += 1
             continue
         if a == "--":
@@ -214,7 +285,37 @@ def parse_args(argv: list[str]) -> tuple[str, str, list[str]]:
         positional.append(a)
         i += 1
     prompt = " ".join(positional).strip()
-    return prompt, model, extra
+    return prompt, model, extra, _extract_binary_args(extra)
+
+
+def _extract_binary_args(extra: list[str]) -> list[str]:
+    """Pull flags from ``extra`` that the ACP binary accepts.
+
+    ``hermes acp`` natively supports ``--accept-hooks`` and ``--yolo``/``-y``.
+    ``-p <profile>`` / ``--profile <name>`` is a global hermes flag that must
+    appear *before* the ``acp`` subcommand, so we forward it verbatim and the
+    binary string in ``run()`` places it correctly.
+    """
+    binary_args: list[str] = []
+    i = 0
+    while i < len(extra):
+        a = extra[i]
+        if a in ("--accept-hooks", "--yolo", "-y"):
+            binary_args.append(a)
+            i += 1
+            continue
+        if a in ("-p", "--profile") and i + 1 < len(extra):
+            # Forward both flag and value — hermes resolves HERMES_HOME from -p
+            binary_args.append(a)
+            binary_args.append(extra[i + 1])
+            i += 2
+            continue
+        if a.startswith("--profile="):
+            binary_args.append(a)
+            i += 1
+            continue
+        i += 1
+    return binary_args
 
 
 def _send_jsonrpc(proc: subprocess.Popen, obj: dict) -> None:
@@ -433,7 +534,8 @@ def _process_notification(notif: dict) -> Optional[str]:
 
 
 def run(prompt: str, model: str, extra: list[str], binary: str,
-       client_info: Optional[dict] = None) -> int:
+       client_info: Optional[dict] = None,
+       binary_extra: Optional[list[str]] = None) -> int:
     if not prompt:
         _emit_stderr("ralph-acp: no prompt provided")
         return 2
@@ -452,9 +554,27 @@ def run(prompt: str, model: str, extra: list[str], binary: str,
 
     # shell=True is intentional: `binary` may be "hermes acp" (two tokens) or a
     # full "python3 /path/to/mock.py" string from tests.
+    #
+    # binary_extra (from passthrough -- -p <profile>) must be injected into the
+    # command string. For hermes, global flags like -p must appear before the
+    # subcommand. We detect "hermes" at the start and insert accordingly.
+    spawn_cmd = binary
+    if binary_extra:
+        parts = binary.split(None, 1)  # split into [binary, rest]
+        binary_name = parts[0] if parts else binary
+        # If the binary is a hermes invocation, insert global flags before the subcommand
+        if "hermes" in os.path.basename(binary_name) and len(parts) > 1:
+            spawn_cmd = f"{parts[0]} {' '.join(binary_extra)} {parts[1]}"
+        elif len(parts) > 1:
+            # Other binaries with subcommands — append after the subcommand
+            spawn_cmd = f"{binary} {' '.join(binary_extra)}"
+        else:
+            # No subcommand — append at end
+            spawn_cmd = f"{binary} {' '.join(binary_extra)}"
+
     try:
         proc = subprocess.Popen(
-            binary,
+            spawn_cmd,
             shell=True,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -623,11 +743,12 @@ def run(prompt: str, model: str, extra: list[str], binary: str,
 
 def main(argv: Optional[list[str]] = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
-    prompt, model, extra = parse_args(raw_argv)
+    prompt, model, extra, binary_extra = parse_args(raw_argv)
     argv0 = sys.argv[0] if sys.argv else None
     agent = _detect_agent_identity(argv0, os.environ)
     binary = _resolve_binary(agent, os.environ)
-    return run(prompt, model, extra, binary, client_info=_client_info(agent))
+    return run(prompt, model, extra, binary, client_info=_client_info(agent),
+              binary_extra=binary_extra)
 
 
 if __name__ == "__main__":
