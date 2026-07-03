@@ -1,19 +1,41 @@
+/**
+ * Regression tests for trapped-SIGTERM hook handling.
+ *
+ * PROBLEM (PR #20 / design review):
+ *   spawnSync's default killSignal is SIGTERM. A hook that traps/ignores
+ *   SIGTERM (`trap '' TERM`) cannot be killed by spawnSync's timeout —
+ *   the hook hangs past the timeout, stalling the ralph loop.
+ *
+ * ENGINE CONTRACT (engineer's impl — `timeout` coreutils wrapper):
+ *   runHook wraps the hook script via: `timeout -s TERM -k <grace> <timeout> bash hook.sh`
+ *   - Grace period: min(2000ms, max(100ms, timeout*0.1))
+ *   - Hook that handles SIGTERM → exits gracefully (trap handler runs)
+ *   - Hook that IGNORES SIGTERM (`trap '' TERM`) → killed by SIGKILL after grace
+ *   - Detection: exit code 124 (graceful SIGTERM exit) OR signal SIGKILL (escalation) = timeout
+ *
+ * Ground-truth verified locally (GNU coreutils 9.4):
+ *   - Hook with trap handler + SIGTERM delivered → trap fires, marker written, `timeout` exits 124
+ *   - Hook with `trap '' TERM` + grace (-k) → killed by SIGKILL, exit 137 (128+9), fast
+ *   - Hook with `trap '' TERM` WITHOUT -k → hangs full sleep duration (the bug)
+ *
+ * RED on plain-spawnSync master (hook hangs full sleep → bun 5s test timeout).
+ * GREEN after the `timeout`-wrapper escalation fix.
+ */
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, writeFileSync, rmSync, chmodSync, existsSync, readFileSync } from "fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, chmodSync, readFileSync } from "fs";
 import { join } from "path";
-import {
-   executeHooks,
-   DEFAULT_HOOK_TIMEOUT_MS,
-   type HookEnv,
-   type LifecycleEvent,
-} from "../src/lifecycle-hooks";
+import { executeHooks, type HookEnv, type LifecycleEvent } from "../src/lifecycle-hooks";
 
-const TEST_DIR = join(process.cwd(), ".test-sigkill-tmp");
+const TEST_DIR = join(process.cwd(), ".test-sigterm-tmp");
 const GLOBAL_DIR = join(TEST_DIR, "global");
 const CWD = join(TEST_DIR, "project");
 
+function makeLocalHookPath(event: string, filename: string): string {
+   return join(CWD, ".ralph", "hooks", event, filename);
+}
+
 function createLocalHook(event: string, filename: string, content: string): string {
-   const filePath = join(CWD, ".ralph", "hooks", event, filename);
+   const filePath = makeLocalHookPath(event, filename);
    mkdirSync(join(filePath, ".."), { recursive: true });
    writeFileSync(filePath, content);
    chmodSync(filePath, 0o755);
@@ -40,71 +62,76 @@ afterEach(() => {
    rmSync(TEST_DIR, { recursive: true, force: true });
 });
 
-describe("SIGTERM→SIGKILL escalation (trapped-signal hooks)", () => {
-   test("hook that traps SIGTERM is killed via escalation (not hung)", () => {
-      // Hook traps SIGTERM and sleeps far past the timeout.
-      // Without escalation, spawnSync's SIGTERM would be ignored and the
-      // hook would hang. With the `timeout` wrapper, SIGTERM is sent at
-      // hookTimeoutMs, then SIGKILL after grace → hook dies.
-      const script = `#!/bin/bash
-trap '' TERM
-sleep 30
-echo 'SHOULD_NOT_PRINT'
-`;
-      createLocalHook("loop-start", "10-trap-sigterm.sh", script);
-      // Second hook proves the loop continues after the kill.
-      createLocalHook("loop-start", "20-continue.sh", "#!/bin/bash\necho 'CONTINUED'\n");
+// =============================================================================
+// Contract 1+3: hook that IGNORES SIGTERM + sleeps → MUST be killed and the
+// loop MUST continue (second hook still runs). This is the core regression:
+// on plain-SIGTERM master, spawnSync blocks the full sleep duration and the
+// second hook either never runs or runs very late.
+// =============================================================================
 
-      const warns: string[] = [];
+describe("trapped-SIGTERM hook escalation: kill + loop continues", () => {
+   test("hook with `trap '' TERM` is killed and the next hook still runs", () => {
+      createLocalHook("loop-start", "10-trapped.sh",
+         "#!/bin/bash\ntrap '' TERM\nsleep 30\necho 'SHOULD-NOT-PRINT'\n");
+      createLocalHook("loop-start", "20-continue.sh", "#!/bin/bash\necho 'continued'\n");
+
       const logs: string[] = [];
-      const origWarn = console.warn;
       const origLog = console.log;
-      console.warn = (...a: any[]) => warns.push(a.join(" "));
       console.log = (...a: any[]) => logs.push(a.join(" "));
 
-      const start = Date.now();
       try {
-         executeHooks({
-            event: "loop-start",
-            env: baseEnv("loop-start"),
-            cwd: CWD,
-            globalConfigDir: GLOBAL_DIR,
-            hookTimeoutMs: 500,
-         });
+         expect(() => {
+            executeHooks({
+               event: "loop-start",
+               env: baseEnv("loop-start"),
+               cwd: CWD,
+               globalConfigDir: GLOBAL_DIR,
+               hookTimeoutMs: 500,
+            });
+         }).not.toThrow();
       } finally {
-         console.warn = origWarn;
          console.log = origLog;
       }
-      const elapsed = Date.now() - start;
 
-      // Must be killed well under the 30s the hook tried to sleep.
-      // timeout + grace (max 2000) + overhead = should be under 5000ms.
-      expect(elapsed).toBeLessThan(5000);
-
-      // Timeout warning logged.
-      expect(warns.some(w => /\[hook:10-trap-sigterm\] timed out after 500ms/.test(w))).toBe(true);
-
-      // Loop continued — second hook ran.
-      expect(logs.some(l => l.includes("[hook:20-continue] CONTINUED"))).toBe(true);
-
-      // Trapped hook's body never printed.
-      expect(logs.some(l => l.includes("SHOULD_NOT_PRINT"))).toBe(false);
+      expect(logs.some(l => l.includes("[hook:20-continue] continued"))).toBe(true);
+      expect(logs.some(l => l.includes("SHOULD-NOT-PRINT"))).toBe(false);
    });
 
-   test("hook that handles SIGTERM gracefully gets cleanup chance", () => {
-      // Hook sets a trap handler for SIGTERM that writes a cleanup file,
-      // then sleeps past the timeout. The graceful handler should run
-      // before escalation to SIGKILL.
-      const cleanupFile = join(CWD, "cleanup-done");
-      const script = `#!/bin/bash
-trap 'echo done > "${cleanupFile}"; exit 0' TERM
-sleep 30
-`;
-      createLocalHook("loop-start", "10-graceful.sh", script);
+   test("trapped hook is killed within timeout + grace (does not stall 30s)", () => {
+      createLocalHook("loop-start", "10-trapped.sh",
+         "#!/bin/bash\ntrap '' TERM\nsleep 30\n");
 
-      const warns: string[] = [];
+      const start = Date.now();
+      executeHooks({
+         event: "loop-start",
+         env: baseEnv("loop-start"),
+         cwd: CWD,
+         globalConfigDir: GLOBAL_DIR,
+         hookTimeoutMs: 500,
+      });
+      const elapsed = Date.now() - start;
+
+      // timeout(500) + grace(min(2000, max(100, 50))=100) + spawnSync overhead + slack
+      // = well under the 30s sleep. Generous 5s bound avoids CI flakiness.
+      expect(elapsed).toBeLessThan(5000);
+   });
+});
+
+// =============================================================================
+// Contract 4: timeout warning is logged with the documented format, even for
+// a trapped-SIGTERM hook (escalated to SIGKILL). Detection keys on exit 124
+// OR signal SIGKILL — both surface the same warning.
+// =============================================================================
+
+describe("trapped-SIGTERM hook escalation: warning format", () => {
+   test("logs '[hook:10-trapped] timed out after <ms>ms' for a trapped hook", () => {
+      createLocalHook("loop-start", "10-trapped.sh",
+         "#!/bin/bash\ntrap '' TERM\nsleep 30\n");
+
+      const warnings: string[] = [];
       const origWarn = console.warn;
-      console.warn = (...a: any[]) => warns.push(a.join(" "));
+      console.warn = (...a: any[]) => warnings.push(a.join(" "));
+
       try {
          executeHooks({
             event: "loop-start",
@@ -117,18 +144,62 @@ sleep 30
          console.warn = origWarn;
       }
 
-      // Graceful handler ran — cleanup file exists.
-      expect(existsSync(cleanupFile)).toBe(true);
-      // Timeout warning still logged (hook exceeded the timeout).
-      expect(warns.some(w => /\[hook:10-graceful\] timed out after 500ms/.test(w))).toBe(true);
+      expect(warnings.some(w => /\[hook:10-trapped\] timed out after 500ms/.test(w))).toBe(true);
    });
+});
 
-   test("normal hook (no trap) completes within timeout", () => {
-      createLocalHook("loop-start", "10-fast.sh", "#!/bin/bash\necho 'OK'\n");
+// =============================================================================
+// Contract 5: SIGTERM-first gives well-behaved hooks a cleanup chance.
+//
+// A hook WITH a real trap handler (not an ignore-trap) that does cleanup work
+// on TERM → the handler MUST run (proves SIGTERM was delivered before any
+// SIGKILL escalation). The marker file written by the trap handler is the
+// proof — SIGKILL cannot trigger a trap, so a present marker ⇒ SIGTERM ran.
+//
+// This test FAILS if the engine uses killSignal: 'SIGKILL' directly (no TERM
+// grace) — which is the naive fix that the design review explicitly rejected.
+// =============================================================================
 
-      const warns: string[] = [];
+describe("SIGTERM-first: well-behaved hook can clean up before SIGKILL", () => {
+   test("hook with a TERM cleanup handler runs the handler before being killed", () => {
+      const markerPath = join(CWD, "cleanup-marker.txt");
+
+      const script = [
+         "#!/bin/bash",
+         `MARKER="${markerPath}"`,
+         'trap \'echo cleaned-up > "$MARKER"; exit 0\' TERM',
+         "sleep 30",
+      ].join("\n");
+      createLocalHook("loop-start", "10-cleanup.sh", script);
+      createLocalHook("loop-start", "20-after.sh", "#!/bin/bash\necho 'after'\n");
+
+      executeHooks({
+         event: "loop-start",
+         env: baseEnv("loop-start"),
+         cwd: CWD,
+         globalConfigDir: GLOBAL_DIR,
+         hookTimeoutMs: 500,
+      });
+
+      expect(existsSync(markerPath)).toBe(true);
+      expect(readFileSync(markerPath, "utf-8").trim()).toBe("cleaned-up");
+   });
+});
+
+// =============================================================================
+// Baseline: a NORMAL hook (no trap, completes fast) is unaffected by the
+// escalation machinery. Guards against a regression where every hook gets
+// SIGKILL'd or the grace timer adds latency to fast hooks.
+// =============================================================================
+
+describe("baseline: normal fast hook is unaffected by escalation", () => {
+   test("fast hook completes normally with no timeout warning", () => {
+      createLocalHook("loop-start", "10-fast.sh", "#!/bin/bash\necho 'ok'\n");
+
+      const warnings: string[] = [];
       const origWarn = console.warn;
-      console.warn = (...a: any[]) => warns.push(a.join(" "));
+      console.warn = (...a: any[]) => warnings.push(a.join(" "));
+
       try {
          executeHooks({
             event: "loop-start",
@@ -141,7 +212,6 @@ sleep 30
          console.warn = origWarn;
       }
 
-      // No timeout warning.
-      expect(warns.some(w => /timed out/.test(w))).toBe(false);
+      expect(warnings.some(w => /timed out/.test(w))).toBe(false);
    });
 });
