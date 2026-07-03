@@ -50,7 +50,7 @@ log_info "Running bun build --dry-run for syntax & AST validation..."
 DRY_RUN_FAILED=false
 if [[ -n "$STAGED_TS" ]]; then
   for file in $STAGED_TS; do
-    if ! bun build "$file" --outfile=/dev/null --dry-run 2>&1; then
+    if ! bun build "$file" --outfile=/dev/null --dry-run --target=bun 2>&1; then
       log_error "bun build --dry-run FAILED for: $file"
       DRY_RUN_FAILED=true
     fi
