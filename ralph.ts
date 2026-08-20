@@ -107,7 +107,7 @@ let customConfigPath = "";
 let initConfigPath: string | undefined = undefined;
 let initTomlConfigPath = "";
 
-export const AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot", "cursor-agent"] as const;
+export const AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot", "cursor-agent", "grok", "agy"] as const;
 export type AgentType = (typeof AGENT_TYPES)[number];
 
 export type AgentEnvOptions = { filterPlugins?: boolean; allowAllPermissions?: boolean };
@@ -257,6 +257,45 @@ PARSE_PATTERNS["pi"] = (line) => {
       return null;
    }
 };
+
+function parseJsonStreamToolName(line: string): string | null {
+   try {
+      const evt = JSON.parse(stripAnsi(line));
+      if (!evt || typeof evt !== "object") return null;
+
+      if (typeof evt.toolName === "string" && evt.toolName) return evt.toolName;
+      if (evt.type === "tool_call") {
+         if (typeof evt.toolName === "string" && evt.toolName) return evt.toolName;
+         if (typeof evt.name === "string" && evt.name) return evt.name;
+      }
+      if (evt.type === "assistant" && evt.message && typeof evt.message === "object") {
+         const content = (evt.message as { content?: unknown }).content;
+         if (Array.isArray(content)) {
+            for (const block of content) {
+               if (block && typeof block === "object" && (block as { type?: string }).type === "tool_use") {
+                  const name = (block as { name?: unknown }).name;
+                  if (typeof name === "string" && name) return name;
+               }
+            }
+         }
+      }
+
+      const step = evt.step_update;
+      if (evt.event === "step_update" && step && typeof step === "object") {
+         if (typeof step.tool_name === "string" && step.tool_name) return step.tool_name;
+         const info = step.tool_info;
+         if (info && typeof info === "object" && typeof info.name === "string" && info.name) {
+            return info.name;
+         }
+      }
+      return null;
+   } catch {
+      return null;
+   }
+}
+
+PARSE_PATTERNS["grok"] = parseJsonStreamToolName;
+PARSE_PATTERNS["agy"] = parseJsonStreamToolName;
 
 
 
@@ -423,6 +462,8 @@ export function getDefaultConfig(): RalphConfig {
          { type: "claude-code", command: "claude", configName: "Claude Code", argsTemplate: "claude-code", envTemplate: "default", parsePattern: "claude-code" },
          { type: "codex", command: "codex", configName: "Codex", argsTemplate: "codex", envTemplate: "default", parsePattern: "codex" },
          { type: "copilot", command: "copilot", configName: "Copilot CLI", argsTemplate: "copilot", envTemplate: "default", parsePattern: "copilot" },
+         { type: "grok", command: "grok", configName: "Grok", argsTemplate: "grok", envTemplate: "default", parsePattern: "grok" },
+         { type: "agy", command: "agy", configName: "AGY", argsTemplate: "agy", envTemplate: "default", parsePattern: "agy" },
       ],
    };
 }
@@ -1112,6 +1153,8 @@ export function resolveAgentBinary(agentType: string, cliBinary?: string): strin
       codex: "codex",
       copilot: "copilot",
       "cursor-agent": "cursor-agent",
+      grok: "grok",
+      agy: "agy",
    };
    return resolveCommand(defaults[agentType] ?? agentType);
 }
@@ -1180,6 +1223,22 @@ export const BUILT_IN_AGENTS: Record<AgentType, AgentConfig> = {
       buildEnv: ENV_TEMPLATES["default"],
       parseToolOutput: PARSE_PATTERNS["claude-code"],
       configName: "Cursor Agent",
+   },
+   grok: {
+      type: "grok",
+      command: resolveCommand("grok", process.env.RALPH_GROK_BINARY),
+      buildArgs: ARGS_TEMPLATES["grok"],
+      buildEnv: ENV_TEMPLATES["default"],
+      parseToolOutput: PARSE_PATTERNS["grok"],
+      configName: "Grok",
+   },
+   agy: {
+      type: "agy",
+      command: resolveCommand("agy", process.env.RALPH_AGY_BINARY),
+      buildArgs: ARGS_TEMPLATES["agy"],
+      buildEnv: ENV_TEMPLATES["default"],
+      parseToolOutput: PARSE_PATTERNS["agy"],
+      configName: "AGY",
    },
 };
 
@@ -1293,7 +1352,7 @@ Arguments:
   prompt              Task description for the AI to work on
 
 Options:
-  --agent AGENT       AI agent to use: opencode (default), claude-code, codex, copilot, cursor-agent
+  --agent AGENT       AI agent to use: opencode (default), claude-code, codex, copilot, cursor-agent, grok, agy
   --agent-binary PATH Binary for the selected agent (name resolved via PATH, or absolute path)
                       e.g. --agent claude-code --agent-binary claude-stali
                       e.g. --agent claude-code --agent-binary /home/bhd/bin/claude-stali
@@ -1307,7 +1366,7 @@ Options:
   --model MODEL       Model to use (agent-specific, e.g., anthropic/claude-sonnet)
   --rotation LIST     Agent/model rotation for each iteration (comma-separated)
                       Each entry must be "agent:model" format
-                      Valid agents: opencode, claude-code, codex, copilot, cursor-agent
+                      Valid agents: opencode, claude-code, codex, copilot, cursor-agent, grok, agy
                       Example: --rotation "opencode:claude-sonnet-4,claude-code:gpt-4o"
                       When used, --agent and --model are ignored
   --stalling-timeout DURATION  Time without activity before considering agent stalled (default: 2h)

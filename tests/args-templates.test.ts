@@ -203,6 +203,87 @@ describe("ARGS_TEMPLATES", () => {
          expect(result).toContain("claude-sonnet-4");
       });
    });
+
+   function flagValue(args: string[], flag: string): string | undefined {
+      const i = args.indexOf(flag);
+      return i >= 0 ? args[i + 1] : undefined;
+   }
+
+   describe("grok", () => {
+      const grok: BuildArgsFn = ARGS_TEMPLATES["grok"];
+
+      it("puts the prompt as the value of -p", () => {
+         const result = grok("fix the bug", "grok-build", {});
+         expect(flagValue(result, "-p")).toBe("fix the bug");
+      });
+
+      it("includes -m when a model is set", () => {
+         const result = grok("fix the bug", "grok-build", {});
+         expect(flagValue(result, "-m")).toBe("grok-build");
+      });
+
+      it("omits -m when model is empty", () => {
+         const result = grok("fix the bug", "", {});
+         expect(result).not.toContain("-m");
+      });
+
+      it("includes --yolo only when allowAllPermissions is set", () => {
+         expect(grok("p", "", { allowAllPermissions: true })).toContain("--yolo");
+         expect(grok("p", "", { allowAllPermissions: false })).not.toContain("--yolo");
+         expect(grok("p", "", {})).not.toContain("--yolo");
+      });
+
+      it("includes --output-format streaming-json only when streaming", () => {
+         const streaming = grok("p", "", { streamOutput: true });
+         expect(flagValue(streaming, "--output-format")).toBe("streaming-json");
+         const buffered = grok("p", "", { streamOutput: false });
+         expect(buffered).not.toContain("streaming-json");
+         expect(buffered).not.toContain("--output-format");
+      });
+   });
+
+   describe("agy", () => {
+      const agy: BuildArgsFn = ARGS_TEMPLATES["agy"];
+
+      it("puts the prompt as the value of -p", () => {
+         const result = agy("fix the bug", "gemini-3.1-pro-high", {});
+         expect(flagValue(result, "-p")).toBe("fix the bug");
+      });
+
+      it("places -p last so extra flags are not swallowed as prompt", () => {
+         const result = agy("fix the bug", "gemini-3.1-pro-high", {
+            extraFlags: ["--sandbox"],
+            allowAllPermissions: true,
+            streamOutput: true,
+         });
+         expect(result[result.length - 2]).toBe("-p");
+         expect(result[result.length - 1]).toBe("fix the bug");
+      });
+
+      it("includes --model when a model is set", () => {
+         const result = agy("fix the bug", "gemini-3.1-pro-high", {});
+         expect(flagValue(result, "--model")).toBe("gemini-3.1-pro-high");
+      });
+
+      it("omits --model when model is empty", () => {
+         const result = agy("fix the bug", "", {});
+         expect(result).not.toContain("--model");
+      });
+
+      it("includes --dangerously-skip-permissions only when allowAllPermissions is set", () => {
+         expect(agy("p", "", { allowAllPermissions: true })).toContain("--dangerously-skip-permissions");
+         expect(agy("p", "", { allowAllPermissions: false })).not.toContain("--dangerously-skip-permissions");
+         expect(agy("p", "", {})).not.toContain("--dangerously-skip-permissions");
+      });
+
+      it("includes --output-format stream-json only when streaming", () => {
+         const streaming = agy("p", "", { streamOutput: true });
+         expect(flagValue(streaming, "--output-format")).toBe("stream-json");
+         const buffered = agy("p", "", { streamOutput: false });
+         expect(buffered).not.toContain("stream-json");
+         expect(buffered).not.toContain("--output-format");
+      });
+   });
    KT:  // -------------------------------------------------------------------------
    // -------------------------------------------------------------------------
    // opencode-raw — like opencode but without the hardcoded 'run' subcommand.

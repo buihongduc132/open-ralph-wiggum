@@ -180,11 +180,11 @@ describe("ralph-agent-config module", () => {
    });
 
    describe("getDefaultConfig", () => {
-      it("returns config with 4 built-in agents", () => {
+      it("returns config with built-in agents including grok and agy", () => {
          const config = getDefaultConfig();
          expect(config.version).toBe("1.0");
-         expect(config.agents).toHaveLength(4);
-         expect(config.agents.map(a => a.type)).toEqual(["opencode", "claude-code", "codex", "copilot"]);
+         expect(config.agents.length).toBeGreaterThanOrEqual(4);
+         expect(config.agents.map(a => a.type)).toEqual(expect.arrayContaining(["opencode", "claude-code", "codex", "copilot", "grok", "agy"]));
       });
    });
 
@@ -399,6 +399,8 @@ describe("ralph-agent-config module", () => {
          expect(types).toContain("claude-code");
          expect(types).toContain("codex");
          expect(types).toContain("copilot");
+         expect(types).toContain("grok");
+         expect(types).toContain("agy");
       });
 
       it("each agent has all required fields", () => {

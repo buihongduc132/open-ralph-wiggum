@@ -50,6 +50,8 @@ Open Ralph Wiggum works with multiple AI coding agents. Switch between built-ins
 | **Codex** | `--agent codex` | OpenAI's Codex CLI for AI-powered development |
 | **Copilot CLI** | `--agent copilot` | GitHub Copilot CLI for agentic coding |
 | **Cursor Agent** | `--agent cursor-agent` | Cursor Agent CLI for headless AI coding |
+| **Grok** | `--agent grok` | xAI Grok Build CLI (`grok -p`) for headless AI coding |
+| **AGY** | `--agent agy` | Google Antigravity CLI (`agy -p`) for headless AI coding |
 | **OpenCode** | `--agent opencode` | Default agent, open-source AI coding assistant |
 
 ### Custom agent / sub-agent CLIs
@@ -154,6 +156,8 @@ Switch between built-in agents or wire in your own sub-agent wrapper without cha
 - **Codex** (`--agent codex`) — OpenAI's code-specialized model
 - **Copilot CLI** (`--agent copilot`) — GitHub's agentic coding tool
 - **Cursor Agent** (`--agent cursor-agent`) — Cursor's headless AI coding agent
+- **Grok** (`--agent grok`) — xAI Grok Build CLI (`grok -p`, `--yolo`, `streaming-json`)
+- **AGY** (`--agent agy`) — Google Antigravity CLI (`agy -p`, `--dangerously-skip-permissions`, `stream-json`)
 - **OpenCode** (`--agent opencode`) — Open-source default option
 - **Custom agents** (`--agent <type>` + `--config agents.json`) — `ocxo`, `omp`, `pi`, `omox`, Gemini wrappers, or any compatible internal sub-agent CLI
 
@@ -248,6 +252,8 @@ Configure agent binaries with these environment variables:
 | `RALPH_CODEX_BINARY` | Path to Codex CLI | `"codex"` |
 | `RALPH_COPILOT_BINARY` | Path to Copilot CLI | `"copilot"` |
 | `RALPH_CURSOR_AGENT_BINARY` | Path to Cursor Agent CLI | `"cursor-agent"` |
+| `RALPH_GROK_BINARY` | Path to Grok Build CLI | `"grok"` |
+| `RALPH_AGY_BINARY` | Path to Antigravity CLI | `"agy"` |
 | `RALPH_<TYPE>_BINARY` | Path override for any custom agent/sub-agent type from `agents.json` | Derived from `type` |
 
 **Note for Windows users:** Ralph automatically resolves `.cmd` extensions for npm-installed CLIs. If you encounter "command not found" errors, you can use these environment variables to specify the full path to the executable.
@@ -260,7 +266,7 @@ Configure agent binaries with these environment variables:
 ralph "<prompt>" [options]
 
 Options:
-  --agent AGENT            AI agent to use: opencode (default), claude-code, codex, copilot, cursor-agent
+  --agent AGENT            AI agent to use: opencode (default), claude-code, codex, copilot, cursor-agent, grok, agy
   --min-iterations N       Minimum iterations before completion allowed (default: 1)
   --max-iterations N       Stop after N iterations (default: unlimited)
   --completion-promise T   Text that signals completion (default: COMPLETE)
@@ -1131,7 +1137,7 @@ Each rotation entry uses the `agent:model` format:
 --rotation "agent1:model1,agent2:model2,agent3:model3"
 ```
 
-**Valid agents:** `opencode`, `claude-code`, `codex`, `copilot`, `cursor-agent`
+**Valid agents:** `opencode`, `claude-code`, `codex`, `copilot`, `cursor-agent`, `grok`, `agy`
 
 ### Example Usage
 
@@ -1171,7 +1177,7 @@ Invalid rotation entries produce clear error messages:
 
 **Invalid agent name:**
 ```
-Error: Invalid agent 'invalid' in rotation entry 'invalid:model'. Valid agents: opencode, claude-code, codex, copilot
+Error: Invalid agent 'invalid' in rotation entry 'invalid:model'. Valid agents: opencode, claude-code, codex, copilot, cursor-agent, grok, agy
 ```
 
 **Malformed entry (missing colon):**
