@@ -451,6 +451,8 @@ function grokAdapter(p, cfg) {
     return lines;
   }
   if (t === "tool_call") {
+    if (!cfg.verboseTools)
+      return [];
     const name = typeof p.toolName === "string" ? p.toolName : typeof p.name === "string" ? p.name : typeof p.title === "string" ? p.title : "unknown";
     return [ANSI.yellow(`\uD83D\uDD27 ${name}`)];
   }
@@ -473,7 +475,7 @@ function agyAdapter(p, cfg) {
     const step = p.step_update && typeof p.step_update === "object" ? p.step_update : p;
     const lines = [];
     const toolName = typeof step.tool_name === "string" ? step.tool_name : step.tool_info && typeof step.tool_info === "object" && typeof step.tool_info.name === "string" ? step.tool_info.name : "";
-    if (toolName)
+    if (toolName && cfg.verboseTools)
       lines.push(ANSI.yellow(`\uD83D\uDD27 ${toolName}`));
     const delta = typeof step.text_delta === "string" ? step.text_delta : typeof step.text === "string" ? step.text : "";
     if (delta.trim())
@@ -576,9 +578,9 @@ function textExtract(p, agentType) {
     }
   } else if (t === "stream_event") {
     if (p.event && typeof p.event === "object") {
-      const event2 = p.event;
-      if (event2.delta && typeof event2.delta === "object") {
-        const delta = event2.delta;
+      const event = p.event;
+      if (event.delta && typeof event.delta === "object") {
+        const delta = event.delta;
         if (delta.type === "text_delta" && typeof delta.text === "string") {
           addText(delta.text);
         }
@@ -610,17 +612,18 @@ function textExtract(p, agentType) {
     if (typeof p.content === "string")
       addText(p.content);
   }
-  const event = typeof p.event === "string" ? p.event : "";
-  if (event === "result") {
+  const streamKind = typeof p.event === "string" && p.event ? p.event : t;
+  if (streamKind === "result") {
     if (typeof p.result === "string") {
-      addText(p.result);
+      if (t !== "result")
+        addText(p.result);
     } else if (p.result && typeof p.result === "object") {
       const rec = p.result;
       addText(rec.response);
       addText(rec.result);
       addText(rec.text);
     }
-  } else if (event === "step_update") {
+  } else if (streamKind === "step_update") {
     const step = p.step_update && typeof p.step_update === "object" ? p.step_update : p;
     addText(step.text_delta);
     addText(step.text);
@@ -838,7 +841,8 @@ var runBuilder = (prompt, model, options) => {
 };
 var grokBuilder = (prompt, model, options) => {
   const cmdArgs = ["-p", prompt];
-  if (model?.trim())
+  const hasPassthroughModel = options?.extraFlags?.includes("-m") || options?.extraFlags?.includes("--model") || options?.skipModelFlag;
+  if (model?.trim() && !hasPassthroughModel)
     cmdArgs.push("-m", model);
   if (options?.allowAllPermissions)
     cmdArgs.push("--yolo");
@@ -850,7 +854,8 @@ var grokBuilder = (prompt, model, options) => {
 };
 var agyBuilder = (prompt, model, options) => {
   const cmdArgs = [];
-  if (model?.trim())
+  const hasPassthroughModel = options?.extraFlags?.includes("--model") || options?.skipModelFlag;
+  if (model?.trim() && !hasPassthroughModel)
     cmdArgs.push("--model", model);
   if (options?.allowAllPermissions)
     cmdArgs.push("--dangerously-skip-permissions");

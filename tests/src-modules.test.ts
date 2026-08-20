@@ -180,7 +180,7 @@ describe("ralph-agent-config module", () => {
    });
 
    describe("getDefaultConfig", () => {
-      it("returns config with 4 built-in agents", () => {
+      it("returns config with built-in agents including grok and agy", () => {
          const config = getDefaultConfig();
          expect(config.version).toBe("1.0");
          expect(config.agents.length).toBeGreaterThanOrEqual(4);

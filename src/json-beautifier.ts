@@ -542,6 +542,7 @@ function grokAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[
   }
 
   if (t === "tool_call") {
+    if (!cfg.verboseTools) return [];
     const name = typeof p.toolName === "string" ? p.toolName
       : typeof p.name === "string" ? p.name
       : typeof p.title === "string" ? p.title
@@ -578,7 +579,7 @@ function agyAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[]
       : (step.tool_info && typeof step.tool_info === "object" && typeof (step.tool_info as Record<string, unknown>).name === "string")
         ? (step.tool_info as Record<string, unknown>).name as string
         : "";
-    if (toolName) lines.push(ANSI.yellow(`🔧 ${toolName}`));
+    if (toolName && cfg.verboseTools) lines.push(ANSI.yellow(`🔧 ${toolName}`));
     const delta = typeof step.text_delta === "string" ? step.text_delta
       : typeof step.text === "string" ? step.text
       : "";
@@ -732,17 +733,17 @@ function textExtract(p: Record<string, unknown>, agentType: string): string[] {
     if (typeof p.content === "string") addText(p.content);
   }
 
-  const event = typeof p.event === "string" ? p.event : "";
-  if (event === "result") {
+  const streamKind = (typeof p.event === "string" && p.event) ? p.event : t;
+  if (streamKind === "result") {
     if (typeof p.result === "string") {
-      addText(p.result);
+      if (t !== "result") addText(p.result);
     } else if (p.result && typeof p.result === "object") {
       const rec = p.result as Record<string, unknown>;
       addText(rec.response);
       addText(rec.result);
       addText(rec.text);
     }
-  } else if (event === "step_update") {
+  } else if (streamKind === "step_update") {
     const step = (p.step_update && typeof p.step_update === "object")
       ? p.step_update as Record<string, unknown>
       : p;

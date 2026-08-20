@@ -995,6 +995,28 @@ describe("extractJsonCompletionText: non-Claude agents", () => {
     expect(result.some(r => r.includes("AGY finished"))).toBe(true);
   });
 
+  it("extracts agy nested result/step_update when type is used instead of event", () => {
+    const result = extractJsonCompletionText(JSON.stringify({
+      type: "result",
+      result: { response: "Typed AGY finished" },
+    }), "agy");
+    expect(result.some(r => r.includes("Typed AGY finished"))).toBe(true);
+    const delta = extractJsonCompletionText(JSON.stringify({
+      type: "step_update",
+      step_update: { text_delta: "Typed AGY working" },
+    }), "agy");
+    expect(delta.some(r => r.includes("Typed AGY working"))).toBe(true);
+  });
+
+  it("does not duplicate agy result text when both event and type are set", () => {
+    const result = extractJsonCompletionText(JSON.stringify({
+      event: "result",
+      type: "result",
+      result: "Once only",
+    }), "agy");
+    expect(result.filter(r => r.includes("Once only"))).toHaveLength(1);
+  });
+
   it("extracts text from stream_event with nested text_delta", () => {
     const line = JSON.stringify({
       type: "stream_event",

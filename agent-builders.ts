@@ -32,7 +32,8 @@ const runBuilder = (prompt: string, model: string, options?: AgentBuildArgsOptio
 
 const grokBuilder = (prompt: string, model: string, options?: AgentBuildArgsOptions) => {
   const cmdArgs = ["-p", prompt];
-  if (model?.trim()) cmdArgs.push("-m", model);
+  const hasPassthroughModel = options?.extraFlags?.includes("-m") || options?.extraFlags?.includes("--model") || options?.skipModelFlag;
+  if (model?.trim() && !hasPassthroughModel) cmdArgs.push("-m", model);
   if (options?.allowAllPermissions) cmdArgs.push("--yolo");
   if (options?.streamOutput) cmdArgs.push("--output-format", "streaming-json");
   if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
@@ -42,7 +43,8 @@ const grokBuilder = (prompt: string, model: string, options?: AgentBuildArgsOpti
 const agyBuilder = (prompt: string, model: string, options?: AgentBuildArgsOptions) => {
   // agy -p consumes the rest of argv, so flags must come first and -p last.
   const cmdArgs: string[] = [];
-  if (model?.trim()) cmdArgs.push("--model", model);
+  const hasPassthroughModel = options?.extraFlags?.includes("--model") || options?.skipModelFlag;
+  if (model?.trim() && !hasPassthroughModel) cmdArgs.push("--model", model);
   if (options?.allowAllPermissions) cmdArgs.push("--dangerously-skip-permissions");
   if (options?.streamOutput) cmdArgs.push("--output-format", "stream-json");
   if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);

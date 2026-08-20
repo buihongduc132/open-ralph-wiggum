@@ -22,6 +22,7 @@ const fakeAgentPath = join(process.cwd(), "tests/helpers/fake-agent.sh");
 const ralphPath = join(process.cwd(), "ralph.ts");
 const bunPath = process.execPath;
 const tempDirs: string[] = [];
+let dummyProc: ReturnType<typeof Bun.spawn> | null = null;
 
 function flagValue(args: string[], flag: string): string | undefined {
   const i = args.indexOf(flag);
@@ -42,6 +43,10 @@ function beautifyCfg(agentType: string): BeautifierConfig {
 }
 
 afterEach(() => {
+  if (dummyProc) {
+    try { dummyProc.kill("SIGKILL"); } catch { /* already exited */ }
+    dummyProc = null;
+  }
   while (tempDirs.length) {
     const dir = tempDirs.pop();
     if (dir && existsSync(dir)) rmSync(dir, { recursive: true, force: true });
@@ -97,6 +102,14 @@ describe("grok argv (shipped ARGS_TEMPLATES)", () => {
     expect(locked).not.toContain("-m");
     expect(locked).not.toContain("streaming-json");
   });
+
+  it("skips -m when skipModelFlag or extraFlags already pass a model", () => {
+    const skipped = grok("p", "grok-build", { skipModelFlag: true });
+    expect(skipped).not.toContain("-m");
+    const passthrough = grok("p", "grok-build", { extraFlags: ["--model", "override"] });
+    expect(passthrough).not.toContain("-m");
+    expect(flagValue(passthrough, "--model")).toBe("override");
+  });
 });
 
 describe("agy argv (shipped ARGS_TEMPLATES)", () => {
@@ -117,6 +130,14 @@ describe("agy argv (shipped ARGS_TEMPLATES)", () => {
     expect(locked).not.toContain("--dangerously-skip-permissions");
     expect(locked).not.toContain("--model");
     expect(locked).not.toContain("stream-json");
+  });
+
+  it("skips --model when skipModelFlag or extraFlags already pass a model", () => {
+    const skipped = agy("p", "gemini-3.1-pro-high", { skipModelFlag: true });
+    expect(skipped).not.toContain("--model");
+    const passthrough = agy("p", "gemini-3.1-pro-high", { extraFlags: ["--model", "override"] });
+    expect(passthrough.filter((arg) => arg === "--model")).toHaveLength(1);
+    expect(flagValue(passthrough, "--model")).toBe("override");
   });
 });
 
@@ -170,12 +191,24 @@ describe("grok/agy beautify (shipped json-beautifier)", () => {
     }), beautifyCfg("agy"));
     expect(result.some((line) => stripAnsi(line).includes("work finished"))).toBe(true);
   });
+
+  it("omits grok/agy tool lines when verboseTools is false", () => {
+    const quiet = { ...beautifyCfg("grok"), verboseTools: false };
+    const grokTool = beautifyJsonLine(JSON.stringify({ type: "tool_call", toolName: "read_file" }), quiet);
+    expect(grokTool.every((line) => !stripAnsi(line).includes("read_file"))).toBe(true);
+    const agyQuiet = { ...beautifyCfg("agy"), verboseTools: false };
+    const agyTool = beautifyJsonLine(JSON.stringify({
+      event: "step_update",
+      step_update: { tool_info: { name: "run_command" } },
+    }), agyQuiet);
+    expect(agyTool.every((line) => !stripAnsi(line).includes("run_command"))).toBe(true);
+  });
 });
 
 async function runDummyRalph(agent: "grok" | "agy"): Promise<{ exitCode: number; output: string }> {
   const stateDir = mkdtempSync(join(tmpdir(), `ralph-dummy-${agent}-`));
   tempDirs.push(stateDir);
-  const proc = Bun.spawn({
+  const proc = dummyProc = Bun.spawn({
     cmd: [
       bunPath, "run", ralphPath,
       `dummy ${agent} run. Output <promise>COMPLETE</promise> when done.`,

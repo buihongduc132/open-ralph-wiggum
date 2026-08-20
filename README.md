@@ -1177,7 +1177,7 @@ Invalid rotation entries produce clear error messages:
 
 **Invalid agent name:**
 ```
-Error: Invalid agent 'invalid' in rotation entry 'invalid:model'. Valid agents: opencode, claude-code, codex, copilot
+Error: Invalid agent 'invalid' in rotation entry 'invalid:model'. Valid agents: opencode, claude-code, codex, copilot, cursor-agent, grok, agy
 ```
 
 **Malformed entry (missing colon):**
