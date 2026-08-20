@@ -16,7 +16,7 @@ description: >
 
 **Open Ralph Wiggum** (`ralph`) wraps any supported AI coding agent in an autonomous loop: it sends the same prompt on every iteration, and the agent self-corrects by observing the state of the repo. The loop ends when the agent outputs a configurable completion promise (e.g. `<promise>COMPLETE</promise>`).
 
-Supported agents: **Claude Code**, **OpenAI Codex**, **GitHub Copilot CLI**, **Cursor Agent**, **OpenCode** (default).
+Supported agents: **Claude Code**, **OpenAI Codex**, **GitHub Copilot CLI**, **Cursor Agent**, **Grok**, **AGY**, **OpenCode** (default).
 
 ---
 
@@ -30,6 +30,8 @@ Supported agents: **Claude Code**, **OpenAI Codex**, **GitHub Copilot CLI**, **C
   - `codex` — [OpenAI Codex CLI](https://github.com/openai/codex)
   - `copilot` — [GitHub Copilot CLI](https://github.com/github/copilot-cli)
   - `cursor-agent` — [Cursor Agent CLI](https://cursor.com/cli/)
+  - `grok` — [Grok Build CLI](https://docs.x.ai/build/overview)
+  - `agy` — [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli)
   - `opencode` — [OpenCode](https://opencode.ai)
 
 ### npm (recommended)
@@ -159,7 +161,7 @@ export GH_TOKEN=your_token
 ### Quick environment check (Linux/macOS)
 
 ```bash
-for bin in opencode claude codex copilot cursor-agent; do
+for bin in opencode claude codex copilot cursor-agent grok agy; do
   if command -v "$bin" &>/dev/null; then echo "✅ $bin: $(which $bin)"; else echo "❌ $bin: not found"; fi
 done && \
   [[ -n "$GH_TOKEN" ]] && echo "✅ GH_TOKEN set (Copilot CLI)" || echo "ℹ️  GH_TOKEN not set (needed only for Copilot CLI)"
@@ -176,6 +178,8 @@ done && \
 | OpenAI Codex       | `--agent codex`         | `codex`        | `RALPH_CODEX_BINARY`          |
 | Copilot CLI        | `--agent copilot`       | `copilot`      | `RALPH_COPILOT_BINARY`        |
 | Cursor Agent       | `--agent cursor-agent`  | `cursor-agent` | `RALPH_CURSOR_AGENT_BINARY`   |
+| Grok               | `--agent grok`          | `grok`         | `RALPH_GROK_BINARY`           |
+| AGY                | `--agent agy`           | `agy`          | `RALPH_AGY_BINARY`            |
 
 Use environment variables to point to a custom binary path if the CLI is not on `$PATH`.
 
@@ -184,7 +188,7 @@ Use environment variables to point to a custom binary path if the CLI is not on 
 ## Key Options
 
 ```
---agent AGENT            Agent to use (opencode|claude-code|codex|copilot|cursor-agent)
+--agent AGENT            Agent to use (opencode|claude-code|codex|copilot|cursor-agent|grok|agy)
 --model MODEL            Model name (agent-specific, e.g. claude-sonnet-4, gpt-5-codex)
 --max-iterations N       Stop after N iterations (always set this as a safety net)
 --min-iterations N       Require at least N iterations before allowing completion (default: 1)

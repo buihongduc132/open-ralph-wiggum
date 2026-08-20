@@ -8,9 +8,9 @@ import {
    applyPassthroughOverrides,
    getDefaultMainArgs,
 } from "../src/parse-args";
-import type { RalphRuntimeConfig } from "../src/types";
+import { AGENT_TYPES, type RalphRuntimeConfig } from "../src/types";
 
-const VALID_AGENTS = ["opencode", "claude-code", "codex", "copilot", "cursor-agent"];
+const VALID_AGENTS = [...AGENT_TYPES];
 
 describe("parseDuration", () => {
    it("parses plain number as milliseconds", () => {
@@ -170,6 +170,20 @@ describe("parseMainArgs", () => {
    it("parses --agent flag", () => {
       const result = parseMainArgs(["--agent", "claude-code"], VALID_AGENTS);
       expect(result.agentType).toBe("claude-code");
+   });
+
+   it("accepts --agent grok and --agent agy as built-ins", () => {
+      expect(VALID_AGENTS).toContain("grok");
+      expect(VALID_AGENTS).toContain("agy");
+      expect(parseMainArgs(["--agent", "grok"], VALID_AGENTS).agentType).toBe("grok");
+      expect(parseMainArgs(["--agent", "agy"], VALID_AGENTS).agentType).toBe("agy");
+   });
+
+   it("accepts grok and agy in --rotation", () => {
+      expect(parseRotationInput("grok:grok-build,agy:gemini-3.1-pro-high", VALID_AGENTS)).toEqual([
+         "grok:grok-build",
+         "agy:gemini-3.1-pro-high",
+      ]);
    });
 
    it("throws on invalid agent", () => {

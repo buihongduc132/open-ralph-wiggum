@@ -385,6 +385,18 @@ describe("BUILT_IN_AGENTS", () => {
     expect(BUILT_IN_AGENTS["copilot"].configName).toBe("Copilot CLI");
   });
 
+  it("contains grok agent", () => {
+    expect(BUILT_IN_AGENTS["grok"]).toBeDefined();
+    expect(BUILT_IN_AGENTS["grok"].type).toBe("grok");
+    expect(BUILT_IN_AGENTS["grok"].configName).toBe("Grok");
+  });
+
+  it("contains agy agent", () => {
+    expect(BUILT_IN_AGENTS["agy"]).toBeDefined();
+    expect(BUILT_IN_AGENTS["agy"].type).toBe("agy");
+    expect(BUILT_IN_AGENTS["agy"].configName).toBe("AGY");
+  });
+
   it("each agent has required interface fields", () => {
     for (const [key, agent] of Object.entries(BUILT_IN_AGENTS)) {
       expect(agent.type, `${key}: type`).toBeTruthy();
@@ -443,6 +455,16 @@ describe("BUILT_IN_AGENTS", () => {
     expect(BUILT_IN_AGENTS["codex"].parseToolOutput("Tool: Edit")).toBe("Edit");
     // copilot
     expect(BUILT_IN_AGENTS["copilot"].parseToolOutput("Tool: Read")).toBe("Read");
+    // grok streaming-json
+    expect(BUILT_IN_AGENTS["grok"].parseToolOutput(JSON.stringify({
+      type: "tool_call",
+      toolName: "read_file",
+    }))).toBe("read_file");
+    // agy stream-json
+    expect(BUILT_IN_AGENTS["agy"].parseToolOutput(JSON.stringify({
+      event: "step_update",
+      step_update: { tool_info: { name: "run_command" } },
+    }))).toBe("run_command");
   });
 
   it("each agent's buildEnv returns an env object", () => {

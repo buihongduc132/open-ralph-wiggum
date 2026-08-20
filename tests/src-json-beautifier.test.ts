@@ -43,6 +43,16 @@ describe("isJsonModeAgent", () => {
     expect(isJsonModeAgent("cursor-agent")).toBe(true);
   });
 
+  it("returns true for intrinsic JSON agents (grok and agy)", () => {
+    expect(isJsonModeAgent("grok")).toBe(true);
+    expect(isJsonModeAgent("agy")).toBe(true);
+  });
+
+  it("returns true when extraFlags contain --output-format streaming-json", () => {
+    expect(isJsonModeAgent("some-agent", ["--output-format", "streaming-json"])).toBe(true);
+    expect(isJsonModeAgent("some-agent", ["--output-format=streaming-json"])).toBe(true);
+  });
+
   it("returns false for non-JSON agents without JSON flags", () => {
     expect(isJsonModeAgent("opencode")).toBe(false);
     expect(isJsonModeAgent("copilot")).toBe(false);
@@ -89,6 +99,8 @@ describe("hasJsonAdapter", () => {
     expect(hasJsonAdapter("cursor-agent")).toBe(true);
     expect(hasJsonAdapter("codex")).toBe(true);
     expect(hasJsonAdapter("gemini")).toBe(true);
+    expect(hasJsonAdapter("grok")).toBe(true);
+    expect(hasJsonAdapter("agy")).toBe(true);
   });
 
   it("returns false for agents without adapters", () => {
@@ -845,6 +857,97 @@ describe("gemini adapter (beautify mode)", () => {
   });
 });
 
+describe("grok streaming-json adapter (beautify mode)", () => {
+  const cfg = config({ agentType: "grok", verboseTools: true });
+
+  it("renders text events from data", () => {
+    const line = JSON.stringify({ type: "text", data: "Here's a summary" });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.some(r => stripAnsi(r).includes("Here's a summary"))).toBe(true);
+    expect(result.every(r => !r.trim().startsWith("{"))).toBe(true);
+  });
+
+  it("renders tool_call toolName", () => {
+    const line = JSON.stringify({
+      type: "tool_call",
+      toolCallId: "call_1",
+      toolName: "read_file",
+      kind: "read",
+      status: "in_progress",
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.some(r => stripAnsi(r).includes("read_file"))).toBe(true);
+  });
+
+  it("renders assistant tool_use and result text", () => {
+    const assistant = JSON.stringify({
+      type: "assistant",
+      message: {
+        model: "grok-build",
+        content: [
+          { type: "text", text: "Let me read the file." },
+          { type: "tool_use", id: "call_1", name: "read_file", input: { path: "src/main.rs" } },
+        ],
+      },
+    });
+    const assistantOut = beautifyJsonLine(assistant, cfg);
+    expect(assistantOut.some(r => stripAnsi(r).includes("Let me read the file."))).toBe(true);
+    expect(assistantOut.some(r => stripAnsi(r).includes("read_file"))).toBe(true);
+
+    const resultLine = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      result: "Done with the review",
+    });
+    const resultOut = beautifyJsonLine(resultLine, cfg);
+    expect(resultOut.some(r => stripAnsi(r).includes("Done with the review"))).toBe(true);
+  });
+});
+
+describe("agy stream-json adapter (beautify mode)", () => {
+  const cfg = config({ agentType: "agy", verboseTools: true });
+
+  it("renders step_update text_delta and tool_info.name", () => {
+    const textLine = JSON.stringify({
+      event: "step_update",
+      step_update: { step_index: 1, state: "ACTIVE", step_type: "agent_response", text_delta: "I'll run the tests..." },
+    });
+    const textOut = beautifyJsonLine(textLine, cfg);
+    expect(textOut.some(r => stripAnsi(r).includes("I'll run the tests..."))).toBe(true);
+
+    const toolLine = JSON.stringify({
+      event: "step_update",
+      step_update: {
+        step_index: 4,
+        state: "DONE",
+        step_type: "tool",
+        tool_name: "run_command",
+        tool_info: { name: "run_command", parameters: { CommandLine: "npm test" } },
+      },
+    });
+    const toolOut = beautifyJsonLine(toolLine, cfg);
+    expect(toolOut.some(r => stripAnsi(r).includes("run_command"))).toBe(true);
+  });
+
+  it("renders result.response", () => {
+    const line = JSON.stringify({
+      event: "result",
+      result: { status: "SUCCESS", response: "All tests passed" },
+    });
+    const result = beautifyJsonLine(line, cfg);
+    expect(result.some(r => stripAnsi(r).includes("All tests passed"))).toBe(true);
+    expect(result.every(r => !r.trim().startsWith("{"))).toBe(true);
+  });
+
+  it("suppresses init events", () => {
+    const line = JSON.stringify({
+      event: "init",
+      init: { cwd: "/repo", permission_mode: "always-proceed", tools: ["read_file"] },
+    });
+    expect(beautifyJsonLine(line, cfg)).toEqual([]);
+  });
+});
+
 // ─── extractJsonCompletionText: non-Claude agents ───────────────────────────
 
 describe("extractJsonCompletionText: non-Claude agents", () => {
@@ -870,6 +973,26 @@ describe("extractJsonCompletionText: non-Claude agents", () => {
     const line = JSON.stringify({ text: "Gemini output" });
     const result = extractJsonCompletionText(line, "gemini");
     expect(result.some(r => r.includes("Gemini output"))).toBe(true);
+  });
+
+  it("extracts text from grok streaming-json text/result events", () => {
+    const text = extractJsonCompletionText(JSON.stringify({ type: "text", data: "Grok summary" }), "grok");
+    expect(text.some(r => r.includes("Grok summary"))).toBe(true);
+    const result = extractJsonCompletionText(JSON.stringify({ type: "result", result: "Grok done" }), "grok");
+    expect(result.some(r => r.includes("Grok done"))).toBe(true);
+  });
+
+  it("extracts text from agy stream-json step_update/result events", () => {
+    const delta = extractJsonCompletionText(JSON.stringify({
+      event: "step_update",
+      step_update: { text_delta: "AGY is working" },
+    }), "agy");
+    expect(delta.some(r => r.includes("AGY is working"))).toBe(true);
+    const result = extractJsonCompletionText(JSON.stringify({
+      event: "result",
+      result: { response: "AGY finished" },
+    }), "agy");
+    expect(result.some(r => r.includes("AGY finished"))).toBe(true);
   });
 
   it("extracts text from stream_event with nested text_delta", () => {

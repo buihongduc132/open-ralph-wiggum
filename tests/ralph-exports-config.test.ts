@@ -79,6 +79,8 @@ describe("AGENT_TYPES constant", () => {
     expect(AGENT_TYPES).toContain("codex");
     expect(AGENT_TYPES).toContain("copilot");
     expect(AGENT_TYPES).toContain("cursor-agent");
+    expect(AGENT_TYPES).toContain("grok");
+    expect(AGENT_TYPES).toContain("agy");
   });
 
   it("is a readonly tuple", () => {
@@ -703,6 +705,8 @@ describe("getDefaultConfig", () => {
     expect(types).toContain("claude-code");
     expect(types).toContain("codex");
     expect(types).toContain("copilot");
+    expect(types).toContain("grok");
+    expect(types).toContain("agy");
   });
 
   it("each agent has required fields", () => {

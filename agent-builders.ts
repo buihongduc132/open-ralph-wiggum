@@ -30,7 +30,27 @@ const runBuilder = (prompt: string, model: string, options?: AgentBuildArgsOptio
   return cmdArgs;
 };
 
-export const ARGS_TEMPLATES: Record<"opencode" | "opencode-raw" | "claude-code" | "codex" | "copilot" | "default" | "gemy" | "gemini" | "omox", (
+const grokBuilder = (prompt: string, model: string, options?: AgentBuildArgsOptions) => {
+  const cmdArgs = ["-p", prompt];
+  if (model?.trim()) cmdArgs.push("-m", model);
+  if (options?.allowAllPermissions) cmdArgs.push("--yolo");
+  if (options?.streamOutput) cmdArgs.push("--output-format", "streaming-json");
+  if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
+  return cmdArgs;
+};
+
+const agyBuilder = (prompt: string, model: string, options?: AgentBuildArgsOptions) => {
+  // agy -p consumes the rest of argv, so flags must come first and -p last.
+  const cmdArgs: string[] = [];
+  if (model?.trim()) cmdArgs.push("--model", model);
+  if (options?.allowAllPermissions) cmdArgs.push("--dangerously-skip-permissions");
+  if (options?.streamOutput) cmdArgs.push("--output-format", "stream-json");
+  if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
+  cmdArgs.push("-p", prompt);
+  return cmdArgs;
+};
+
+export const ARGS_TEMPLATES: Record<"opencode" | "opencode-raw" | "claude-code" | "codex" | "copilot" | "default" | "gemy" | "gemini" | "omox" | "grok" | "agy", (
   prompt: string,
   model: string,
   options?: AgentBuildArgsOptions,
@@ -82,5 +102,7 @@ export const ARGS_TEMPLATES: Record<"opencode" | "opencode-raw" | "claude-code" 
   "gemy": geminiBuilder,
   "gemini": geminiBuilder,
   "omox": runBuilder,
+  "grok": grokBuilder,
+  "agy": agyBuilder,
 };
 
