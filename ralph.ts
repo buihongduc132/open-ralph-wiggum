@@ -107,7 +107,7 @@ let customConfigPath = "";
 let initConfigPath: string | undefined = undefined;
 let initTomlConfigPath = "";
 
-export const AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot", "cursor-agent", "grok", "agy"] as const;
+export const AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot", "cursor-agent", "grok", "agy", "hermes"] as const;
 export type AgentType = (typeof AGENT_TYPES)[number];
 
 export type AgentEnvOptions = { filterPlugins?: boolean; allowAllPermissions?: boolean };
@@ -296,6 +296,7 @@ function parseJsonStreamToolName(line: string): string | null {
 
 PARSE_PATTERNS["grok"] = parseJsonStreamToolName;
 PARSE_PATTERNS["agy"] = parseJsonStreamToolName;
+PARSE_PATTERNS["hermes"] = defaultParseToolOutput;
 
 
 
@@ -464,6 +465,7 @@ export function getDefaultConfig(): RalphConfig {
          { type: "copilot", command: "copilot", configName: "Copilot CLI", argsTemplate: "copilot", envTemplate: "default", parsePattern: "copilot" },
          { type: "grok", command: "grok", configName: "Grok", argsTemplate: "grok", envTemplate: "default", parsePattern: "grok" },
          { type: "agy", command: "agy", configName: "AGY", argsTemplate: "agy", envTemplate: "default", parsePattern: "agy" },
+         { type: "hermes", command: "hermes", configName: "Hermes", argsTemplate: "hermes", envTemplate: "default", parsePattern: "hermes" },
       ],
    };
 }
@@ -1155,6 +1157,7 @@ export function resolveAgentBinary(agentType: string, cliBinary?: string): strin
       "cursor-agent": "cursor-agent",
       grok: "grok",
       agy: "agy",
+      hermes: "hermes",
    };
    return resolveCommand(defaults[agentType] ?? agentType);
 }
@@ -1239,6 +1242,14 @@ export const BUILT_IN_AGENTS: Record<AgentType, AgentConfig> = {
       buildEnv: ENV_TEMPLATES["default"],
       parseToolOutput: PARSE_PATTERNS["agy"],
       configName: "AGY",
+   },
+   hermes: {
+      type: "hermes",
+      command: resolveCommand("hermes", process.env.RALPH_HERMES_BINARY),
+      buildArgs: ARGS_TEMPLATES["hermes"],
+      buildEnv: ENV_TEMPLATES["default"],
+      parseToolOutput: PARSE_PATTERNS["hermes"],
+      configName: "Hermes",
    },
 };
 
@@ -1352,7 +1363,7 @@ Arguments:
   prompt              Task description for the AI to work on
 
 Options:
-  --agent AGENT       AI agent to use: opencode (default), claude-code, codex, copilot, cursor-agent, grok, agy
+  --agent AGENT       AI agent to use: opencode (default), claude-code, codex, copilot, cursor-agent, grok, agy, hermes
   --agent-binary PATH Binary for the selected agent (name resolved via PATH, or absolute path)
                       e.g. --agent claude-code --agent-binary claude-stali
                       e.g. --agent claude-code --agent-binary /home/bhd/bin/claude-stali
@@ -1366,7 +1377,7 @@ Options:
   --model MODEL       Model to use (agent-specific, e.g., anthropic/claude-sonnet)
   --rotation LIST     Agent/model rotation for each iteration (comma-separated)
                       Each entry must be "agent:model" format
-                      Valid agents: opencode, claude-code, codex, copilot, cursor-agent, grok, agy
+                      Valid agents: opencode, claude-code, codex, copilot, cursor-agent, grok, agy, hermes
                       Example: --rotation "opencode:claude-sonnet-4,claude-code:gpt-4o"
                       When used, --agent and --model are ignored
   --stalling-timeout DURATION  Time without activity before considering agent stalled (default: 2h)

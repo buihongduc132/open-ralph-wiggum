@@ -179,6 +179,19 @@ describe("parseMainArgs", () => {
       expect(parseMainArgs(["--agent", "agy"], VALID_AGENTS).agentType).toBe("agy");
    });
 
+   it("accepts --agent hermes and --agent-binary with hermes", () => {
+      expect(VALID_AGENTS).toContain("hermes");
+      const parsed = parseMainArgs(["--agent", "hermes", "--agent-binary", "tests/helpers/fake-agent.sh"], VALID_AGENTS);
+      expect(parsed.agentType).toBe("hermes");
+      expect(parsed.agentBinary).toBe("tests/helpers/fake-agent.sh");
+   });
+
+   it("accepts hermes in --rotation", () => {
+      expect(parseRotationInput("hermes:anthropic/claude-sonnet-4", VALID_AGENTS)).toEqual([
+         "hermes:anthropic/claude-sonnet-4",
+      ]);
+   });
+
    it("accepts grok and agy in --rotation", () => {
       expect(parseRotationInput("grok:grok-build,agy:gemini-3.1-pro-high", VALID_AGENTS)).toEqual([
          "grok:grok-build",

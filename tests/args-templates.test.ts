@@ -284,6 +284,33 @@ describe("ARGS_TEMPLATES", () => {
          expect(buffered).not.toContain("--output-format");
       });
    });
+
+   describe("hermes", () => {
+      const hermes: BuildArgsFn = ARGS_TEMPLATES["hermes"];
+
+      it("puts the prompt as the value of -z, not -p", () => {
+         const result = hermes("fix the bug", "anthropic/claude-sonnet-4", {});
+         expect(flagValue(result, "-z")).toBe("fix the bug");
+         expect(flagValue(result, "-p")).toBeUndefined();
+      });
+
+      it("includes -m when a model is set", () => {
+         expect(flagValue(hermes("fix the bug", "anthropic/claude-sonnet-4", {}), "-m")).toBe("anthropic/claude-sonnet-4");
+      });
+
+      it("includes --yolo only when allowAllPermissions is set", () => {
+         expect(hermes("p", "", { allowAllPermissions: true })).toContain("--yolo");
+         expect(hermes("p", "", { allowAllPermissions: false })).not.toContain("--yolo");
+         expect(hermes("p", "", {})).not.toContain("--yolo");
+      });
+
+      it("places profile -p before -z when extraFlags pass a profile", () => {
+         const result = hermes("fix the bug", "", { extraFlags: ["-p", "coder"] });
+         expect(flagValue(result, "-p")).toBe("coder");
+         expect(flagValue(result, "-z")).toBe("fix the bug");
+         expect(result.indexOf("-p")).toBeLessThan(result.indexOf("-z"));
+      });
+   });
    KT:  // -------------------------------------------------------------------------
    // -------------------------------------------------------------------------
    // opencode-raw — like opencode but without the hardcoded 'run' subcommand.

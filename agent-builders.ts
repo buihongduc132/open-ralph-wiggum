@@ -10,6 +10,8 @@ export type AgentBuildArgsOptions = {
   streamOutput?: boolean;
   /** When true, skip emitting -m (model flag) since passthrough --model overrides it */
   skipModelFlag?: boolean;
+  /** Hermes profile name (`-p` / `--profile`). Hermes `-p` is profile, not prompt. */
+  profile?: string;
 };
 
 const geminiBuilder = (prompt: string, model: string, options?: AgentBuildArgsOptions) => {
@@ -52,7 +54,31 @@ const agyBuilder = (prompt: string, model: string, options?: AgentBuildArgsOptio
   return cmdArgs;
 };
 
-export const ARGS_TEMPLATES: Record<"opencode" | "opencode-raw" | "claude-code" | "codex" | "copilot" | "default" | "gemy" | "gemini" | "omox" | "grok" | "agy", (
+function extraFlagsHaveProfile(extraFlags?: string[]): boolean {
+  if (!extraFlags?.length) return false;
+  return extraFlags.some((flag) =>
+    flag === "-p" || flag === "--profile" || flag.startsWith("--profile="),
+  );
+}
+
+const hermesBuilder = (prompt: string, model: string, options?: AgentBuildArgsOptions) => {
+  // Hermes `-p` is profile, not prompt. Prompt is `-z` / `--oneshot`.
+  // Profile flags must come before `-z` so `-p` cannot swallow the prompt.
+  const cmdArgs: string[] = [];
+  const extras = options?.extraFlags ?? [];
+  const profile = options?.profile?.trim();
+  if (profile && !extraFlagsHaveProfile(extras)) {
+    cmdArgs.push("-p", profile);
+  }
+  const hasPassthroughModel = extras.includes("-m") || extras.includes("--model") || options?.skipModelFlag;
+  if (model?.trim() && !hasPassthroughModel) cmdArgs.push("-m", model);
+  if (options?.allowAllPermissions) cmdArgs.push("--yolo");
+  if (extras.length) cmdArgs.push(...extras);
+  cmdArgs.push("-z", prompt);
+  return cmdArgs;
+};
+
+export const ARGS_TEMPLATES: Record<"opencode" | "opencode-raw" | "claude-code" | "codex" | "copilot" | "default" | "gemy" | "gemini" | "omox" | "grok" | "agy" | "hermes", (
   prompt: string,
   model: string,
   options?: AgentBuildArgsOptions,
@@ -106,5 +132,6 @@ export const ARGS_TEMPLATES: Record<"opencode" | "opencode-raw" | "claude-code" 
   "omox": runBuilder,
   "grok": grokBuilder,
   "agy": agyBuilder,
+  "hermes": hermesBuilder,
 };
 

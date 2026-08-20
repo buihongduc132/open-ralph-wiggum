@@ -12,9 +12,9 @@ if ! command -v bun &> /dev/null; then
     exit 1
 fi
 
-# Check for agent CLI (OpenCode, Claude Code, Codex, Copilot CLI, Cursor Agent, Grok, or AGY)
-if ! command -v opencode &> /dev/null && ! command -v claude &> /dev/null && ! command -v codex &> /dev/null && ! command -v copilot &> /dev/null && ! command -v cursor-agent &> /dev/null && ! command -v grok &> /dev/null && ! command -v agy &> /dev/null; then
-    echo "Error: OpenCode, Claude Code, Codex, Copilot CLI, Cursor Agent, Grok, or AGY is required but not installed."
+# Check for agent CLI (OpenCode, Claude Code, Codex, Copilot CLI, Cursor Agent, Grok, AGY, or Hermes)
+if ! command -v opencode &> /dev/null && ! command -v claude &> /dev/null && ! command -v codex &> /dev/null && ! command -v copilot &> /dev/null && ! command -v cursor-agent &> /dev/null && ! command -v grok &> /dev/null && ! command -v agy &> /dev/null && ! command -v hermes &> /dev/null; then
+    echo "Error: OpenCode, Claude Code, Codex, Copilot CLI, Cursor Agent, Grok, AGY, or Hermes is required but not installed."
     echo "Install OpenCode: npm install -g opencode-ai"
     echo "Install Claude Code: https://claude.ai/code"
     echo "Install Codex: https://developers.openai.com/codex/"
@@ -22,6 +22,7 @@ if ! command -v opencode &> /dev/null && ! command -v claude &> /dev/null && ! c
     echo "Install Cursor Agent: curl https://cursor.com/install -fsSL | bash"
     echo "Install Grok: https://docs.x.ai/build/overview"
     echo "Install AGY (Antigravity CLI): https://github.com/google-antigravity/antigravity-cli"
+    echo "Install Hermes: https://github.com/nousresearch/hermes-agent"
     exit 1
 fi
 
@@ -39,6 +40,8 @@ if ! command -v opencode &> /dev/null; then
         echo "Use --agent grok or install OpenCode."
     elif command -v agy &> /dev/null; then
         echo "Use --agent agy or install OpenCode."
+    elif command -v hermes &> /dev/null; then
+        echo "Use --agent hermes or install OpenCode."
     fi
 fi
 

@@ -91,6 +91,7 @@ function parseJsonStreamToolName(line: string): string | null {
 
 PARSE_PATTERNS["grok"] = parseJsonStreamToolName;
 PARSE_PATTERNS["agy"] = parseJsonStreamToolName;
+PARSE_PATTERNS["hermes"] = defaultParseToolOutput;
 
 export function loadPluginsFromConfig(configPath: string): string[] {
    if (!existsSync(configPath)) {
@@ -192,6 +193,7 @@ export function resolveAgentBinary(agentType: string, cliBinary?: string): strin
       "cursor-agent": "cursor-agent",
       grok: "grok",
       agy: "agy",
+      hermes: "hermes",
    };
    return resolveCommand(defaults[agentType] ?? agentType);
 }
@@ -312,6 +314,7 @@ export function getDefaultConfig(): RalphConfig {
          { type: "copilot", command: "copilot", configName: "Copilot CLI", argsTemplate: "copilot", envTemplate: "default", parsePattern: "copilot" },
          { type: "grok", command: "grok", configName: "Grok", argsTemplate: "grok", envTemplate: "default", parsePattern: "grok" },
          { type: "agy", command: "agy", configName: "AGY", argsTemplate: "agy", envTemplate: "default", parsePattern: "agy" },
+         { type: "hermes", command: "hermes", configName: "Hermes", argsTemplate: "hermes", envTemplate: "default", parsePattern: "hermes" },
       ],
    };
 }
@@ -372,5 +375,13 @@ export const BUILT_IN_AGENTS: Record<AgentType, AgentConfig> = {
       buildEnv: ENV_TEMPLATES["default"],
       parseToolOutput: PARSE_PATTERNS["agy"],
       configName: "AGY",
+   },
+   hermes: {
+      type: "hermes",
+      command: resolveCommand("hermes", process.env.RALPH_HERMES_BINARY),
+      buildArgs: ARGS_TEMPLATES["hermes"],
+      buildEnv: ENV_TEMPLATES["default"],
+      parseToolOutput: PARSE_PATTERNS["hermes"],
+      configName: "Hermes",
    },
 };

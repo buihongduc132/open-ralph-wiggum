@@ -89,6 +89,7 @@ describe("BUILT_IN_AGENTS command invariants", () => {
       ["copilot", "copilot"],
       ["grok", "grok"],
       ["agy", "agy"],
+      ["hermes", "hermes"],
    ] as const) {
       it(`${type}: resolveCommand("${binary}") is defined and non-empty`, () => {
          const cmd = resolveCommand(binary, undefined, undefined);

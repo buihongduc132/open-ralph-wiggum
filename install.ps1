@@ -18,8 +18,9 @@ $hasCopilot = Get-Command copilot -ErrorAction SilentlyContinue
 $hasCursorAgent = Get-Command cursor-agent -ErrorAction SilentlyContinue
 $hasGrok = Get-Command grok -ErrorAction SilentlyContinue
 $hasAgy = Get-Command agy -ErrorAction SilentlyContinue
-if (-not $hasOpenCode -and -not $hasClaude -and -not $hasCodex -and -not $hasCopilot -and -not $hasCursorAgent -and -not $hasGrok -and -not $hasAgy) {
-  Write-Error "OpenCode, Claude Code, Codex, Copilot CLI, Cursor Agent, Grok, or AGY is required but not installed. Install OpenCode: npm install -g opencode-ai. Install Claude Code: https://claude.ai/code. Install Codex: https://developers.openai.com/codex/. Install Copilot CLI: npm install -g @github/copilot. Install Cursor Agent: curl https://cursor.com/install -fsSL | bash. Install Grok: https://docs.x.ai/build/overview. Install AGY: https://github.com/google-antigravity/antigravity-cli"
+$hasHermes = Get-Command hermes -ErrorAction SilentlyContinue
+if (-not $hasOpenCode -and -not $hasClaude -and -not $hasCodex -and -not $hasCopilot -and -not $hasCursorAgent -and -not $hasGrok -and -not $hasAgy -and -not $hasHermes) {
+  Write-Error "OpenCode, Claude Code, Codex, Copilot CLI, Cursor Agent, Grok, AGY, or Hermes is required but not installed. Install OpenCode: npm install -g opencode-ai. Install Claude Code: https://claude.ai/code. Install Codex: https://developers.openai.com/codex/. Install Copilot CLI: npm install -g @github/copilot. Install Cursor Agent: curl https://cursor.com/install -fsSL | bash. Install Grok: https://docs.x.ai/build/overview. Install AGY: https://github.com/google-antigravity/antigravity-cli. Install Hermes: https://github.com/nousresearch/hermes-agent"
   exit 1
 }
 
@@ -36,6 +37,8 @@ if (-not $hasOpenCode) {
     Write-Warning "OpenCode not found. Default agent is OpenCode. Use --agent grok or install OpenCode."
   } elseif ($hasAgy) {
     Write-Warning "OpenCode not found. Default agent is OpenCode. Use --agent agy or install OpenCode."
+  } elseif ($hasHermes) {
+    Write-Warning "OpenCode not found. Default agent is OpenCode. Use --agent hermes or install OpenCode."
   }
 }
 
