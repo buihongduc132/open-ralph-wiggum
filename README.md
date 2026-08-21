@@ -52,6 +52,7 @@ Open Ralph Wiggum works with multiple AI coding agents. Switch between built-ins
 | **Cursor Agent** | `--agent cursor-agent` | Cursor Agent CLI for headless AI coding |
 | **Grok** | `--agent grok` | xAI Grok Build CLI (`grok -p`) for headless AI coding |
 | **AGY** | `--agent agy` | Google Antigravity CLI (`agy -p`) for headless AI coding |
+| **Hermes** | `--agent hermes` | Nous Hermes CLI (`hermes -z` oneshot; `-p` is profile, not prompt) |
 | **OpenCode** | `--agent opencode` | Default agent, open-source AI coding assistant |
 
 ### Custom agent / sub-agent CLIs
@@ -254,6 +255,7 @@ Configure agent binaries with these environment variables:
 | `RALPH_CURSOR_AGENT_BINARY` | Path to Cursor Agent CLI | `"cursor-agent"` |
 | `RALPH_GROK_BINARY` | Path to Grok Build CLI | `"grok"` |
 | `RALPH_AGY_BINARY` | Path to Antigravity CLI | `"agy"` |
+| `RALPH_HERMES_BINARY` | Path to Hermes CLI | `"hermes"` |
 | `RALPH_<TYPE>_BINARY` | Path override for any custom agent/sub-agent type from `agents.json` | Derived from `type` |
 
 **Note for Windows users:** Ralph automatically resolves `.cmd` extensions for npm-installed CLIs. If you encounter "command not found" errors, you can use these environment variables to specify the full path to the executable.
@@ -266,7 +268,7 @@ Configure agent binaries with these environment variables:
 ralph "<prompt>" [options]
 
 Options:
-  --agent AGENT            AI agent to use: opencode (default), claude-code, codex, copilot, cursor-agent, grok, agy
+  --agent AGENT            AI agent to use: opencode (default), claude-code, codex, copilot, cursor-agent, grok, agy, hermes
   --min-iterations N       Minimum iterations before completion allowed (default: 1)
   --max-iterations N       Stop after N iterations (default: unlimited)
   --completion-promise T   Text that signals completion (default: COMPLETE)
@@ -1137,7 +1139,7 @@ Each rotation entry uses the `agent:model` format:
 --rotation "agent1:model1,agent2:model2,agent3:model3"
 ```
 
-**Valid agents:** `opencode`, `claude-code`, `codex`, `copilot`, `cursor-agent`, `grok`, `agy`
+**Valid agents:** `opencode`, `claude-code`, `codex`, `copilot`, `cursor-agent`, `grok`, `agy`, `hermes`
 
 ### Example Usage
 
@@ -1177,7 +1179,7 @@ Invalid rotation entries produce clear error messages:
 
 **Invalid agent name:**
 ```
-Error: Invalid agent 'invalid' in rotation entry 'invalid:model'. Valid agents: opencode, claude-code, codex, copilot, cursor-agent, grok, agy
+Error: Invalid agent 'invalid' in rotation entry 'invalid:model'. Valid agents: opencode, claude-code, codex, copilot, cursor-agent, grok, agy, hermes
 ```
 
 **Malformed entry (missing colon):**

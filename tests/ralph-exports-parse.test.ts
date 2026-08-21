@@ -397,6 +397,12 @@ describe("BUILT_IN_AGENTS", () => {
     expect(BUILT_IN_AGENTS["agy"].configName).toBe("AGY");
   });
 
+  it("contains hermes agent", () => {
+    expect(BUILT_IN_AGENTS["hermes"]).toBeDefined();
+    expect(BUILT_IN_AGENTS["hermes"].type).toBe("hermes");
+    expect(BUILT_IN_AGENTS["hermes"].configName).toBe("Hermes");
+  });
+
   it("each agent has required interface fields", () => {
     for (const [key, agent] of Object.entries(BUILT_IN_AGENTS)) {
       expect(agent.type, `${key}: type`).toBeTruthy();
@@ -465,6 +471,8 @@ describe("BUILT_IN_AGENTS", () => {
       event: "step_update",
       step_update: { tool_info: { name: "run_command" } },
     }))).toBe("run_command");
+    expect(BUILT_IN_AGENTS["hermes"].parseToolOutput("Tool: terminal")).toBe("terminal");
+    expect(BUILT_IN_AGENTS["hermes"].parseToolOutput("Using write_file")).toBe("write_file");
   });
 
   it("each agent's buildEnv returns an env object", () => {

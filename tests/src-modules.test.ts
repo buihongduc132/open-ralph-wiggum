@@ -184,7 +184,7 @@ describe("ralph-agent-config module", () => {
          const config = getDefaultConfig();
          expect(config.version).toBe("1.0");
          expect(config.agents.length).toBeGreaterThanOrEqual(4);
-         expect(config.agents.map(a => a.type)).toEqual(expect.arrayContaining(["opencode", "claude-code", "codex", "copilot", "grok", "agy"]));
+         expect(config.agents.map(a => a.type)).toEqual(expect.arrayContaining(["opencode", "claude-code", "codex", "copilot", "grok", "agy", "hermes"]));
       });
    });
 
@@ -401,6 +401,7 @@ describe("ralph-agent-config module", () => {
          expect(types).toContain("copilot");
          expect(types).toContain("grok");
          expect(types).toContain("agy");
+         expect(types).toContain("hermes");
       });
 
       it("each agent has all required fields", () => {

@@ -866,6 +866,28 @@ var agyBuilder = (prompt, model, options) => {
   cmdArgs.push("-p", prompt);
   return cmdArgs;
 };
+function extraFlagsHaveProfile(extraFlags) {
+  if (!extraFlags?.length)
+    return false;
+  return extraFlags.some((flag) => flag === "-p" || flag === "--profile" || flag.startsWith("--profile="));
+}
+var hermesBuilder = (prompt, model, options) => {
+  const cmdArgs = [];
+  const extras = options?.extraFlags ?? [];
+  const profile = options?.profile?.trim();
+  if (profile && !extraFlagsHaveProfile(extras)) {
+    cmdArgs.push("-p", profile);
+  }
+  const hasPassthroughModel = extras.some((flag) => flag === "-m" || flag === "--model" || flag.startsWith("-m=") || flag.startsWith("--model=")) || options?.skipModelFlag;
+  if (model?.trim() && !hasPassthroughModel)
+    cmdArgs.push("-m", model);
+  if (options?.allowAllPermissions)
+    cmdArgs.push("--yolo");
+  if (extras.length)
+    cmdArgs.push(...extras);
+  cmdArgs.push("-z", prompt);
+  return cmdArgs;
+};
 var ARGS_TEMPLATES = {
   opencode: runBuilder,
   "opencode-raw": (prompt, model, options) => {
@@ -926,7 +948,8 @@ var ARGS_TEMPLATES = {
   gemini: geminiBuilder,
   omox: runBuilder,
   grok: grokBuilder,
-  agy: agyBuilder
+  agy: agyBuilder,
+  hermes: hermesBuilder
 };
 
 // template-utils.ts
@@ -2181,7 +2204,7 @@ function currentTasksFileLabel() {
 }
 var customConfigPath = "";
 var initConfigPath = undefined;
-var AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot", "cursor-agent", "grok", "agy"];
+var AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot", "cursor-agent", "grok", "agy", "hermes"];
 var DEFAULT_CONFIG_PATH = join3(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
 var stateDirInput = join3(process.cwd(), ".ralph");
 var PARSE_PATTERNS = {
@@ -2264,6 +2287,7 @@ function parseJsonStreamToolName(line) {
 }
 PARSE_PATTERNS["grok"] = parseJsonStreamToolName;
 PARSE_PATTERNS["agy"] = parseJsonStreamToolName;
+PARSE_PATTERNS["hermes"] = defaultParseToolOutput;
 function loadPluginsFromConfig(configPath) {
   if (!existsSync5(configPath)) {
     return [];
@@ -2416,7 +2440,8 @@ function getDefaultConfig() {
       { type: "codex", command: "codex", configName: "Codex", argsTemplate: "codex", envTemplate: "default", parsePattern: "codex" },
       { type: "copilot", command: "copilot", configName: "Copilot CLI", argsTemplate: "copilot", envTemplate: "default", parsePattern: "copilot" },
       { type: "grok", command: "grok", configName: "Grok", argsTemplate: "grok", envTemplate: "default", parsePattern: "grok" },
-      { type: "agy", command: "agy", configName: "AGY", argsTemplate: "agy", envTemplate: "default", parsePattern: "agy" }
+      { type: "agy", command: "agy", configName: "AGY", argsTemplate: "agy", envTemplate: "default", parsePattern: "agy" },
+      { type: "hermes", command: "hermes", configName: "Hermes", argsTemplate: "hermes", envTemplate: "default", parsePattern: "hermes" }
     ]
   };
 }
@@ -3028,7 +3053,8 @@ function resolveAgentBinary(agentType, cliBinary) {
     copilot: "copilot",
     "cursor-agent": "cursor-agent",
     grok: "grok",
-    agy: "agy"
+    agy: "agy",
+    hermes: "hermes"
   };
   return resolveCommand(defaults[agentType] ?? agentType);
 }
@@ -3109,6 +3135,14 @@ var BUILT_IN_AGENTS = {
     buildEnv: ENV_TEMPLATES["default"],
     parseToolOutput: PARSE_PATTERNS["agy"],
     configName: "AGY"
+  },
+  hermes: {
+    type: "hermes",
+    command: resolveCommand("hermes", process.env.RALPH_HERMES_BINARY),
+    buildArgs: ARGS_TEMPLATES["hermes"],
+    buildEnv: ENV_TEMPLATES["default"],
+    parseToolOutput: PARSE_PATTERNS["hermes"],
+    configName: "Hermes"
   }
 };
 if (import.meta.main) {
@@ -3838,7 +3872,7 @@ Arguments:
   prompt              Task description for the AI to work on
 
 Options:
-  --agent AGENT       AI agent to use: opencode (default), claude-code, codex, copilot, cursor-agent, grok, agy
+  --agent AGENT       AI agent to use: opencode (default), claude-code, codex, copilot, cursor-agent, grok, agy, hermes
   --agent-binary PATH Binary for the selected agent (name resolved via PATH, or absolute path)
                       e.g. --agent claude-code --agent-binary claude-stali
                       e.g. --agent claude-code --agent-binary /home/bhd/bin/claude-stali
@@ -3852,7 +3886,7 @@ Options:
   --model MODEL       Model to use (agent-specific, e.g., anthropic/claude-sonnet)
   --rotation LIST     Agent/model rotation for each iteration (comma-separated)
                       Each entry must be "agent:model" format
-                      Valid agents: opencode, claude-code, codex, copilot, cursor-agent, grok, agy
+                      Valid agents: opencode, claude-code, codex, copilot, cursor-agent, grok, agy, hermes
                       Example: --rotation "opencode:claude-sonnet-4,claude-code:gpt-4o"
                       When used, --agent and --model are ignored
   --stalling-timeout DURATION  Time without activity before considering agent stalled (default: 2h)
