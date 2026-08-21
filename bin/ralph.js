@@ -878,7 +878,7 @@ var hermesBuilder = (prompt, model, options) => {
   if (profile && !extraFlagsHaveProfile(extras)) {
     cmdArgs.push("-p", profile);
   }
-  const hasPassthroughModel = extras.includes("-m") || extras.includes("--model") || options?.skipModelFlag;
+  const hasPassthroughModel = extras.some((flag) => flag === "-m" || flag === "--model" || flag.startsWith("-m=") || flag.startsWith("--model=")) || options?.skipModelFlag;
   if (model?.trim() && !hasPassthroughModel)
     cmdArgs.push("-m", model);
   if (options?.allowAllPermissions)

@@ -66,11 +66,14 @@ const hermesBuilder = (prompt: string, model: string, options?: AgentBuildArgsOp
   // Profile flags must come before `-z` so `-p` cannot swallow the prompt.
   const cmdArgs: string[] = [];
   const extras = options?.extraFlags ?? [];
+  // `profile` is the builder API; CLI/TOML reach this via extraFlags (`-p` / `--profile`).
   const profile = options?.profile?.trim();
   if (profile && !extraFlagsHaveProfile(extras)) {
     cmdArgs.push("-p", profile);
   }
-  const hasPassthroughModel = extras.includes("-m") || extras.includes("--model") || options?.skipModelFlag;
+  const hasPassthroughModel = extras.some((flag) =>
+    flag === "-m" || flag === "--model" || flag.startsWith("-m=") || flag.startsWith("--model=")
+  ) || options?.skipModelFlag;
   if (model?.trim() && !hasPassthroughModel) cmdArgs.push("-m", model);
   if (options?.allowAllPermissions) cmdArgs.push("--yolo");
   if (extras.length) cmdArgs.push(...extras);

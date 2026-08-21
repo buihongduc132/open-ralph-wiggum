@@ -298,6 +298,19 @@ describe("ARGS_TEMPLATES", () => {
          expect(flagValue(hermes("fix the bug", "anthropic/claude-sonnet-4", {}), "-m")).toBe("anthropic/claude-sonnet-4");
       });
 
+      it("omits -m when model is empty", () => {
+         expect(hermes("fix the bug", "", {})).not.toContain("-m");
+      });
+
+      it("skips -m when extraFlags already pass a model", () => {
+         const dashed = hermes("fix the bug", "anthropic/claude-sonnet-4", { extraFlags: ["--model", "override"] });
+         expect(dashed).not.toContain("-m");
+         expect(flagValue(dashed, "--model")).toBe("override");
+         const equals = hermes("fix the bug", "anthropic/claude-sonnet-4", { extraFlags: ["--model=override"] });
+         expect(equals).not.toContain("-m");
+         expect(equals).toContain("--model=override");
+      });
+
       it("includes --yolo only when allowAllPermissions is set", () => {
          expect(hermes("p", "", { allowAllPermissions: true })).toContain("--yolo");
          expect(hermes("p", "", { allowAllPermissions: false })).not.toContain("--yolo");

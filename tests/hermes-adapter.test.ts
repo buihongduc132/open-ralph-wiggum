@@ -128,6 +128,15 @@ describe("hermes argv (shipped ARGS_TEMPLATES)", () => {
     expect(countFlag(long, "--profile")).toBe(1);
     expect(flagValue(long, "--profile")).toBe("coder");
   });
+
+  it("skips -m when extraFlags pass --model=equals form", () => {
+    const args = hermes("dummy hermes run", "anthropic/claude-sonnet-4", {
+      extraFlags: ["--model=override"],
+    });
+    expect(args).not.toContain("-m");
+    expect(args).toContain("--model=override");
+    expect(flagValue(args, "-z")).toBe("dummy hermes run");
+  });
 });
 
 describe("hermes parseToolOutput (shipped PARSE_PATTERNS)", () => {
@@ -171,13 +180,16 @@ async function runDummyRalph(): Promise<{ exitCode: number; output: string }> {
 }
 
 describe("dummy ralph loop with fake-agent.sh", () => {
-  it("completes one hermes iteration and names Hermes, not OpenCode", async () => {
-    const result = await runDummyRalph();
-    expect(result.exitCode).toBe(0);
-    expect(result.output).toContain("Agent: Hermes");
-    expect(result.output).not.toContain("Agent: OpenCode");
-    expect(result.output).not.toMatch(/--agent requires one of/);
-    expect(result.output).toContain("work finished");
-    expect(result.output).toMatch(/COMPLETE/);
-  }, { timeout: 60000 });
+  it("completes one hermes iteration twice with the same observables", async () => {
+    const first = await runDummyRalph();
+    const second = await runDummyRalph();
+    for (const result of [first, second]) {
+      expect(result.exitCode).toBe(0);
+      expect(result.output).toContain("Agent: Hermes");
+      expect(result.output).not.toContain("Agent: OpenCode");
+      expect(result.output).not.toMatch(/--agent requires one of/);
+      expect(result.output).toContain("work finished");
+      expect(result.output).toMatch(/COMPLETE/);
+    }
+  }, { timeout: 120000 });
 });

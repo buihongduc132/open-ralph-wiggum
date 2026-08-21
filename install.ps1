@@ -10,7 +10,7 @@ if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
   exit 1
 }
 
-# Check for agent CLI (OpenCode, Claude Code, Codex, Copilot CLI, Cursor Agent, Grok, or AGY)
+# Check for agent CLI (OpenCode, Claude Code, Codex, Copilot CLI, Cursor Agent, Grok, AGY, or Hermes)
 $hasOpenCode = Get-Command opencode -ErrorAction SilentlyContinue
 $hasClaude = Get-Command claude -ErrorAction SilentlyContinue
 $hasCodex = Get-Command codex -ErrorAction SilentlyContinue
