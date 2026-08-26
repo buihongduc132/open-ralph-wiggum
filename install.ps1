@@ -10,14 +10,17 @@ if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
   exit 1
 }
 
-# Check for agent CLI (OpenCode, Claude Code, Codex, Copilot CLI, or Cursor Agent)
+# Check for agent CLI (OpenCode, Claude Code, Codex, Copilot CLI, Cursor Agent, Grok, AGY, or Hermes)
 $hasOpenCode = Get-Command opencode -ErrorAction SilentlyContinue
 $hasClaude = Get-Command claude -ErrorAction SilentlyContinue
 $hasCodex = Get-Command codex -ErrorAction SilentlyContinue
 $hasCopilot = Get-Command copilot -ErrorAction SilentlyContinue
 $hasCursorAgent = Get-Command cursor-agent -ErrorAction SilentlyContinue
-if (-not $hasOpenCode -and -not $hasClaude -and -not $hasCodex -and -not $hasCopilot -and -not $hasCursorAgent) {
-  Write-Error "OpenCode, Claude Code, Codex, Copilot CLI, or Cursor Agent is required but not installed. Install OpenCode: npm install -g opencode-ai. Install Claude Code: https://claude.ai/code. Install Codex: https://developers.openai.com/codex/. Install Copilot CLI: npm install -g @github/copilot. Install Cursor Agent: curl https://cursor.com/install -fsSL | bash"
+$hasGrok = Get-Command grok -ErrorAction SilentlyContinue
+$hasAgy = Get-Command agy -ErrorAction SilentlyContinue
+$hasHermes = Get-Command hermes -ErrorAction SilentlyContinue
+if (-not $hasOpenCode -and -not $hasClaude -and -not $hasCodex -and -not $hasCopilot -and -not $hasCursorAgent -and -not $hasGrok -and -not $hasAgy -and -not $hasHermes) {
+  Write-Error "OpenCode, Claude Code, Codex, Copilot CLI, Cursor Agent, Grok, AGY, or Hermes is required but not installed. Install OpenCode: npm install -g opencode-ai. Install Claude Code: https://claude.ai/code. Install Codex: https://developers.openai.com/codex/. Install Copilot CLI: npm install -g @github/copilot. Install Cursor Agent: curl https://cursor.com/install -fsSL | bash. Install Grok: https://docs.x.ai/build/overview. Install AGY: https://github.com/google-antigravity/antigravity-cli. Install Hermes: https://github.com/nousresearch/hermes-agent"
   exit 1
 }
 
@@ -30,6 +33,12 @@ if (-not $hasOpenCode) {
     Write-Warning "OpenCode not found. Default agent is OpenCode. Use --agent copilot or install OpenCode."
   } elseif ($hasCursorAgent) {
     Write-Warning "OpenCode not found. Default agent is OpenCode. Use --agent cursor-agent or install OpenCode."
+  } elseif ($hasGrok) {
+    Write-Warning "OpenCode not found. Default agent is OpenCode. Use --agent grok or install OpenCode."
+  } elseif ($hasAgy) {
+    Write-Warning "OpenCode not found. Default agent is OpenCode. Use --agent agy or install OpenCode."
+  } elseif ($hasHermes) {
+    Write-Warning "OpenCode not found. Default agent is OpenCode. Use --agent hermes or install OpenCode."
   }
 }
 

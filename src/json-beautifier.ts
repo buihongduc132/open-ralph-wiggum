@@ -34,17 +34,21 @@ export interface BeautifierConfig {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const INTRINSIC_JSON_AGENTS = new Set(["claude-code", "cursor-agent"]);
+const INTRINSIC_JSON_AGENTS = new Set(["claude-code", "cursor-agent", "grok", "agy"]);
 
 const JSON_FLAGS = new Set([
   "--json",
 ]);
+
+const JSON_OUTPUT_FORMATS = new Set(["stream-json", "streaming-json"]);
 
 const ADAPTER_REGISTRY = new Map<string, (payload: Record<string, unknown>, cfg: BeautifierConfig) => string[]>([
   ["claude-code", claudeAdapter],
   ["cursor-agent", cursorAgentAdapter],
   ["codex", codexAdapter],
   ["gemini", geminiAdapter],
+  ["grok", grokAdapter],
+  ["agy", agyAdapter],
 ]);
 
 // ─── isJsonModeAgent ────────────────────────────────────────────────────────
@@ -54,9 +58,9 @@ export function isJsonModeAgent(agentType: string, extraFlags?: string[]): boole
   if (extraFlags && extraFlags.length > 0) {
     for (let i = 0; i < extraFlags.length; i++) {
       if (JSON_FLAGS.has(extraFlags[i])) return true;
-      // Check --output-format stream-json as a pair or --output-format=stream-json (equals syntax)
-      if (extraFlags[i] === "--output-format" && extraFlags[i + 1] === "stream-json") return true;
-      if (extraFlags[i] === "--output-format=stream-json") return true;
+      // Check --output-format stream-json / streaming-json as a pair or equals syntax
+      if (extraFlags[i] === "--output-format" && JSON_OUTPUT_FORMATS.has(extraFlags[i + 1] ?? "")) return true;
+      if (extraFlags[i] === "--output-format=stream-json" || extraFlags[i] === "--output-format=streaming-json") return true;
     }
   }
   return false;
@@ -501,6 +505,113 @@ function geminiAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): strin
   return []
 }
 
+// ─── Grok streaming-json Adapter ─────────────────────────────────────────────
+
+function pushSplitLines(lines: string[], value: string, color?: (s: string) => string): void {
+  for (const s of value.split(/\r?\n/)) {
+    const trimmed = s.trim();
+    if (trimmed) lines.push(color ? color(trimmed) : trimmed);
+  }
+}
+
+function grokAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
+  const t = typeof p.type === "string" ? p.type : "";
+
+  if (t === "assistant") return claudeAssistant(p, cfg);
+  if (t === "result") return claudeResult(p, cfg);
+  if (t === "error") return claudeError(p, cfg);
+
+  if (t === "text") {
+    const data = typeof p.data === "string" ? p.data : typeof p.text === "string" ? p.text : "";
+    if (!data.trim()) return [];
+    const lines: string[] = [];
+    pushSplitLines(lines, data);
+    return lines;
+  }
+
+  if (t === "thought") {
+    if (!cfg.showThinking) return [];
+    const data = typeof p.data === "string" ? p.data : "";
+    if (!data.trim()) return [];
+    const lines: string[] = [];
+    for (const s of data.split(/\r?\n/)) {
+      const trimmed = s.trim();
+      if (trimmed) lines.push(ANSI.gray(`💭 ${trimmed}`));
+    }
+    return lines;
+  }
+
+  if (t === "tool_call") {
+    if (!cfg.verboseTools) return [];
+    const name = typeof p.toolName === "string" ? p.toolName
+      : typeof p.name === "string" ? p.name
+      : typeof p.title === "string" ? p.title
+      : "unknown";
+    return [ANSI.yellow(`🔧 ${name}`)];
+  }
+
+  if (t === "tool_call_update") {
+    return [];
+  }
+
+  if (t === "end") {
+    const result = typeof p.result === "string" ? p.result : typeof p.text === "string" ? p.text : "";
+    if (result.trim()) return [ANSI.green(`✅ ${result.trim()}`)];
+    return [];
+  }
+
+  return [];
+}
+
+// ─── AGY stream-json Adapter ─────────────────────────────────────────────────
+
+function agyAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
+  const event = typeof p.event === "string" ? p.event : typeof p.type === "string" ? p.type : "";
+
+  if (event === "init") return [];
+
+  if (event === "step_update") {
+    const step = (p.step_update && typeof p.step_update === "object")
+      ? p.step_update as Record<string, unknown>
+      : p;
+    const lines: string[] = [];
+    const toolName = typeof step.tool_name === "string" ? step.tool_name
+      : (step.tool_info && typeof step.tool_info === "object" && typeof (step.tool_info as Record<string, unknown>).name === "string")
+        ? (step.tool_info as Record<string, unknown>).name as string
+        : "";
+    if (toolName && cfg.verboseTools) lines.push(ANSI.yellow(`🔧 ${toolName}`));
+    const delta = typeof step.text_delta === "string" ? step.text_delta
+      : typeof step.text === "string" ? step.text
+      : "";
+    if (delta.trim()) pushSplitLines(lines, delta);
+    return lines;
+  }
+
+  if (event === "result") {
+    const result = p.result;
+    if (typeof result === "string" && result.trim()) {
+      return [ANSI.green(`✅ ${result.trim()}`)];
+    }
+    if (result && typeof result === "object") {
+      const rec = result as Record<string, unknown>;
+      const text = typeof rec.response === "string" ? rec.response
+        : typeof rec.result === "string" ? rec.result
+        : typeof rec.text === "string" ? rec.text
+        : "";
+      if (text.trim()) return [ANSI.green(`✅ ${text.trim()}`)];
+    }
+    return [];
+  }
+
+  if (event === "assistant") return claudeAssistant(p, cfg);
+  if (event === "error" || p.error) {
+    if (!cfg.showError) return [];
+    return claudeError(p, cfg);
+  }
+
+  return [];
+}
+
 // ─── Generic Adapter ────────────────────────────────────────────────────────
 
 function genericAdapter(p: Record<string, unknown>, cfg?: BeautifierConfig): string[] {
@@ -593,6 +704,13 @@ function textExtract(p: Record<string, unknown>, agentType: string): string[] {
     }
   } else if (t === "result") {
     addText(p.result);
+  } else if (t === "text") {
+    addText(p.data);
+    addText(p.text);
+  } else if (t === "end") {
+    addText(p.result);
+    addText(p.text);
+    addText(p.data);
   } else if (t === "message") {
     // Codex: type=message with text content
     // addContent handles both string and array content, no need for separate addText
@@ -609,9 +727,28 @@ function textExtract(p: Record<string, unknown>, agentType: string): string[] {
   }
 
   // Gemini: top-level text or content fields (any event type)
-  if (t !== "assistant" && t !== "content_block_delta" && t !== "stream_event" && t !== "result" && t !== "message" && t !== "complete" && t !== "error") {
+  if (t !== "assistant" && t !== "content_block_delta" && t !== "stream_event" && t !== "result" && t !== "message" && t !== "complete" && t !== "error" && t !== "text" && t !== "end") {
     addText(p.text);
+    addText(p.data);
     if (typeof p.content === "string") addText(p.content);
+  }
+
+  const streamKind = (typeof p.event === "string" && p.event) ? p.event : t;
+  if (streamKind === "result") {
+    if (typeof p.result === "string") {
+      if (t !== "result") addText(p.result);
+    } else if (p.result && typeof p.result === "object") {
+      const rec = p.result as Record<string, unknown>;
+      addText(rec.response);
+      addText(rec.result);
+      addText(rec.text);
+    }
+  } else if (streamKind === "step_update") {
+    const step = (p.step_update && typeof p.step_update === "object")
+      ? p.step_update as Record<string, unknown>
+      : p;
+    addText(step.text_delta);
+    addText(step.text);
   }
 
   return lines;

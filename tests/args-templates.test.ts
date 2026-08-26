@@ -203,6 +203,127 @@ describe("ARGS_TEMPLATES", () => {
          expect(result).toContain("claude-sonnet-4");
       });
    });
+
+   function flagValue(args: string[], flag: string): string | undefined {
+      const i = args.indexOf(flag);
+      return i >= 0 ? args[i + 1] : undefined;
+   }
+
+   describe("grok", () => {
+      const grok: BuildArgsFn = ARGS_TEMPLATES["grok"];
+
+      it("puts the prompt as the value of -p", () => {
+         const result = grok("fix the bug", "grok-build", {});
+         expect(flagValue(result, "-p")).toBe("fix the bug");
+      });
+
+      it("includes -m when a model is set", () => {
+         const result = grok("fix the bug", "grok-build", {});
+         expect(flagValue(result, "-m")).toBe("grok-build");
+      });
+
+      it("omits -m when model is empty", () => {
+         const result = grok("fix the bug", "", {});
+         expect(result).not.toContain("-m");
+      });
+
+      it("includes --yolo only when allowAllPermissions is set", () => {
+         expect(grok("p", "", { allowAllPermissions: true })).toContain("--yolo");
+         expect(grok("p", "", { allowAllPermissions: false })).not.toContain("--yolo");
+         expect(grok("p", "", {})).not.toContain("--yolo");
+      });
+
+      it("includes --output-format streaming-json only when streaming", () => {
+         const streaming = grok("p", "", { streamOutput: true });
+         expect(flagValue(streaming, "--output-format")).toBe("streaming-json");
+         const buffered = grok("p", "", { streamOutput: false });
+         expect(buffered).not.toContain("streaming-json");
+         expect(buffered).not.toContain("--output-format");
+      });
+   });
+
+   describe("agy", () => {
+      const agy: BuildArgsFn = ARGS_TEMPLATES["agy"];
+
+      it("puts the prompt as the value of -p", () => {
+         const result = agy("fix the bug", "gemini-3.1-pro-high", {});
+         expect(flagValue(result, "-p")).toBe("fix the bug");
+      });
+
+      it("places -p last so extra flags are not swallowed as prompt", () => {
+         const result = agy("fix the bug", "gemini-3.1-pro-high", {
+            extraFlags: ["--sandbox"],
+            allowAllPermissions: true,
+            streamOutput: true,
+         });
+         expect(result[result.length - 2]).toBe("-p");
+         expect(result[result.length - 1]).toBe("fix the bug");
+      });
+
+      it("includes --model when a model is set", () => {
+         const result = agy("fix the bug", "gemini-3.1-pro-high", {});
+         expect(flagValue(result, "--model")).toBe("gemini-3.1-pro-high");
+      });
+
+      it("omits --model when model is empty", () => {
+         const result = agy("fix the bug", "", {});
+         expect(result).not.toContain("--model");
+      });
+
+      it("includes --dangerously-skip-permissions only when allowAllPermissions is set", () => {
+         expect(agy("p", "", { allowAllPermissions: true })).toContain("--dangerously-skip-permissions");
+         expect(agy("p", "", { allowAllPermissions: false })).not.toContain("--dangerously-skip-permissions");
+         expect(agy("p", "", {})).not.toContain("--dangerously-skip-permissions");
+      });
+
+      it("includes --output-format stream-json only when streaming", () => {
+         const streaming = agy("p", "", { streamOutput: true });
+         expect(flagValue(streaming, "--output-format")).toBe("stream-json");
+         const buffered = agy("p", "", { streamOutput: false });
+         expect(buffered).not.toContain("stream-json");
+         expect(buffered).not.toContain("--output-format");
+      });
+   });
+
+   describe("hermes", () => {
+      const hermes: BuildArgsFn = ARGS_TEMPLATES["hermes"];
+
+      it("puts the prompt as the value of -z, not -p", () => {
+         const result = hermes("fix the bug", "anthropic/claude-sonnet-4", {});
+         expect(flagValue(result, "-z")).toBe("fix the bug");
+         expect(flagValue(result, "-p")).toBeUndefined();
+      });
+
+      it("includes -m when a model is set", () => {
+         expect(flagValue(hermes("fix the bug", "anthropic/claude-sonnet-4", {}), "-m")).toBe("anthropic/claude-sonnet-4");
+      });
+
+      it("omits -m when model is empty", () => {
+         expect(hermes("fix the bug", "", {})).not.toContain("-m");
+      });
+
+      it("skips -m when extraFlags already pass a model", () => {
+         const dashed = hermes("fix the bug", "anthropic/claude-sonnet-4", { extraFlags: ["--model", "override"] });
+         expect(dashed).not.toContain("-m");
+         expect(flagValue(dashed, "--model")).toBe("override");
+         const equals = hermes("fix the bug", "anthropic/claude-sonnet-4", { extraFlags: ["--model=override"] });
+         expect(equals).not.toContain("-m");
+         expect(equals).toContain("--model=override");
+      });
+
+      it("includes --yolo only when allowAllPermissions is set", () => {
+         expect(hermes("p", "", { allowAllPermissions: true })).toContain("--yolo");
+         expect(hermes("p", "", { allowAllPermissions: false })).not.toContain("--yolo");
+         expect(hermes("p", "", {})).not.toContain("--yolo");
+      });
+
+      it("places profile -p before -z when extraFlags pass a profile", () => {
+         const result = hermes("fix the bug", "", { extraFlags: ["-p", "coder"] });
+         expect(flagValue(result, "-p")).toBe("coder");
+         expect(flagValue(result, "-z")).toBe("fix the bug");
+         expect(result.indexOf("-p")).toBeLessThan(result.indexOf("-z"));
+      });
+   });
    KT:  // -------------------------------------------------------------------------
    // -------------------------------------------------------------------------
    // opencode-raw — like opencode but without the hardcoded 'run' subcommand.

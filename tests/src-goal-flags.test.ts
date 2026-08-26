@@ -6,9 +6,9 @@
 
 import { describe, it, expect } from "bun:test";
 import { parseMainArgs, getDefaultMainArgs, applyTomlConfig } from "../src/parse-args";
-import type { RalphRuntimeConfig } from "../src/types";
+import { AGENT_TYPES, type RalphRuntimeConfig } from "../src/types";
 
-const VALID_AGENTS = ["opencode", "claude-code", "codex", "copilot", "cursor-agent"];
+const VALID_AGENTS = [...AGENT_TYPES];
 
 describe("goal CLI flags", () => {
    it("parses --goal flag with path", () => {

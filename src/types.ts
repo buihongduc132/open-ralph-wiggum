@@ -2,7 +2,7 @@
  * Shared types for the Ralph Wiggum loop system.
  */
 
-export const AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot", "cursor-agent"] as const;
+export const AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot", "cursor-agent", "grok", "agy", "hermes"] as const;
 export type AgentType = (typeof AGENT_TYPES)[number];
 
 export type AgentEnvOptions = { filterPlugins?: boolean; allowAllPermissions?: boolean };

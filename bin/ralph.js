@@ -21,15 +21,18 @@ var ANSI = {
   green: (s) => `\x1B[32m${s}\x1B[0m`,
   red: (s) => `\x1B[31m${s}\x1B[0m`
 };
-var INTRINSIC_JSON_AGENTS = new Set(["claude-code", "cursor-agent"]);
+var INTRINSIC_JSON_AGENTS = new Set(["claude-code", "cursor-agent", "grok", "agy"]);
 var JSON_FLAGS = new Set([
   "--json"
 ]);
+var JSON_OUTPUT_FORMATS = new Set(["stream-json", "streaming-json"]);
 var ADAPTER_REGISTRY = new Map([
   ["claude-code", claudeAdapter],
   ["cursor-agent", cursorAgentAdapter],
   ["codex", codexAdapter],
-  ["gemini", geminiAdapter]
+  ["gemini", geminiAdapter],
+  ["grok", grokAdapter],
+  ["agy", agyAdapter]
 ]);
 function isJsonModeAgent(agentType, extraFlags) {
   if (INTRINSIC_JSON_AGENTS.has(agentType))
@@ -38,9 +41,9 @@ function isJsonModeAgent(agentType, extraFlags) {
     for (let i = 0;i < extraFlags.length; i++) {
       if (JSON_FLAGS.has(extraFlags[i]))
         return true;
-      if (extraFlags[i] === "--output-format" && extraFlags[i + 1] === "stream-json")
+      if (extraFlags[i] === "--output-format" && JSON_OUTPUT_FORMATS.has(extraFlags[i + 1] ?? ""))
         return true;
-      if (extraFlags[i] === "--output-format=stream-json")
+      if (extraFlags[i] === "--output-format=stream-json" || extraFlags[i] === "--output-format=streaming-json")
         return true;
     }
   }
@@ -410,6 +413,97 @@ function geminiAdapter(p, cfg) {
   }
   return [];
 }
+function pushSplitLines(lines, value, color) {
+  for (const s of value.split(/\r?\n/)) {
+    const trimmed = s.trim();
+    if (trimmed)
+      lines.push(color ? color(trimmed) : trimmed);
+  }
+}
+function grokAdapter(p, cfg) {
+  const t = typeof p.type === "string" ? p.type : "";
+  if (t === "assistant")
+    return claudeAssistant(p, cfg);
+  if (t === "result")
+    return claudeResult(p, cfg);
+  if (t === "error")
+    return claudeError(p, cfg);
+  if (t === "text") {
+    const data = typeof p.data === "string" ? p.data : typeof p.text === "string" ? p.text : "";
+    if (!data.trim())
+      return [];
+    const lines = [];
+    pushSplitLines(lines, data);
+    return lines;
+  }
+  if (t === "thought") {
+    if (!cfg.showThinking)
+      return [];
+    const data = typeof p.data === "string" ? p.data : "";
+    if (!data.trim())
+      return [];
+    const lines = [];
+    for (const s of data.split(/\r?\n/)) {
+      const trimmed = s.trim();
+      if (trimmed)
+        lines.push(ANSI.gray(`\uD83D\uDCAD ${trimmed}`));
+    }
+    return lines;
+  }
+  if (t === "tool_call") {
+    if (!cfg.verboseTools)
+      return [];
+    const name = typeof p.toolName === "string" ? p.toolName : typeof p.name === "string" ? p.name : typeof p.title === "string" ? p.title : "unknown";
+    return [ANSI.yellow(`\uD83D\uDD27 ${name}`)];
+  }
+  if (t === "tool_call_update") {
+    return [];
+  }
+  if (t === "end") {
+    const result = typeof p.result === "string" ? p.result : typeof p.text === "string" ? p.text : "";
+    if (result.trim())
+      return [ANSI.green(`\u2705 ${result.trim()}`)];
+    return [];
+  }
+  return [];
+}
+function agyAdapter(p, cfg) {
+  const event = typeof p.event === "string" ? p.event : typeof p.type === "string" ? p.type : "";
+  if (event === "init")
+    return [];
+  if (event === "step_update") {
+    const step = p.step_update && typeof p.step_update === "object" ? p.step_update : p;
+    const lines = [];
+    const toolName = typeof step.tool_name === "string" ? step.tool_name : step.tool_info && typeof step.tool_info === "object" && typeof step.tool_info.name === "string" ? step.tool_info.name : "";
+    if (toolName && cfg.verboseTools)
+      lines.push(ANSI.yellow(`\uD83D\uDD27 ${toolName}`));
+    const delta = typeof step.text_delta === "string" ? step.text_delta : typeof step.text === "string" ? step.text : "";
+    if (delta.trim())
+      pushSplitLines(lines, delta);
+    return lines;
+  }
+  if (event === "result") {
+    const result = p.result;
+    if (typeof result === "string" && result.trim()) {
+      return [ANSI.green(`\u2705 ${result.trim()}`)];
+    }
+    if (result && typeof result === "object") {
+      const rec = result;
+      const text = typeof rec.response === "string" ? rec.response : typeof rec.result === "string" ? rec.result : typeof rec.text === "string" ? rec.text : "";
+      if (text.trim())
+        return [ANSI.green(`\u2705 ${text.trim()}`)];
+    }
+    return [];
+  }
+  if (event === "assistant")
+    return claudeAssistant(p, cfg);
+  if (event === "error" || p.error) {
+    if (!cfg.showError)
+      return [];
+    return claudeError(p, cfg);
+  }
+  return [];
+}
 function genericAdapter(p, cfg) {
   if (p.error && typeof p.error === "object") {
     if (cfg && !cfg.showError)
@@ -494,6 +588,13 @@ function textExtract(p, agentType) {
     }
   } else if (t === "result") {
     addText(p.result);
+  } else if (t === "text") {
+    addText(p.data);
+    addText(p.text);
+  } else if (t === "end") {
+    addText(p.result);
+    addText(p.text);
+    addText(p.data);
   } else if (t === "message") {
     addContent(p.content);
   } else if (t === "complete") {
@@ -505,10 +606,27 @@ function textExtract(p, agentType) {
       addText(p.error);
     }
   }
-  if (t !== "assistant" && t !== "content_block_delta" && t !== "stream_event" && t !== "result" && t !== "message" && t !== "complete" && t !== "error") {
+  if (t !== "assistant" && t !== "content_block_delta" && t !== "stream_event" && t !== "result" && t !== "message" && t !== "complete" && t !== "error" && t !== "text" && t !== "end") {
     addText(p.text);
+    addText(p.data);
     if (typeof p.content === "string")
       addText(p.content);
+  }
+  const streamKind = typeof p.event === "string" && p.event ? p.event : t;
+  if (streamKind === "result") {
+    if (typeof p.result === "string") {
+      if (t !== "result")
+        addText(p.result);
+    } else if (p.result && typeof p.result === "object") {
+      const rec = p.result;
+      addText(rec.response);
+      addText(rec.result);
+      addText(rec.text);
+    }
+  } else if (streamKind === "step_update") {
+    const step = p.step_update && typeof p.step_update === "object" ? p.step_update : p;
+    addText(step.text_delta);
+    addText(step.text);
   }
   return lines;
 }
@@ -721,6 +839,55 @@ var runBuilder = (prompt, model, options) => {
   cmdArgs.push(prompt);
   return cmdArgs;
 };
+var grokBuilder = (prompt, model, options) => {
+  const cmdArgs = ["-p", prompt];
+  const hasPassthroughModel = options?.extraFlags?.includes("-m") || options?.extraFlags?.includes("--model") || options?.skipModelFlag;
+  if (model?.trim() && !hasPassthroughModel)
+    cmdArgs.push("-m", model);
+  if (options?.allowAllPermissions)
+    cmdArgs.push("--yolo");
+  if (options?.streamOutput)
+    cmdArgs.push("--output-format", "streaming-json");
+  if (options?.extraFlags?.length)
+    cmdArgs.push(...options.extraFlags);
+  return cmdArgs;
+};
+var agyBuilder = (prompt, model, options) => {
+  const cmdArgs = [];
+  const hasPassthroughModel = options?.extraFlags?.includes("--model") || options?.skipModelFlag;
+  if (model?.trim() && !hasPassthroughModel)
+    cmdArgs.push("--model", model);
+  if (options?.allowAllPermissions)
+    cmdArgs.push("--dangerously-skip-permissions");
+  if (options?.streamOutput)
+    cmdArgs.push("--output-format", "stream-json");
+  if (options?.extraFlags?.length)
+    cmdArgs.push(...options.extraFlags);
+  cmdArgs.push("-p", prompt);
+  return cmdArgs;
+};
+function extraFlagsHaveProfile(extraFlags) {
+  if (!extraFlags?.length)
+    return false;
+  return extraFlags.some((flag) => flag === "-p" || flag === "--profile" || flag.startsWith("--profile="));
+}
+var hermesBuilder = (prompt, model, options) => {
+  const cmdArgs = [];
+  const extras = options?.extraFlags ?? [];
+  const profile = options?.profile?.trim();
+  if (profile && !extraFlagsHaveProfile(extras)) {
+    cmdArgs.push("-p", profile);
+  }
+  const hasPassthroughModel = extras.some((flag) => flag === "-m" || flag === "--model" || flag.startsWith("-m=") || flag.startsWith("--model=")) || options?.skipModelFlag;
+  if (model?.trim() && !hasPassthroughModel)
+    cmdArgs.push("-m", model);
+  if (options?.allowAllPermissions)
+    cmdArgs.push("--yolo");
+  if (extras.length)
+    cmdArgs.push(...extras);
+  cmdArgs.push("-z", prompt);
+  return cmdArgs;
+};
 var ARGS_TEMPLATES = {
   opencode: runBuilder,
   "opencode-raw": (prompt, model, options) => {
@@ -779,7 +946,10 @@ var ARGS_TEMPLATES = {
   },
   gemy: geminiBuilder,
   gemini: geminiBuilder,
-  omox: runBuilder
+  omox: runBuilder,
+  grok: grokBuilder,
+  agy: agyBuilder,
+  hermes: hermesBuilder
 };
 
 // template-utils.ts
@@ -2034,7 +2204,7 @@ function currentTasksFileLabel() {
 }
 var customConfigPath = "";
 var initConfigPath = undefined;
-var AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot", "cursor-agent"];
+var AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot", "cursor-agent", "grok", "agy", "hermes"];
 var DEFAULT_CONFIG_PATH = join3(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
 var stateDirInput = join3(process.cwd(), ".ralph");
 var PARSE_PATTERNS = {
@@ -2076,6 +2246,48 @@ PARSE_PATTERNS["pi"] = (line) => {
     return null;
   }
 };
+function parseJsonStreamToolName(line) {
+  try {
+    const evt = JSON.parse(stripAnsi(line));
+    if (!evt || typeof evt !== "object")
+      return null;
+    if (typeof evt.toolName === "string" && evt.toolName)
+      return evt.toolName;
+    if (evt.type === "tool_call") {
+      if (typeof evt.toolName === "string" && evt.toolName)
+        return evt.toolName;
+      if (typeof evt.name === "string" && evt.name)
+        return evt.name;
+    }
+    if (evt.type === "assistant" && evt.message && typeof evt.message === "object") {
+      const content = evt.message.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block && typeof block === "object" && block.type === "tool_use") {
+            const name = block.name;
+            if (typeof name === "string" && name)
+              return name;
+          }
+        }
+      }
+    }
+    const step = evt.step_update;
+    if (evt.event === "step_update" && step && typeof step === "object") {
+      if (typeof step.tool_name === "string" && step.tool_name)
+        return step.tool_name;
+      const info = step.tool_info;
+      if (info && typeof info === "object" && typeof info.name === "string" && info.name) {
+        return info.name;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+PARSE_PATTERNS["grok"] = parseJsonStreamToolName;
+PARSE_PATTERNS["agy"] = parseJsonStreamToolName;
+PARSE_PATTERNS["hermes"] = defaultParseToolOutput;
 function loadPluginsFromConfig(configPath) {
   if (!existsSync5(configPath)) {
     return [];
@@ -2226,7 +2438,10 @@ function getDefaultConfig() {
       { type: "opencode", command: "opencode", configName: "OpenCode", argsTemplate: "opencode", envTemplate: "opencode", parsePattern: "opencode" },
       { type: "claude-code", command: "claude", configName: "Claude Code", argsTemplate: "claude-code", envTemplate: "default", parsePattern: "claude-code" },
       { type: "codex", command: "codex", configName: "Codex", argsTemplate: "codex", envTemplate: "default", parsePattern: "codex" },
-      { type: "copilot", command: "copilot", configName: "Copilot CLI", argsTemplate: "copilot", envTemplate: "default", parsePattern: "copilot" }
+      { type: "copilot", command: "copilot", configName: "Copilot CLI", argsTemplate: "copilot", envTemplate: "default", parsePattern: "copilot" },
+      { type: "grok", command: "grok", configName: "Grok", argsTemplate: "grok", envTemplate: "default", parsePattern: "grok" },
+      { type: "agy", command: "agy", configName: "AGY", argsTemplate: "agy", envTemplate: "default", parsePattern: "agy" },
+      { type: "hermes", command: "hermes", configName: "Hermes", argsTemplate: "hermes", envTemplate: "default", parsePattern: "hermes" }
     ]
   };
 }
@@ -2836,7 +3051,10 @@ function resolveAgentBinary(agentType, cliBinary) {
     "claude-code": "claude",
     codex: "codex",
     copilot: "copilot",
-    "cursor-agent": "cursor-agent"
+    "cursor-agent": "cursor-agent",
+    grok: "grok",
+    agy: "agy",
+    hermes: "hermes"
   };
   return resolveCommand(defaults[agentType] ?? agentType);
 }
@@ -2901,6 +3119,30 @@ var BUILT_IN_AGENTS = {
     buildEnv: ENV_TEMPLATES["default"],
     parseToolOutput: PARSE_PATTERNS["claude-code"],
     configName: "Cursor Agent"
+  },
+  grok: {
+    type: "grok",
+    command: resolveCommand("grok", process.env.RALPH_GROK_BINARY),
+    buildArgs: ARGS_TEMPLATES["grok"],
+    buildEnv: ENV_TEMPLATES["default"],
+    parseToolOutput: PARSE_PATTERNS["grok"],
+    configName: "Grok"
+  },
+  agy: {
+    type: "agy",
+    command: resolveCommand("agy", process.env.RALPH_AGY_BINARY),
+    buildArgs: ARGS_TEMPLATES["agy"],
+    buildEnv: ENV_TEMPLATES["default"],
+    parseToolOutput: PARSE_PATTERNS["agy"],
+    configName: "AGY"
+  },
+  hermes: {
+    type: "hermes",
+    command: resolveCommand("hermes", process.env.RALPH_HERMES_BINARY),
+    buildArgs: ARGS_TEMPLATES["hermes"],
+    buildEnv: ENV_TEMPLATES["default"],
+    parseToolOutput: PARSE_PATTERNS["hermes"],
+    configName: "Hermes"
   }
 };
 if (import.meta.main) {
@@ -3630,7 +3872,7 @@ Arguments:
   prompt              Task description for the AI to work on
 
 Options:
-  --agent AGENT       AI agent to use: opencode (default), claude-code, codex, copilot, cursor-agent
+  --agent AGENT       AI agent to use: opencode (default), claude-code, codex, copilot, cursor-agent, grok, agy, hermes
   --agent-binary PATH Binary for the selected agent (name resolved via PATH, or absolute path)
                       e.g. --agent claude-code --agent-binary claude-stali
                       e.g. --agent claude-code --agent-binary /home/bhd/bin/claude-stali
@@ -3644,7 +3886,7 @@ Options:
   --model MODEL       Model to use (agent-specific, e.g., anthropic/claude-sonnet)
   --rotation LIST     Agent/model rotation for each iteration (comma-separated)
                       Each entry must be "agent:model" format
-                      Valid agents: opencode, claude-code, codex, copilot, cursor-agent
+                      Valid agents: opencode, claude-code, codex, copilot, cursor-agent, grok, agy, hermes
                       Example: --rotation "opencode:claude-sonnet-4,claude-code:gpt-4o"
                       When used, --agent and --model are ignored
   --stalling-timeout DURATION  Time without activity before considering agent stalled (default: 2h)
