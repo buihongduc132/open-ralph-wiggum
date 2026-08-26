@@ -80,6 +80,9 @@ function runRalphSync(tempDir: string, args: string[], timeoutMs = 15000): RunRe
       RALPH_CLAUDE_BINARY: fakeAgent,
       RALPH_COPILOT_BINARY: fakeAgent,
       RALPH_CURSOR_BINARY: fakeAgent,
+      RALPH_GROK_BINARY: fakeAgent,
+      RALPH_AGY_BINARY: fakeAgent,
+      RALPH_HERMES_BINARY: fakeAgent,
     },
   });
 
@@ -119,6 +122,9 @@ async function runRalph(tempDir: string, args: string[], timeoutMs = 30000): Pro
       RALPH_CLAUDE_BINARY: fakeAgent,
       RALPH_COPILOT_BINARY: fakeAgent,
       RALPH_CURSOR_BINARY: fakeAgent,
+      RALPH_GROK_BINARY: fakeAgent,
+      RALPH_AGY_BINARY: fakeAgent,
+      RALPH_HERMES_BINARY: fakeAgent,
     },
   });
 

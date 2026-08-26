@@ -1,6 +1,6 @@
 <p align="center">
   <h1 align="center">Open Ralph Wiggum</h1>
-  <h3 align="center">Autonomous Agentic Loop for Claude Code, Codex, Copilot CLI, Cursor Agent, OpenCode & custom agent/sub-agent CLIs</h3>
+  <h3 align="center">Autonomous Agentic Loop for Claude Code, Codex, Copilot CLI, Cursor Agent, Grok, AGY, Hermes, OpenCode & custom agent/sub-agent CLIs</h3>
 </p>
 
 <p align="center">
@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <em>Works with <b>Claude Code</b>, <b>OpenAI Codex</b>, <b>Copilot CLI</b>, <b>Cursor Agent</b>, <b>OpenCode</b>, and custom agent/sub-agent CLIs via <code>agents.json</code>.</em><br>
+  <em>Works with <b>Claude Code</b>, <b>OpenAI Codex</b>, <b>Copilot CLI</b>, <b>Cursor Agent</b>, <b>Grok</b>, <b>AGY</b>, <b>Hermes</b>, <b>OpenCode</b>, and custom agent/sub-agent CLIs via <code>agents.json</code>.</em><br>
   <em>Based on the <a href="https://ghuntley.com/ralph/">Ralph Wiggum technique</a> by Geoffrey Huntley</em>
 </p>
 
@@ -157,8 +157,9 @@ Switch between built-in agents or wire in your own sub-agent wrapper without cha
 - **Codex** (`--agent codex`) — OpenAI's code-specialized model
 - **Copilot CLI** (`--agent copilot`) — GitHub's agentic coding tool
 - **Cursor Agent** (`--agent cursor-agent`) — Cursor's headless AI coding agent
-- **Grok** (`--agent grok`) — xAI Grok Build CLI (`grok -p`, `--yolo`, `streaming-json`)
-- **AGY** (`--agent agy`) — Google Antigravity CLI (`agy -p`, `--dangerously-skip-permissions`, `stream-json`)
+- **Grok** (`--agent grok`) — xAI Grok Build CLI (`grok -p`, `--yolo`, `streaming-json`); Ralph also unwraps its direct JSON result envelope
+- **AGY** (`--agent agy`) — Google Antigravity CLI (`agy -p`, `--dangerously-skip-permissions`, `stream-json`); Ralph also unwraps AGY's direct JSON result envelope
+- **Hermes** (`--agent hermes`) — Nous Hermes CLI (`hermes -z` oneshot; `-p` selects a profile)
 - **OpenCode** (`--agent opencode`) — Open-source default option
 - **Custom agents** (`--agent <type>` + `--config agents.json`) — `ocxo`, `omp`, `pi`, `omox`, Gemini wrappers, or any compatible internal sub-agent CLI
 

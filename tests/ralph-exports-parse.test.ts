@@ -471,6 +471,7 @@ describe("BUILT_IN_AGENTS", () => {
       event: "step_update",
       step_update: { tool_info: { name: "run_command" } },
     }))).toBe("run_command");
+    expect(BUILT_IN_AGENTS["agy"].parseToolOutput("Using run_command")).toBe("run_command");
     expect(BUILT_IN_AGENTS["hermes"].parseToolOutput("Tool: terminal")).toBe("terminal");
     expect(BUILT_IN_AGENTS["hermes"].parseToolOutput("Using write_file")).toBe("write_file");
   });

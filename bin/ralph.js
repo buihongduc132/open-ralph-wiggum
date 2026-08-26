@@ -420,6 +420,30 @@ function pushSplitLines(lines, value, color) {
       lines.push(color ? color(trimmed) : trimmed);
   }
 }
+function grokResultLines(text, metadata, cfg) {
+  const trimmed = text.trim();
+  if (!trimmed)
+    return [];
+  const details = [];
+  if (cfg.showCost) {
+    if (typeof metadata.duration_seconds === "number" && Number.isFinite(metadata.duration_seconds)) {
+      details.push(`${metadata.duration_seconds.toFixed(1)}s`);
+    }
+    if (metadata.usage && typeof metadata.usage === "object") {
+      const usage = metadata.usage;
+      const totalTokens = typeof usage.total_tokens === "number" ? usage.total_tokens : typeof usage.totalTokens === "number" ? usage.totalTokens : undefined;
+      if (totalTokens !== undefined && Number.isFinite(totalTokens)) {
+        details.push(`${totalTokens} tokens`);
+      }
+    }
+    const cost = typeof metadata.cost === "number" ? metadata.cost : typeof metadata.cost_usd === "number" ? metadata.cost_usd : undefined;
+    if (cost !== undefined && Number.isFinite(cost)) {
+      details.push(`$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}`);
+    }
+  }
+  const suffix = details.length ? ` (${details.join(", ")})` : "";
+  return [ANSI.green(`\u2705 ${trimmed}${suffix}`)];
+}
 function grokAdapter(p, cfg) {
   const t = typeof p.type === "string" ? p.type : "";
   if (t === "assistant")
@@ -461,11 +485,43 @@ function grokAdapter(p, cfg) {
   }
   if (t === "end") {
     const result = typeof p.result === "string" ? p.result : typeof p.text === "string" ? p.text : "";
-    if (result.trim())
-      return [ANSI.green(`\u2705 ${result.trim()}`)];
-    return [];
+    return grokResultLines(result, p, cfg);
+  }
+  if (!t) {
+    if (typeof p.text === "string")
+      return grokResultLines(p.text, p, cfg);
+    if (typeof p.response === "string")
+      return grokResultLines(p.response, p, cfg);
+    if (typeof p.output === "string")
+      return grokResultLines(p.output, p, cfg);
+    if (p.error !== undefined) {
+      if (!cfg.showError)
+        return [];
+      return claudeError(p, cfg);
+    }
   }
   return [];
+}
+function agyResultLines(response, status, metadata, cfg) {
+  const text = response.trim();
+  if (!text)
+    return [];
+  const statusText = typeof status === "string" ? status.toUpperCase() : "";
+  const failed = statusText.length > 0 && !["SUCCESS", "OK", "DONE", "COMPLETED"].includes(statusText);
+  const details = [];
+  if (cfg.showCost) {
+    if (typeof metadata.duration_seconds === "number" && Number.isFinite(metadata.duration_seconds)) {
+      details.push(`${metadata.duration_seconds.toFixed(1)}s`);
+    }
+    if (metadata.usage && typeof metadata.usage === "object") {
+      const usage = metadata.usage;
+      if (typeof usage.total_tokens === "number" && Number.isFinite(usage.total_tokens)) {
+        details.push(`${usage.total_tokens} tokens`);
+      }
+    }
+  }
+  const suffix = details.length ? ` (${details.join(", ")})` : "";
+  return [failed ? ANSI.red(`\u274C ${text}${suffix}`) : ANSI.green(`\u2705 ${text}${suffix}`)];
 }
 function agyAdapter(p, cfg) {
   const event = typeof p.event === "string" ? p.event : typeof p.type === "string" ? p.type : "";
@@ -484,14 +540,13 @@ function agyAdapter(p, cfg) {
   }
   if (event === "result") {
     const result = p.result;
-    if (typeof result === "string" && result.trim()) {
-      return [ANSI.green(`\u2705 ${result.trim()}`)];
+    if (typeof result === "string") {
+      return agyResultLines(result, p.status, p, cfg);
     }
     if (result && typeof result === "object") {
       const rec = result;
       const text = typeof rec.response === "string" ? rec.response : typeof rec.result === "string" ? rec.result : typeof rec.text === "string" ? rec.text : "";
-      if (text.trim())
-        return [ANSI.green(`\u2705 ${text.trim()}`)];
+      return agyResultLines(text, rec.status, rec, cfg);
     }
     return [];
   }
@@ -501,6 +556,13 @@ function agyAdapter(p, cfg) {
     if (!cfg.showError)
       return [];
     return claudeError(p, cfg);
+  }
+  if (typeof p.response === "string") {
+    return agyResultLines(p.response, p.status, p, cfg);
+  }
+  if (p.structured_output !== undefined) {
+    const structured = typeof p.structured_output === "string" ? p.structured_output : JSON.stringify(p.structured_output);
+    return agyResultLines(structured, p.status, p, cfg);
   }
   return [];
 }
@@ -627,6 +689,33 @@ function textExtract(p, agentType) {
     const step = p.step_update && typeof p.step_update === "object" ? p.step_update : p;
     addText(step.text_delta);
     addText(step.text);
+  }
+  if (agentType === "agy" && streamKind !== "result") {
+    addText(p.response);
+    if (p.response === undefined && p.structured_output !== undefined) {
+      addText(typeof p.structured_output === "string" ? p.structured_output : JSON.stringify(p.structured_output));
+    }
+    if (p.error !== undefined) {
+      if (typeof p.error === "object" && p.error !== null) {
+        addText(p.error.message);
+      } else {
+        addText(p.error);
+      }
+    }
+  }
+  if (agentType === "grok" && streamKind !== "result") {
+    if (p.text === undefined) {
+      addText(p.response);
+      if (p.response === undefined)
+        addText(p.output);
+    }
+    if (p.error !== undefined) {
+      if (typeof p.error === "object" && p.error !== null) {
+        addText(p.error.message);
+      } else {
+        addText(p.error);
+      }
+    }
   }
   return lines;
 }
@@ -839,9 +928,12 @@ var runBuilder = (prompt, model, options) => {
   cmdArgs.push(prompt);
   return cmdArgs;
 };
+function extraFlagsHaveModel(extraFlags) {
+  return extraFlags?.some((flag) => flag === "-m" || flag === "--model" || flag.startsWith("-m=") || flag.startsWith("--model=")) ?? false;
+}
 var grokBuilder = (prompt, model, options) => {
   const cmdArgs = ["-p", prompt];
-  const hasPassthroughModel = options?.extraFlags?.includes("-m") || options?.extraFlags?.includes("--model") || options?.skipModelFlag;
+  const hasPassthroughModel = extraFlagsHaveModel(options?.extraFlags) || options?.skipModelFlag;
   if (model?.trim() && !hasPassthroughModel)
     cmdArgs.push("-m", model);
   if (options?.allowAllPermissions)
@@ -854,7 +946,7 @@ var grokBuilder = (prompt, model, options) => {
 };
 var agyBuilder = (prompt, model, options) => {
   const cmdArgs = [];
-  const hasPassthroughModel = options?.extraFlags?.includes("--model") || options?.skipModelFlag;
+  const hasPassthroughModel = extraFlagsHaveModel(options?.extraFlags) || options?.skipModelFlag;
   if (model?.trim() && !hasPassthroughModel)
     cmdArgs.push("--model", model);
   if (options?.allowAllPermissions)
@@ -2230,7 +2322,7 @@ var PARSE_PATTERNS = {
   }
 };
 var defaultParseToolOutput = (line) => {
-  const match = stripAnsi(line).match(/(?:Tool:|Using|Calling|Running)\s+([A-Za-z0-9_-]+)/i);
+  const match = stripAnsi(line).match(/(?:Tool:|Using|Called|Calling|Running)\s+([A-Za-z0-9_-]+)/i);
   return match ? match[1] : null;
 };
 PARSE_PATTERNS["codex"] = defaultParseToolOutput;
@@ -2285,8 +2377,17 @@ function parseJsonStreamToolName(line) {
     return null;
   }
 }
-PARSE_PATTERNS["grok"] = parseJsonStreamToolName;
-PARSE_PATTERNS["agy"] = parseJsonStreamToolName;
+function parseJsonOrTextToolOutput(line) {
+  const cleanLine = stripAnsi(line).trim();
+  try {
+    const parsed = JSON.parse(cleanLine);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parseJsonStreamToolName(cleanLine) : null;
+  } catch {
+    return defaultParseToolOutput(cleanLine);
+  }
+}
+PARSE_PATTERNS["grok"] = parseJsonOrTextToolOutput;
+PARSE_PATTERNS["agy"] = parseJsonOrTextToolOutput;
 PARSE_PATTERNS["hermes"] = defaultParseToolOutput;
 function loadPluginsFromConfig(configPath) {
   if (!existsSync5(configPath)) {
@@ -2458,7 +2559,7 @@ function getDefaultTomlConfig() {
 # The prompt/task for the AI agent to work on
 # prompt = "Your task description here"
 
-# Agent to use: opencode (default), claude-code, codex, copilot, or any custom agent in agents.json
+# Agent to use: opencode (default), claude-code, codex, copilot, cursor-agent, grok, agy, hermes, or any custom agent in agents.json
 # agent = "opencode"
 
 # Concrete binary for the selected agent (name resolved via PATH, or absolute path).

@@ -995,6 +995,30 @@ describe("extractJsonCompletionText: non-Claude agents", () => {
     expect(result.some(r => r.includes("AGY finished"))).toBe(true);
   });
 
+  it("extracts an agy direct JSON envelope response", () => {
+    const result = extractJsonCompletionText(JSON.stringify({
+      status: "SUCCESS",
+      response: "Direct AGY finished",
+      usage: { total_tokens: 12 },
+    }), "agy");
+    expect(result).toEqual(["Direct AGY finished"]);
+  });
+
+  it("extracts a Grok direct JSON envelope text field", () => {
+    const result = extractJsonCompletionText(JSON.stringify({
+      text: "Direct Grok finished",
+      stopReason: "end_turn",
+    }), "grok");
+    expect(result).toEqual(["Direct Grok finished"]);
+  });
+
+  it("extracts a Grok direct JSON envelope error", () => {
+    const result = extractJsonCompletionText(JSON.stringify({
+      error: { message: "Grok authentication required" },
+    }), "grok");
+    expect(result).toEqual(["Grok authentication required"]);
+  });
+
   it("extracts agy nested result/step_update when type is used instead of event", () => {
     const result = extractJsonCompletionText(JSON.stringify({
       type: "result",

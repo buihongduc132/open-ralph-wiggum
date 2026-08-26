@@ -514,6 +514,40 @@ function pushSplitLines(lines: string[], value: string, color?: (s: string) => s
   }
 }
 
+function grokResultLines(
+  text: string,
+  metadata: Record<string, unknown>,
+  cfg: BeautifierConfig,
+): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+
+  const details: string[] = [];
+  if (cfg.showCost) {
+    if (typeof metadata.duration_seconds === "number" && Number.isFinite(metadata.duration_seconds)) {
+      details.push(`${metadata.duration_seconds.toFixed(1)}s`);
+    }
+    if (metadata.usage && typeof metadata.usage === "object") {
+      const usage = metadata.usage as Record<string, unknown>;
+      const totalTokens = typeof usage.total_tokens === "number" ? usage.total_tokens
+        : typeof usage.totalTokens === "number" ? usage.totalTokens
+        : undefined;
+      if (totalTokens !== undefined && Number.isFinite(totalTokens)) {
+        details.push(`${totalTokens} tokens`);
+      }
+    }
+    const cost = typeof metadata.cost === "number" ? metadata.cost
+      : typeof metadata.cost_usd === "number" ? metadata.cost_usd
+      : undefined;
+    if (cost !== undefined && Number.isFinite(cost)) {
+      details.push(`$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}`);
+    }
+  }
+
+  const suffix = details.length ? ` (${details.join(", ")})` : "";
+  return [ANSI.green(`✅ ${trimmed}${suffix}`)];
+}
+
 function grokAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
   const t = typeof p.type === "string" ? p.type : "";
 
@@ -556,14 +590,54 @@ function grokAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[
 
   if (t === "end") {
     const result = typeof p.result === "string" ? p.result : typeof p.text === "string" ? p.text : "";
-    if (result.trim()) return [ANSI.green(`✅ ${result.trim()}`)];
-    return [];
+    return grokResultLines(result, p, cfg);
+  }
+
+  // `--output-format json` emits one result object without a `type` field.
+  // Its response is named `text` and may carry usage/cost metadata.
+  if (!t) {
+    if (typeof p.text === "string") return grokResultLines(p.text, p, cfg);
+    if (typeof p.response === "string") return grokResultLines(p.response, p, cfg);
+    if (typeof p.output === "string") return grokResultLines(p.output, p, cfg);
+    if (p.error !== undefined) {
+      if (!cfg.showError) return [];
+      return claudeError(p, cfg);
+    }
   }
 
   return [];
 }
 
 // ─── AGY stream-json Adapter ─────────────────────────────────────────────────
+
+function agyResultLines(
+  response: string,
+  status: unknown,
+  metadata: Record<string, unknown>,
+  cfg: BeautifierConfig,
+): string[] {
+  const text = response.trim();
+  if (!text) return [];
+
+  const statusText = typeof status === "string" ? status.toUpperCase() : "";
+  const failed = statusText.length > 0 && !["SUCCESS", "OK", "DONE", "COMPLETED"].includes(statusText);
+  const details: string[] = [];
+
+  if (cfg.showCost) {
+    if (typeof metadata.duration_seconds === "number" && Number.isFinite(metadata.duration_seconds)) {
+      details.push(`${metadata.duration_seconds.toFixed(1)}s`);
+    }
+    if (metadata.usage && typeof metadata.usage === "object") {
+      const usage = metadata.usage as Record<string, unknown>;
+      if (typeof usage.total_tokens === "number" && Number.isFinite(usage.total_tokens)) {
+        details.push(`${usage.total_tokens} tokens`);
+      }
+    }
+  }
+
+  const suffix = details.length ? ` (${details.join(", ")})` : "";
+  return [failed ? ANSI.red(`❌ ${text}${suffix}`) : ANSI.green(`✅ ${text}${suffix}`)];
+}
 
 function agyAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
   const event = typeof p.event === "string" ? p.event : typeof p.type === "string" ? p.type : "";
@@ -589,8 +663,8 @@ function agyAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[]
 
   if (event === "result") {
     const result = p.result;
-    if (typeof result === "string" && result.trim()) {
-      return [ANSI.green(`✅ ${result.trim()}`)];
+    if (typeof result === "string") {
+      return agyResultLines(result, p.status, p, cfg);
     }
     if (result && typeof result === "object") {
       const rec = result as Record<string, unknown>;
@@ -598,7 +672,7 @@ function agyAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[]
         : typeof rec.result === "string" ? rec.result
         : typeof rec.text === "string" ? rec.text
         : "";
-      if (text.trim()) return [ANSI.green(`✅ ${text.trim()}`)];
+      return agyResultLines(text, rec.status, rec, cfg);
     }
     return [];
   }
@@ -607,6 +681,19 @@ function agyAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[]
   if (event === "error" || p.error) {
     if (!cfg.showError) return [];
     return claudeError(p, cfg);
+  }
+
+  // `--output-format json` emits the result envelope directly, without an
+  // event/type discriminator. Keep this path separate from stream-json so
+  // the normal response is not silently discarded.
+  if (typeof p.response === "string") {
+    return agyResultLines(p.response, p.status, p, cfg);
+  }
+  if (p.structured_output !== undefined) {
+    const structured = typeof p.structured_output === "string"
+      ? p.structured_output
+      : JSON.stringify(p.structured_output);
+    return agyResultLines(structured, p.status, p, cfg);
   }
 
   return [];
@@ -749,6 +836,40 @@ function textExtract(p: Record<string, unknown>, agentType: string): string[] {
       : p;
     addText(step.text_delta);
     addText(step.text);
+  }
+
+  // AGY's non-streaming JSON mode emits a top-level envelope rather than an
+  // event. Preserve the response (or structured result/error) for completion
+  // detection and `--json-display text` instead of returning an empty string.
+  if (agentType === "agy" && streamKind !== "result") {
+    addText(p.response);
+    if (p.response === undefined && p.structured_output !== undefined) {
+      addText(typeof p.structured_output === "string" ? p.structured_output : JSON.stringify(p.structured_output));
+    }
+    if (p.error !== undefined) {
+      if (typeof p.error === "object" && p.error !== null) {
+        addText((p.error as Record<string, unknown>).message);
+      } else {
+        addText(p.error);
+      }
+    }
+  }
+
+  // Grok's non-streaming JSON mode uses `text` in its direct envelope. The
+  // generic top-level extraction above already handles the common success
+  // case; these fallbacks cover alternate response/error fields.
+  if (agentType === "grok" && streamKind !== "result") {
+    if (p.text === undefined) {
+      addText(p.response);
+      if (p.response === undefined) addText(p.output);
+    }
+    if (p.error !== undefined) {
+      if (typeof p.error === "object" && p.error !== null) {
+        addText((p.error as Record<string, unknown>).message);
+      } else {
+        addText(p.error);
+      }
+    }
   }
 
   return lines;

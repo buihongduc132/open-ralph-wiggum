@@ -110,6 +110,12 @@ describe("grok argv (shipped ARGS_TEMPLATES)", () => {
     expect(passthrough).not.toContain("-m");
     expect(flagValue(passthrough, "--model")).toBe("override");
   });
+
+  it("skips -m when extraFlags use the equals form", () => {
+    const args = grok("p", "grok-build", { extraFlags: ["--model=override"] });
+    expect(args).not.toContain("-m");
+    expect(args).toContain("--model=override");
+  });
 });
 
 describe("agy argv (shipped ARGS_TEMPLATES)", () => {
@@ -139,6 +145,12 @@ describe("agy argv (shipped ARGS_TEMPLATES)", () => {
     expect(passthrough.filter((arg) => arg === "--model")).toHaveLength(1);
     expect(flagValue(passthrough, "--model")).toBe("override");
   });
+
+  it("skips --model when extraFlags use the equals form", () => {
+    const args = agy("p", "gemini-3.1-pro-high", { extraFlags: ["--model=override"] });
+    expect(args).not.toContain("--model");
+    expect(args).toContain("--model=override");
+  });
 });
 
 describe("grok/agy parseToolOutput (shipped PARSE_PATTERNS)", () => {
@@ -154,6 +166,12 @@ describe("grok/agy parseToolOutput (shipped PARSE_PATTERNS)", () => {
     }))).toBe("search_replace");
   });
 
+  it("uses text fallback for Grok plain output as well as AGY", () => {
+    expect(PARSE_PATTERNS.grok("Called terminal")).toBe("terminal");
+    expect(PARSE_PATTERNS.grok(JSON.stringify({ type: "text", data: "Called terminal" }))).toBeNull();
+    expect(PARSE_PATTERNS.grok(JSON.stringify("Called terminal"))).toBeNull();
+  });
+
   it("extracts agy stream-json tool names from step_update", () => {
     expect(PARSE_PATTERNS.agy(JSON.stringify({
       event: "step_update",
@@ -165,6 +183,16 @@ describe("grok/agy parseToolOutput (shipped PARSE_PATTERNS)", () => {
     }))).toBe("write_to_file");
     expect(PARSE_PATTERNS.agy(JSON.stringify({ event: "init" }))).toBeNull();
   });
+
+  it("falls back to text-mode tool markers without matching text inside JSON", () => {
+    expect(PARSE_PATTERNS.agy("Using terminal")).toBe("terminal");
+    expect(PARSE_PATTERNS.agy("Called web_search")).toBe("web_search");
+    expect(PARSE_PATTERNS.agy("\u001b[33mCalling web_search\u001b[0m")).toBe("web_search");
+    expect(PARSE_PATTERNS.agy(JSON.stringify({
+      event: "step_update",
+      step_update: { text_delta: "Running tests" },
+    }))).toBeNull();
+  });
 });
 
 describe("grok/agy beautify (shipped json-beautifier)", () => {
@@ -175,6 +203,20 @@ describe("grok/agy beautify (shipped json-beautifier)", () => {
     expect(tool.some((line) => stripAnsi(line).includes("read_file"))).toBe(true);
     const result = beautifyJsonLine(JSON.stringify({ type: "result", result: "All done" }), beautifyCfg("grok"));
     expect(result.some((line) => stripAnsi(line).includes("All done"))).toBe(true);
+  });
+
+  it("renders Grok's direct JSON envelope", () => {
+    const result = beautifyJsonLine(JSON.stringify({
+      text: "Grok finished",
+      stopReason: "end_turn",
+      usage: { total_tokens: 24 },
+      cost: 0.0042,
+    }), beautifyCfg("grok"));
+    const joined = result.map((line) => stripAnsi(line)).join("\n");
+    expect(joined).toContain("Grok finished");
+    expect(joined).toContain("24 tokens");
+    expect(joined).toContain("$0.0042");
+    expect(result.every((line) => !line.trim().startsWith("{"))).toBe(true);
   });
 
   it("emits agy step_update tool names and result text instead of raw JSON only", () => {
@@ -190,6 +232,27 @@ describe("grok/agy beautify (shipped json-beautifier)", () => {
       result: { status: "SUCCESS", response: "work finished" },
     }), beautifyCfg("agy"));
     expect(result.some((line) => stripAnsi(line).includes("work finished"))).toBe(true);
+  });
+
+  it("renders AGY's direct JSON envelope and its usage metadata", () => {
+    const envelope = beautifyJsonLine(JSON.stringify({
+      conversation_id: "conv-1",
+      status: "SUCCESS",
+      response: "All tests passed",
+      duration_seconds: 1.25,
+      usage: { total_tokens: 42 },
+    }), beautifyCfg("agy"));
+    const joined = envelope.map((line) => stripAnsi(line)).join("\n");
+    expect(joined).toContain("All tests passed");
+    expect(joined).toContain("1.3s");
+    expect(joined).toContain("42 tokens");
+    expect(envelope.every((line) => !line.trim().startsWith("{"))).toBe(true);
+
+    const failure = beautifyJsonLine(JSON.stringify({
+      status: "ERROR",
+      error: "authentication required",
+    }), beautifyCfg("agy"));
+    expect(failure.some((line) => stripAnsi(line).includes("authentication required"))).toBe(true);
   });
 
   it("omits grok/agy tool lines when verboseTools is false", () => {

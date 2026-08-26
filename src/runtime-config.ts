@@ -229,7 +229,7 @@ export function getDefaultTomlConfig(): string {
 # The prompt/task for the AI agent to work on
 # prompt = "Your task description here"
 
-# Agent to use: opencode (default), claude-code, codex, copilot, or any custom agent in agents.json
+# Agent to use: opencode (default), claude-code, codex, copilot, cursor-agent, grok, agy, hermes, or any custom agent in agents.json
 # agent = "opencode"
 
 # Concrete binary for the selected agent (name resolved via PATH, or absolute path).

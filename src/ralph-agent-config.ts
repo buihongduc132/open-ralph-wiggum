@@ -35,7 +35,7 @@ export const PARSE_PATTERNS: Record<string, (line: string) => string | null> = {
 };
 
 export const defaultParseToolOutput = (line: string): string | null => {
-   const match = stripAnsi(line).match(/(?:Tool:|Using|Calling|Running)\s+([A-Za-z0-9_-]+)/i);
+   const match = stripAnsi(line).match(/(?:Tool:|Using|Called|Calling|Running)\s+([A-Za-z0-9_-]+)/i);
    return match ? match[1] : null;
 };
 
@@ -89,8 +89,22 @@ function parseJsonStreamToolName(line: string): string | null {
    }
 }
 
-PARSE_PATTERNS["grok"] = parseJsonStreamToolName;
-PARSE_PATTERNS["agy"] = parseJsonStreamToolName;
+function parseJsonOrTextToolOutput(line: string): string | null {
+   // JSON-mode lines must be parsed structurally. In plain/text mode, preserve
+   // the generic marker fallback without searching inside JSON string values.
+   const cleanLine = stripAnsi(line).trim();
+   try {
+      const parsed = JSON.parse(cleanLine);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+         ? parseJsonStreamToolName(cleanLine)
+         : null;
+   } catch {
+      return defaultParseToolOutput(cleanLine);
+   }
+}
+
+PARSE_PATTERNS["grok"] = parseJsonOrTextToolOutput;
+PARSE_PATTERNS["agy"] = parseJsonOrTextToolOutput;
 PARSE_PATTERNS["hermes"] = defaultParseToolOutput;
 
 export function loadPluginsFromConfig(configPath: string): string[] {
