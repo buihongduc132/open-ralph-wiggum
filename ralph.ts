@@ -221,85 +221,11 @@ export interface RalphRulesToml {
    state_injection?: StateInjectionConfig;
 }
 
-export const PARSE_PATTERNS: Record<string, (line: string) => string | null> = {
-   "opencode": (line) => {
-      const match = stripAnsi(line).match(/^\|\s{2}([A-Za-z0-9_-]+)/);
-      return match ? match[1] : null;
-   },
-   "claude-code": (line) => {
-      const cleanLine = stripAnsi(line);
-      const match = cleanLine.match(/(?:Using|Called|Tool:)\s+([A-Za-z0-9_.-]+)/i);
-      if (match) return match[1];
-      if (/"type"\s*:\s*"tool_use"/.test(cleanLine)) {
-         const nameMatch = cleanLine.match(/"name"\s*:\s*"([^"]+)"/);
-         if (nameMatch) return nameMatch[1];
-      }
-      return null;
-   },
-   "default": (line) => {
-       const match = stripAnsi(line).match(/(?:Tool:|Using|Called|Running)\s+([A-Za-z0-9_-]+)/i);
-       return match ? match[1] : null;
-    },
-};
-
-export const defaultParseToolOutput = (line: string): string | null => {
-   const match = stripAnsi(line).match(/(?:Tool:|Using|Calling|Running)\s+([A-Za-z0-9_-]+)/i);
-   return match ? match[1] : null;
-};
-
-PARSE_PATTERNS["codex"] = defaultParseToolOutput;
-PARSE_PATTERNS["copilot"] = defaultParseToolOutput;
-PARSE_PATTERNS["pi"] = (line) => {
-   try {
-      const evt = JSON.parse(line);
-      if (evt.type === "turn_end" && evt.toolResults?.length > 0) {
-         return evt.toolResults[0].toolName || null;
-      }
-      return null;
-   } catch {
-      return null;
-   }
-};
-
-function parseJsonStreamToolName(line: string): string | null {
-   try {
-      const evt = JSON.parse(stripAnsi(line));
-      if (!evt || typeof evt !== "object") return null;
-
-      if (typeof evt.toolName === "string" && evt.toolName) return evt.toolName;
-      if (evt.type === "tool_call") {
-         if (typeof evt.toolName === "string" && evt.toolName) return evt.toolName;
-         if (typeof evt.name === "string" && evt.name) return evt.name;
-      }
-      if (evt.type === "assistant" && evt.message && typeof evt.message === "object") {
-         const content = (evt.message as { content?: unknown }).content;
-         if (Array.isArray(content)) {
-            for (const block of content) {
-               if (block && typeof block === "object" && (block as { type?: string }).type === "tool_use") {
-                  const name = (block as { name?: unknown }).name;
-                  if (typeof name === "string" && name) return name;
-               }
-            }
-         }
-      }
-
-      const step = evt.step_update;
-      if (evt.event === "step_update" && step && typeof step === "object") {
-         if (typeof step.tool_name === "string" && step.tool_name) return step.tool_name;
-         const info = step.tool_info;
-         if (info && typeof info === "object" && typeof info.name === "string" && info.name) {
-            return info.name;
-         }
-      }
-      return null;
-   } catch {
-      return null;
-   }
-}
-
-PARSE_PATTERNS["grok"] = parseJsonStreamToolName;
-PARSE_PATTERNS["agy"] = parseJsonStreamToolName;
-PARSE_PATTERNS["hermes"] = defaultParseToolOutput;
+// Single source: ./src/ralph-agent-config (audit r2 B-1 — the local copy had
+// drifted: missing the pi turn_end fast-path guard, so the runtime hot path
+// for custom pi agents ran the unguarded JSON.parse per delta line).
+import { PARSE_PATTERNS, defaultParseToolOutput } from "./src/ralph-agent-config";
+export { PARSE_PATTERNS, defaultParseToolOutput };
 
 
 

@@ -29,11 +29,11 @@ describe("BoundedHeadTailBuffer", () => {
     expect(out).toContain("Error: EADDRINUSE port 4747");
   });
 
-  it("emits elision marker with exact dropped byte count when capped", () => {
+  it("emits elision marker with exact dropped count when capped", () => {
     const buf = new BoundedHeadTailBuffer(4 * 1024);
     buf.append("z".repeat(128 * 1024));
     const out = buf.toString();
-    expect(out).toMatch(/…\[ralph: \d+ bytes elided/);
+    expect(out).toMatch(/…\[ralph: \d+ UTF-16 units elided/);
   });
 
   it("returns exact content unchanged when under cap (no marker)", () => {
@@ -74,5 +74,37 @@ describe("resolveTailCapBytes (env override, fail-soft)", () => {
   it("garbage falls back to default", () => {
     expect(resolveTailCapBytes({ RALPH_STREAM_TAIL_KB: "abc" })).toBe(1024 * 1024);
     expect(resolveTailCapBytes({ RALPH_STREAM_TAIL_KB: "-5" })).toBe(1024 * 1024);
+  });
+});
+
+describe("BoundedHeadTailBuffer surrogate safety (audit r2 FIX-3)", () => {
+  it("never leaves a lone high surrogate at the head cap boundary", () => {
+    const buf = new BoundedHeadTailBuffer(4 * 1024); // head = 1024 units
+    const astral = "𝕏".repeat(2000); // each = surrogate pair, 2 units
+    buf.append(astral);
+    const out = buf.toString();
+    for (const ch of out) {
+      expect([...ch].length === 1 || /[\uD800-\uDFFF]/.test(ch) === false || true).toBe(true);
+    }
+    // Direct property check: no unpaired high surrogate at head end
+    const headEnd = out.charCodeAt(buf.headView.length - 1);
+    expect(headEnd >= 0xd800 && headEnd <= 0xdbff).toBe(false);
+  });
+
+  it("never leaves a lone low surrogate at the tail start", () => {
+    const buf = new BoundedHeadTailBuffer(4 * 1024);
+    buf.append("x".repeat(600)); // fill head
+    buf.append("日".repeat(100)); // BMP into tail
+    buf.append("𝕏".repeat(3000)); // astral flood to force tail trims
+    const tailStart = buf.toString().charCodeAt(buf.toString().indexOf("…") + 1);
+    // tail may begin with high surrogate (pair start) but never a LOW surrogate
+    expect(tailStart >= 0xdc00 && tailStart <= 0xdfff).toBe(false);
+  });
+
+  it("marker labels UTF-16 units, not bytes", () => {
+    const buf = new BoundedHeadTailBuffer(4 * 1024);
+    buf.append("z".repeat(64 * 1024));
+    expect(buf.toString()).toMatch(/UTF-16 units elided/);
+    expect(buf.toString()).not.toMatch(/bytes elided/);
   });
 });

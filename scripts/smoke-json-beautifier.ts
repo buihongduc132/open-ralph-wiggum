@@ -15,7 +15,7 @@
  */
 
 import { beautifyJsonLine, extractJsonCompletionText, isJsonModeAgent, hasJsonAdapter, type BeautifierConfig } from "../src/json-beautifier";
-import { StreamAccumulator } from "../src/stream-accumulator";
+import { BoundedHeadTailBuffer } from "../src/bounded-stream-buffer";
 
 let passed = 0;
 let failed = 0;
@@ -307,30 +307,27 @@ assertNotEmpty(extractJsonCompletionText(
 ), "gemini completion text");
 
 // ─────────────────────────────────────────────
-// 11. StreamAccumulator
+// 11. BoundedHeadTailBuffer (StreamAccumulator retired — audit r2 B-2)
 // ─────────────────────────────────────────────
-process.stdout.write("\n[11] StreamAccumulator\n");
+process.stdout.write("\n[11] BoundedHeadTailBuffer\n");
 
-const smallAcc = new StreamAccumulator({ tailMaxBytes: 100 });
-smallAcc.append("hello ");
-smallAcc.append("world");
-assert(smallAcc.tail === "hello world", "small accumulator keeps text");
-assert(smallAcc.totalBytes === 11, "totalBytes tracks correctly");
+const smallBuf = new BoundedHeadTailBuffer(4 * 1024);
+smallBuf.append("hello ");
+smallBuf.append("world");
+assert(smallBuf.toString() === "hello world", "small buffer keeps text");
+assert(smallBuf.totalFed === 11, "totalFed tracks correctly");
 
-// Rolling trim
-const trimAcc = new StreamAccumulator({ tailMaxBytes: 10 });
-for (let i = 0; i < 100; i++) {
-  trimAcc.append("x".repeat(5));
+// Bounded head+tail with elision marker
+const bigBuf = new BoundedHeadTailBuffer(4 * 1024);
+bigBuf.append("Error: early failure\n");
+for (let i = 0; i < 2000; i++) {
+  bigBuf.append("x".repeat(5));
 }
-assert(trimAcc.tail.length <= 20, "rolling buffer trimmed to ≤2x threshold");
-
-// Error extraction
-const errorAcc = new StreamAccumulator({ tailMaxBytes: 1024 });
-errorAcc.append("normal output\n");
-errorAcc.append("Error: something failed\n");
-errorAcc.append("Another error occurred\n");
-const errors = errorAcc.errors;
-assert(errors.length >= 1, "errors captured from error chunks");
+bigBuf.append("<promise>SMOKE</promise>\n");
+const bigOut = bigBuf.toString();
+assert(bigBuf.bytesDropped > 0, "middle elided when over cap");
+assert(bigOut.includes("Error: early failure"), "head keeps early errors");
+assert(bigOut.includes("<promise>SMOKE</promise>"), "tail keeps promise");
 
 // ─────────────────────────────────────────────
 // 12. Non-JSON agent passthrough (zero overhead)

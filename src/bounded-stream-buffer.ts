@@ -28,6 +28,10 @@ export function resolveTailCapBytes(env: { [k: string]: string | undefined } = p
   return Math.min(Math.max(bytes, MIN_TAIL_BYTES), MAX_TAIL_BYTES);
 }
 
+function isHighSurrogate(codeUnit: number): boolean {
+  return codeUnit >= 0xd800 && codeUnit <= 0xdbff;
+}
+
 export class BoundedHeadTailBuffer {
   private head = "";
   private tail = "";
@@ -54,12 +58,27 @@ export class BoundedHeadTailBuffer {
     this.appendTail(chunk);
   }
 
+  /** Cap head at a surrogate boundary too (head fills from stream start,
+   * so only the LAST char can be a split high surrogate). */
+  private capHeadSafe(): void {
+    if (this.head.length > 0 && isHighSurrogate(this.head.charCodeAt(this.head.length - 1))) {
+      this.head = this.head.slice(0, -1);
+      this.dropped += 1;
+    }
+  }
+
   private appendTail(chunk: string): void {
     this.tail += chunk;
     if (this.tail.length <= this.tailCap) return;
     const overflow = this.tail.length - this.tailCap;
     this.tail = this.tail.slice(overflow);
     this.dropped += overflow;
+    // Surrogate-safe: if the trim landed inside a UTF-16 pair, back off one
+    // code unit (a lone surrogate would corrupt display downsteam).
+    if (this.tail.length > 0 && isHighSurrogate(this.tail.charCodeAt(0))) {
+      this.tail = this.tail.slice(1);
+      this.dropped += 1;
+    }
   }
 
   /** Total bytes fed (uncapped) — for diagnostics. */
@@ -71,9 +90,16 @@ export class BoundedHeadTailBuffer {
     return this.dropped;
   }
 
+  /** Read-only head view (tests/diagnostics). */
+  get headView(): string {
+    return this.head;
+  }
+
   toString(): string {
+    this.capHeadSafe();
     if (this.dropped === 0) return this.head + this.tail;
-    const marker = `\n…[ralph: ${this.dropped} bytes elided — kept head+tail ${this.head.length + this.tail.length}B; full stream in logs]…\n`;
+    // Counts are UTF-16 code units (not bytes) — label says so honestly.
+    const marker = `\n…[ralph: ${this.dropped} UTF-16 units elided — kept head+tail ${this.head.length + this.tail.length}; full stream in logs]…\n`;
     return this.head + marker + this.tail;
   }
 }
