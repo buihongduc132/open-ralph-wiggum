@@ -262,3 +262,19 @@ The hooks system (`src/lifecycle-hooks.ts`) enables bash-based extensibility at 
 **Events:** `loop-start`, `loop-end`, `iteration-start`, `iteration-end`, `loop-resume`, `loop-abort`, `loop-stall`, `loop-error`, `loop-cancel`
 
 **CLI:** `ralph hooks list [--event <name>]`, `ralph hooks events`, `ralph pipeline show|clear`, `--no-hooks` flag, `--hook-timeout <ms>` flag, `RALPH_HOOK_TIMEOUT_MS` env var
+
+## Engineering Discipline (hard rules — audit r2 + finder findings, 2026-08-28)
+
+Pre-flight (ANY fix/measurement/delegation — all or stop):
+1. CONTRACT: tool schema read before 1st call; error text re-read verbatim after failure. Response saying "use X to disambiguate" → next call includes X or stops.
+2. 2-STRIKE: no 2nd identical failing call.
+3. MEASURE-GATE: verify /proc/<pid>/cmdline of sampled pids; N>=3 runs; median+range; same binary; delta must exceed same-binary variance. /usr/bin/time -v "Maximum resident" is the peak source (scripts/rss-bench.sh), not polling.
+4. BYTE-ANCHOR: files >2k lines → python line-surgery primary (assert unique boundary predicates, git diff verify); edit-tool oldText only copied from captured bytes; 1 fail → splice.
+5. REGISTRY: subagent({action:"list"}) before any named spawn; name absent = create .pi/agents/<name>.md (NO tools field = inherit; `tools:"*"` is a literal, never glob); test-spawn echo TOOLSET-OK before real work.
+6. ID-TABLE: arm subagent_wait on child-run-id from fleet delta only; revive does NOT re-read agent def — wrong toolset = fresh spawn.
+7. BLOCK-TRANSFORM: guard block → structurally different retry; 2nd block = stop + write rule; tmp work under repo cwd.
+8. COMMIT-CLAIM: perf numbers in commit messages require MEASURE-GATE pass + "N runs, median, range, binary"; unreplicated = prefix UNREPLICATED(n=1); no "fixes/mitigates" on n=1.
+9. REPO-COMMIT TABLE: probe `.mise/tasks/git-commit` / R-05 hooks before first commit per repo; stage explicit paths BEFORE gates (gates act on staged content). Known: open-ralph-wiggum=plain git commit (tsc pre-commit); beet-orches=`git add <paths>` + `bash .mise/tasks/git-commit -- -m`; pi-plugins=`git add <paths>` + `mise run git-commit -- -m`.
+10. STOP-LOSS: 3 no-progress iterations → mandatory method change or delegate.
+
+Knowledge-graph: duplicated symbol (grep >=2 defs) → cypher-first `MATCH (c)-[r]->(f {id:'<file>:<sym>'}) RETURN DISTINCT c.id, label(r)`; impact-by-name only for unique symbols (pass target_uid from ambiguity candidates).
