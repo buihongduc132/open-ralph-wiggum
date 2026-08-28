@@ -98,6 +98,15 @@ export function beautifyJsonLine(rawLine: string, cfg: BeautifierConfig): string
     return [rawLine];
   }
 
+  // pi fast-path: message_update lines wrap per-token assistantMessageEvent
+  // deltas and NEVER carry final text, tools, or promises (those arrive via
+  // message_end/turn_end). Skip BEFORE JSON.parse — chatty pi streams are
+  // ~95% these lines, and skipping the parse keeps the allocation rate (and
+  // thus JSC heap growth) down on long iterations.
+  if (cfg.agentType === "pi" && rawLine.includes('"message_update"')) {
+    return [];
+  }
+
   // Parse JSON
   let payload: unknown;
   try {

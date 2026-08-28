@@ -42,6 +42,10 @@ export const defaultParseToolOutput = (line: string): string | null => {
 PARSE_PATTERNS["codex"] = defaultParseToolOutput;
 PARSE_PATTERNS["copilot"] = defaultParseToolOutput;
 PARSE_PATTERNS["pi"] = (line) => {
+   // Fast-path: tool counts live ONLY in turn_end.toolResults — skip the
+   // JSON.parse for the ~95% of lines that are message_update deltas
+   // (keeps allocation rate / JSC heap growth down on chatty streams).
+   if (!line.includes('"turn_end"')) return null;
    try {
       const evt = JSON.parse(line);
       if (evt.type === "turn_end" && evt.toolResults?.length > 0) {

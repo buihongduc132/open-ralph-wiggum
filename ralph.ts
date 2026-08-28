@@ -20,6 +20,17 @@ import {
 } from "./loop-runtime";
 import { ARGS_TEMPLATES, type AgentBuildArgsOptions } from "./agent-builders";
 import { beautifyJsonLine, isJsonModeAgent, type BeautifierConfig } from "./src/json-beautifier";
+import { BoundedHeadTailBuffer } from "./src/bounded-stream-buffer";
+
+// Full-GC cadence for streamText (lines). See ralph.ts streamText comment.
+// Fail-soft: garbage/0-safe; default 5000 lines; 0 disables.
+function resolveGcEveryLines(): number {
+   const raw = process.env["RALPH_STREAM_GC_LINES"];
+   if (!raw) return 2000;
+   const n = Number(raw);
+   if (!Number.isFinite(n) || n < 0) return 2000;
+   return Math.floor(n);
+}
 import { stripFrontmatter } from "./template-utils";
 import { type RalphState as RalphStateBase } from "./src/loop-helpers";
 import {
@@ -3644,8 +3655,26 @@ Unable to read ${currentTasksFileLabel()}
       },
    ): Promise<{ stdoutText: string; stderrText: string; toolCounts: Map<string, number>; stalled: boolean; stalledForMs: number | null; preStartStalled: boolean; terminatedAfterPromise: boolean }> {
       const toolCounts = new Map<string, number>();
-      let stdoutText = "";
-      let stderrText = "";
+      // Beautifier config built ONCE per stream (was per line — allocation
+      // churn on chatty agents).
+      const jsonBeautifierCfg: BeautifierConfig | null = isJsonModeAgent(options.agent.type, options.extraFlags)
+         ? {
+              mode: "beautify",
+              agentType: options.agent.type,
+              verboseTools: !!verboseTools,
+              showThinking: true,
+              showRetry: true,
+              showError: true,
+              showCost: true,
+              maxErrorLength: 120,
+           }
+         : null;
+      // Bounded head+tail buffers: cap per-iteration RSS for chatty JSON agents
+      // (pi message_update streams hit 30-55MB). Head preserves early errors
+      // (extractErrors), tail preserves final <promise> tags; middle elided
+      // with a byte-count marker (full stream still lands in pm2 logs).
+      const stdoutBuffer = new BoundedHeadTailBuffer();
+      const stderrBuffer = new BoundedHeadTailBuffer();
       let lastPrintedAt = Date.now();
       const activityTracker = new StreamActivityTracker();
       let lastToolSummaryAt = 0;
@@ -3693,17 +3722,7 @@ Unable to read ${currentTasksFileLabel()}
          let outputLines: string[];
          const extraFlags = options.extraFlags;
          if (isJsonModeAgent(options.agent.type, extraFlags)) {
-            const cfg: BeautifierConfig = {
-               mode: "beautify",
-               agentType: options.agent.type,
-               verboseTools: !!verboseTools,
-               showThinking: true,
-               showRetry: true,
-               showError: true,
-               showCost: true,
-               maxErrorLength: 120,
-            };
-            outputLines = beautifyJsonLine(line, cfg);
+            outputLines = beautifyJsonLine(line, jsonBeautifierCfg!);
          } else {
             outputLines = options.agent.type === "claude-code" ? extractClaudeStreamDisplayLines(line) : [line];
          }
@@ -3759,6 +3778,13 @@ Unable to read ${currentTasksFileLabel()}
          const decoder = new TextDecoder();
          let buffer = "";
          let partialCharsDisplayed = 0;
+         // Periodic GC: high-frequency per-line work (2× JSON.parse + string
+         // ops per line) allocates faster than JSC collects eagerly — VmHWM
+         // measured ~70× stream size on chatty agents (601MB peak on an 8MB
+         // pi stream, pre-existing before the bounded buffer). A full GC every
+         // N lines bounds the heap. RALPH_STREAM_GC_LINES (fail-soft, 0=off).
+         const gcEveryLines = resolveGcEveryLines();
+         let linesSinceGc = 0;
 
          // Create abort promise if signal provided
          const abortSignals = [stopController.signal, options.abortSignal].filter(Boolean) as AbortSignal[];
@@ -3807,10 +3833,18 @@ Unable to read ${currentTasksFileLabel()}
                   handleLine(line, isError, partialCharsDisplayed);
                   partialCharsDisplayed = 0;
                }
+               if (gcEveryLines > 0) {
+                  linesSinceGc += lines.length;
+                  if (linesSinceGc >= gcEveryLines) {
+                     linesSinceGc = 0;
+                     try { (globalThis as any).Bun?.gc?.(true); } catch { /* best-effort */ }
+                  }
+               }
                if (
                   options.flushPartialLines &&
                   !options.suppressOutput &&
                   options.agent.type !== "claude-code" &&
+                  !isJsonModeAgent(options.agent.type, options.extraFlags) &&
                   buffer.length > partialCharsDisplayed
                ) {
                   writeOutput(buffer.slice(partialCharsDisplayed), isError);
@@ -3914,14 +3948,14 @@ Unable to read ${currentTasksFileLabel()}
             streamText(
                proc.stdout as ReadableStream<Uint8Array>,
                chunk => {
-                  stdoutText += chunk;
+                  stdoutBuffer.append(chunk);
                },
                false,
             ),
             streamText(
                proc.stderr as ReadableStream<Uint8Array>,
                chunk => {
-                  stderrText += chunk;
+                  stderrBuffer.append(chunk);
                },
                true,
             ),
@@ -3937,7 +3971,7 @@ Unable to read ${currentTasksFileLabel()}
          maybePrintToolSummary(true);
       }
 
-      return { stdoutText, stderrText, toolCounts, stalled, stalledForMs, preStartStalled: stalled && !firstOutputReceived, terminatedAfterPromise };
+      return { stdoutText: stdoutBuffer.toString(), stderrText: stderrBuffer.toString(), toolCounts, stalled, stalledForMs, preStartStalled: stalled && !firstOutputReceived, terminatedAfterPromise };
    }
    // Main loop
    // Helper to detect per-iteration file changes using content hashes
