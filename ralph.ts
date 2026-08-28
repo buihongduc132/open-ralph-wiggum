@@ -23,15 +23,6 @@ import { beautifyJsonLine, isJsonModeAgent, type BeautifierConfig } from "./src/
 import { ensureRalphConfig as ensureRalphConfigImpl } from "./src/ralph-agent-config";
 import { BoundedHeadTailBuffer } from "./src/bounded-stream-buffer";
 
-// Full-GC cadence for streamText (lines). See ralph.ts streamText comment.
-// Fail-soft: garbage/0-safe; default 5000 lines; 0 disables.
-function resolveGcEveryLines(): number {
-   const raw = process.env["RALPH_STREAM_GC_LINES"];
-   if (!raw) return 2000;
-   const n = Number(raw);
-   if (!Number.isFinite(n) || n < 0) return 2000;
-   return Math.floor(n);
-}
 import { stripFrontmatter } from "./template-utils";
 import { type RalphState as RalphStateBase } from "./src/loop-helpers";
 import {
@@ -3726,13 +3717,6 @@ Unable to read ${currentTasksFileLabel()}
          const decoder = new TextDecoder();
          let buffer = "";
          let partialCharsDisplayed = 0;
-         // Periodic GC: high-frequency per-line work (2× JSON.parse + string
-         // ops per line) allocates faster than JSC collects eagerly — VmHWM
-         // measured ~70× stream size on chatty agents (601MB peak on an 8MB
-         // pi stream, pre-existing before the bounded buffer). A full GC every
-         // N lines bounds the heap. RALPH_STREAM_GC_LINES (fail-soft, 0=off).
-         const gcEveryLines = resolveGcEveryLines();
-         let linesSinceGc = 0;
 
          // Create abort promise if signal provided
          const abortSignals = [stopController.signal, options.abortSignal].filter(Boolean) as AbortSignal[];
@@ -3780,13 +3764,6 @@ Unable to read ${currentTasksFileLabel()}
                for (const line of lines) {
                   handleLine(line, isError, partialCharsDisplayed);
                   partialCharsDisplayed = 0;
-               }
-               if (gcEveryLines > 0) {
-                  linesSinceGc += lines.length;
-                  if (linesSinceGc >= gcEveryLines) {
-                     linesSinceGc = 0;
-                     try { (globalThis as any).Bun?.gc?.(true); } catch { /* best-effort */ }
-                  }
                }
                if (
                   options.flushPartialLines &&
