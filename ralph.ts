@@ -121,7 +121,7 @@ export interface AgentConfig {
    type: AgentType;
    command: string;
    buildArgs: (prompt: string, model: string, options?: AgentBuildArgsOptions) => string[];
-   buildEnv: (options: AgentEnvOptions) => Record<string, string>;
+   buildEnv: (options: AgentEnvOptions, stateDir?: string) => Record<string, string>;
    parseToolOutput: (line: string) => string | null;
    configName: string;
 }
@@ -1062,72 +1062,11 @@ export function resolveCommand(cmd: string, envOverride?: string, basePath?: str
    return cmd;
 }
 
-export const BUILT_IN_AGENTS: Record<AgentType, AgentConfig> = {
-   opencode: {
-      command: resolveCommand("opencode", process.env.RALPH_OPENCODE_BINARY),
-      type: "opencode",
-      buildArgs: ARGS_TEMPLATES["opencode"],
-      buildEnv: ENV_TEMPLATES["opencode"],
-      parseToolOutput: PARSE_PATTERNS["opencode"],
-      configName: "OpenCode",
-   },
-   "claude-code": {
-      type: "claude-code",
-      command: resolveCommand("claude", process.env.RALPH_CLAUDE_BINARY),
-      buildArgs: ARGS_TEMPLATES["claude-code"],
-      buildEnv: ENV_TEMPLATES["default"],
-      parseToolOutput: PARSE_PATTERNS["claude-code"],
-      configName: "Claude Code",
-   },
-   "codex": {
-      type: "codex",
-      command: resolveCommand("codex", process.env.RALPH_CODEX_BINARY),
-      buildArgs: ARGS_TEMPLATES["codex"],
-      buildEnv: ENV_TEMPLATES["default"],
-      parseToolOutput: PARSE_PATTERNS["codex"],
-      configName: "Codex",
-   },
-   "copilot": {
-      type: "copilot",
-      command: resolveCommand("copilot", process.env.RALPH_COPILOT_BINARY),
-      buildArgs: ARGS_TEMPLATES["copilot"],
-      buildEnv: ENV_TEMPLATES["default"],
-      parseToolOutput: PARSE_PATTERNS["copilot"],
-      configName: "Copilot CLI",
-   },
-   "cursor-agent": {
-      type: "cursor-agent",
-      command: resolveCommand("cursor-agent", process.env.RALPH_CURSOR_BINARY),
-      buildArgs: ARGS_TEMPLATES["claude-code"],
-      buildEnv: ENV_TEMPLATES["default"],
-      parseToolOutput: PARSE_PATTERNS["claude-code"],
-      configName: "Cursor Agent",
-   },
-   grok: {
-      type: "grok",
-      command: resolveCommand("grok", process.env.RALPH_GROK_BINARY),
-      buildArgs: ARGS_TEMPLATES["grok"],
-      buildEnv: ENV_TEMPLATES["default"],
-      parseToolOutput: PARSE_PATTERNS["grok"],
-      configName: "Grok",
-   },
-   agy: {
-      type: "agy",
-      command: resolveCommand("agy", process.env.RALPH_AGY_BINARY),
-      buildArgs: ARGS_TEMPLATES["agy"],
-      buildEnv: ENV_TEMPLATES["default"],
-      parseToolOutput: PARSE_PATTERNS["agy"],
-      configName: "AGY",
-   },
-   hermes: {
-      type: "hermes",
-      command: resolveCommand("hermes", process.env.RALPH_HERMES_BINARY),
-      buildArgs: ARGS_TEMPLATES["hermes"],
-      buildEnv: ENV_TEMPLATES["default"],
-      parseToolOutput: PARSE_PATTERNS["hermes"],
-      configName: "Hermes",
-   },
-};
+// Single source: ./src/ralph-agent-config (bd open-ralph-wiggum-dtz; closes the
+// drift class that left the pi turn_end guard off the runtime path). src's
+// opencode buildEnv takes stateDir — threaded at the runtime call site below.
+import { BUILT_IN_AGENTS } from "./src/ralph-agent-config";
+export { BUILT_IN_AGENTS };
 
 
 // Main CLI entry point - only runs when executed directly, not when imported
@@ -4565,7 +4504,7 @@ Unable to read ${currentTasksFileLabel()}
             const env = agentConfig.buildEnv({
                filterPlugins: disablePlugins,
                allowAllPermissions: allowAllPermissions,
-            });
+            }, stateDir);
             // G1: thread the current pipeline context into the agent's environment
             // so spawned agents can read/extend it. Placed after the iteration-start
             // hook fires (which may have mutated pipelineContext).
