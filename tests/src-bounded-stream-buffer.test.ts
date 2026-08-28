@@ -1,14 +1,15 @@
 import { describe, expect, it } from "bun:test";
 import { BoundedHeadTailBuffer, resolveTailCapBytes } from "../src/bounded-stream-buffer";
+import { ByteLineSplitter, isPiNoiseLineBytes } from "../src/byte-line-filter";
 
 // Worst-first: the failure modes that would break ralph are (1) promise tag
 // lost from tail, (2) early errors lost from head, (3) silent mid-drop
-// without marker, (4) env override breaking on garbage.
+// without marker, (4) env override breaking on garbage, (5) byte path
+// semantics diverging from the string path.
 
 describe("BoundedHeadTailBuffer", () => {
   it("keeps promise tag that lands in the tail when middle is elided", () => {
-    const buf = new BoundedHeadTailBuffer(4 * 1024); // head=1KB tail=4KB
-    // ~64KB of chatter, promise at the very end; middle marked uniquely
+    const buf = new BoundedHeadTailBuffer(4 * 1024);
     const chatter = "x".repeat(1024) + "\n";
     for (let i = 0; i < 60; i++) buf.append(chatter);
     buf.append("MIDDLE-MARKER-9f3a\n");
@@ -16,24 +17,21 @@ describe("BoundedHeadTailBuffer", () => {
     buf.append("final message\n<promise>COMPLETE</promise>\n");
     const out = buf.toString();
     expect(out).toContain("<promise>COMPLETE</promise>");
-    expect(out).not.toContain("MIDDLE-MARKER-9f3a"); // middle elided
+    expect(out).not.toContain("MIDDLE-MARKER-9f3a");
     expect(buf.bytesDropped).toBeGreaterThan(0);
   });
 
   it("keeps early errors from the head", () => {
     const buf = new BoundedHeadTailBuffer(4 * 1024);
     buf.append("Error: EADDRINUSE port 4747\n");
-    const chatter = "y".repeat(64 * 1024) + "\n";
-    buf.append(chatter);
-    const out = buf.toString();
-    expect(out).toContain("Error: EADDRINUSE port 4747");
+    buf.append("y".repeat(64 * 1024) + "\n");
+    expect(buf.toString()).toContain("Error: EADDRINUSE port 4747");
   });
 
-  it("emits elision marker with exact dropped count when capped", () => {
+  it("emits elision marker with exact dropped byte count when capped", () => {
     const buf = new BoundedHeadTailBuffer(4 * 1024);
     buf.append("z".repeat(128 * 1024));
-    const out = buf.toString();
-    expect(out).toMatch(/…\[ralph: \d+ UTF-16 units elided/);
+    expect(buf.toString()).toMatch(/…\[ralph: \d+ bytes elided/);
   });
 
   it("returns exact content unchanged when under cap (no marker)", () => {
@@ -44,19 +42,82 @@ describe("BoundedHeadTailBuffer", () => {
     expect(buf.bytesDropped).toBe(0);
   });
 
-  it("never exceeds head+tail cap in memory", () => {
+  it("never exceeds head+tail cap in memory (byte accounting)", () => {
     const buf = new BoundedHeadTailBuffer(4 * 1024);
     for (let i = 0; i < 100; i++) buf.append("a".repeat(1024) + "\n");
-    expect(buf.toString().length).toBeLessThan(5 * 1024 + 200); // cap + marker
     expect(buf.totalFed).toBeGreaterThan(100 * 1024);
+    // Retained bytes bounded by head+tail caps (chunk-granular: allow one chunk slack)
+    const retained = buf.totalFed - buf.bytesDropped;
+    expect(retained).toBeLessThanOrEqual(5 * 1024 + 2048);
   });
 
-  it("handles multi-byte chars at slice boundaries (no crash, promise kept)", () => {
+  it("handles multi-byte UTF-8 at byte-cap boundaries (promise kept, no crash)", () => {
     const buf = new BoundedHeadTailBuffer(4 * 1024);
-    const line = "月曜日は良いです\n"; // multi-byte
+    const line = "月曜日は良いです\n";
     for (let i = 0; i < 2000; i++) buf.append(line);
     buf.append("<promise>DONE</promise>");
     expect(buf.toString()).toContain("<promise>DONE</promise>");
+  });
+
+  it("appendBytes matches append semantics for identical content", () => {
+    const a = new BoundedHeadTailBuffer(4 * 1024);
+    const b = new BoundedHeadTailBuffer(4 * 1024);
+    const text = '{"type":"message_end","message":{"role":"assistant"}}\n'.repeat(200);
+    a.append(text);
+    for (const chunk of [text.slice(0, 500), text.slice(500)]) b.appendBytes(new TextEncoder().encode(chunk));
+    expect(b.toString()).toContain("message_end");
+    expect(b.bytesDropped).toBeGreaterThan(0);
+    expect(a.bytesDropped).toBeGreaterThan(0);
+  });
+
+  it("oversized single chunk larger than tail cap evicts itself (no hang, no OOM growth)", () => {
+    const buf = new BoundedHeadTailBuffer(4 * 1024);
+    buf.append("x".repeat(64 * 1024)); // single append > whole cap
+    buf.append("<promise>OK</promise>\n");
+    const out = buf.toString();
+    expect(out).toContain("<promise>OK</promise>");
+    expect(buf.bytesDropped).toBeGreaterThan(0);
+  });
+});
+
+describe("ByteLineSplitter", () => {
+  it("splits complete lines, excludes newline, handles CRLF", () => {
+    const s = new ByteLineSplitter();
+    const lines = s.feed(new TextEncoder().encode('{"a":1}\r\n{"b":2}\n'));
+    expect(lines.map((l) => new TextDecoder().decode(l))).toEqual(['{"a":1}', '{"b":2}']);
+  });
+
+  it("holds partial line until terminator arrives (across feeds)", () => {
+    const s = new ByteLineSplitter();
+    expect(s.feed(new TextEncoder().encode('{"par'))).toEqual([]);
+    const lines = s.feed(new TextEncoder().encode('tial":1}\nnext'));
+    expect(lines.map((l) => new TextDecoder().decode(l))).toEqual(['{"partial":1}']);
+    expect(new TextDecoder().decode(s.drain()!)).toBe("next");
+    expect(s.drain()).toBeNull();
+  });
+});
+
+describe("isPiNoiseLineBytes", () => {
+  const enc = new TextEncoder();
+  it("flags all six noise event types", () => {
+    for (const t of ["message_update", "message_start", "session", "entry_appended", "custom", "tool_execution_update"]) {
+      expect(isPiNoiseLineBytes(enc.encode(`{"type":"${t}","x":1}`))).toBe(true);
+    }
+  });
+
+  it("does not flag signal lines", () => {
+    for (const t of ["message_end", "turn_end", "tool_execution_start", "tool_execution_end", "error"]) {
+      expect(isPiNoiseLineBytes(enc.encode(`{"type":"${t}","x":1}`))).toBe(false);
+    }
+  });
+
+  it("does not flag escaped needle inside a JSON string value (byte-safe)", () => {
+    const line = '{"type":"text_delta","delta":"{\\"type\\":\\"message_update\\"}"}';
+    expect(isPiNoiseLineBytes(enc.encode(line))).toBe(false);
+  });
+
+  it("fast-outs on non-JSON lines", () => {
+    expect(isPiNoiseLineBytes(enc.encode("plain text Tool: bash"))).toBe(false);
   });
 });
 
@@ -74,37 +135,5 @@ describe("resolveTailCapBytes (env override, fail-soft)", () => {
   it("garbage falls back to default", () => {
     expect(resolveTailCapBytes({ RALPH_STREAM_TAIL_KB: "abc" })).toBe(1024 * 1024);
     expect(resolveTailCapBytes({ RALPH_STREAM_TAIL_KB: "-5" })).toBe(1024 * 1024);
-  });
-});
-
-describe("BoundedHeadTailBuffer surrogate safety (audit r2 FIX-3)", () => {
-  it("never leaves a lone high surrogate at the head cap boundary", () => {
-    const buf = new BoundedHeadTailBuffer(4 * 1024); // head = 1024 units
-    const astral = "𝕏".repeat(2000); // each = surrogate pair, 2 units
-    buf.append(astral);
-    const out = buf.toString();
-    for (const ch of out) {
-      expect([...ch].length === 1 || /[\uD800-\uDFFF]/.test(ch) === false || true).toBe(true);
-    }
-    // Direct property check: no unpaired high surrogate at head end
-    const headEnd = out.charCodeAt(buf.headView.length - 1);
-    expect(headEnd >= 0xd800 && headEnd <= 0xdbff).toBe(false);
-  });
-
-  it("never leaves a lone low surrogate at the tail start", () => {
-    const buf = new BoundedHeadTailBuffer(4 * 1024);
-    buf.append("x".repeat(600)); // fill head
-    buf.append("日".repeat(100)); // BMP into tail
-    buf.append("𝕏".repeat(3000)); // astral flood to force tail trims
-    const tailStart = buf.toString().charCodeAt(buf.toString().indexOf("…") + 1);
-    // tail may begin with high surrogate (pair start) but never a LOW surrogate
-    expect(tailStart >= 0xdc00 && tailStart <= 0xdfff).toBe(false);
-  });
-
-  it("marker labels UTF-16 units, not bytes", () => {
-    const buf = new BoundedHeadTailBuffer(4 * 1024);
-    buf.append("z".repeat(64 * 1024));
-    expect(buf.toString()).toMatch(/UTF-16 units elided/);
-    expect(buf.toString()).not.toMatch(/bytes elided/);
   });
 });

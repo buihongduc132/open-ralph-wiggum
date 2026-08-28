@@ -22,6 +22,7 @@ import { ARGS_TEMPLATES, type AgentBuildArgsOptions } from "./agent-builders";
 import { beautifyJsonLine, isJsonModeAgent, type BeautifierConfig } from "./src/json-beautifier";
 import { ensureRalphConfig as ensureRalphConfigImpl } from "./src/ralph-agent-config";
 import { BoundedHeadTailBuffer } from "./src/bounded-stream-buffer";
+import { ByteLineSplitter, isPiNoiseLineBytes } from "./src/byte-line-filter";
 
 import { stripFrontmatter } from "./template-utils";
 import { type RalphState as RalphStateBase } from "./src/loop-helpers";
@@ -3582,6 +3583,16 @@ Unable to read ${currentTasksFileLabel()}
          const decoder = new TextDecoder();
          let buffer = "";
          let partialCharsDisplayed = 0;
+         // Byte path (oracle 1.1): for pi JSON streams, split + needle-check
+         // RAW bytes so ~95% noise lines never allocate a JS string; noise
+         // goes straight to the bounded buffer as bytes, signal lines decode.
+         // agent.type is AgentType at compile time, but custom agents (pi via
+         // agents.json) carry their type string at runtime — compare as string.
+         const agentTypeStr = options.agent.type as string;
+         const useByteFilter = !isError
+            && agentTypeStr === "pi"
+            && isJsonModeAgent(agentTypeStr, options.extraFlags);
+         const splitter = useByteFilter ? new ByteLineSplitter() : null;
 
          // Create abort promise if signal provided
          const abortSignals = [stopController.signal, options.abortSignal].filter(Boolean) as AbortSignal[];
@@ -3618,6 +3629,22 @@ Unable to read ${currentTasksFileLabel()}
 
             const { value, done } = result;
             if (done) break;
+            if (useByteFilter && splitter && value && value.length > 0) {
+               firstOutputReceived = true;
+               activityTracker.markLine();
+               for (const rawLine of splitter.feed(value)) {
+                  if (isPiNoiseLineBytes(rawLine)) {
+                     (isError ? stderrBuffer : stdoutBuffer).appendBytes(rawLine);
+                  } else {
+                     // Signal line: record into the bounded buffer (promise
+                     // detection scans it) AND display via handleLine.
+                     const decoded = decoder.decode(rawLine);
+                     onText(decoded + "\n");
+                     handleLine(decoded, isError, 0);
+                  }
+               }
+               continue;
+            }
             const text = decoder.decode(value, { stream: true });
             if (text.length > 0) {
                firstOutputReceived = true;
@@ -3647,6 +3674,19 @@ Unable to read ${currentTasksFileLabel()}
          if (flushed.length > 0) {
             onText(flushed);
             buffer += flushed;
+         }
+         if (useByteFilter && splitter) {
+            const rest = splitter.drain();
+            if (rest && rest.length > 0) {
+               if (isPiNoiseLineBytes(rest)) {
+                  (isError ? stderrBuffer : stdoutBuffer).appendBytes(rest);
+               } else {
+                  const decoded = decoder.decode(rest);
+                  onText(decoded + "\n");
+                  handleLine(decoded, isError, 0);
+               }
+            }
+            return;
          }
          if (buffer.length > 0) {
             handleLine(buffer, isError, partialCharsDisplayed);
