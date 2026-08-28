@@ -20,6 +20,7 @@ import {
 } from "./loop-runtime";
 import { ARGS_TEMPLATES, type AgentBuildArgsOptions } from "./agent-builders";
 import { beautifyJsonLine, isJsonModeAgent, type BeautifierConfig } from "./src/json-beautifier";
+import { ensureRalphConfig as ensureRalphConfigImpl } from "./src/ralph-agent-config";
 import { BoundedHeadTailBuffer } from "./src/bounded-stream-buffer";
 
 // Full-GC cadence for streamText (lines). See ralph.ts streamText comment.
@@ -311,65 +312,12 @@ PARSE_PATTERNS["hermes"] = defaultParseToolOutput;
 
 
 
-export function loadPluginsFromConfig(configPath: string): string[] {
-   if (!existsSync(configPath)) {
-      return [];
-   }
-   try {
-      const raw = readFileSync(configPath, "utf-8");
-      // Basic JSONC support: strip // and /* */ comments.
-      const withoutBlock = raw.replace(/\/\*[\s\S]*?\*\//g, "");
-      const withoutLine = withoutBlock.replace(/^\s*\/\/.*$/gm, "");
-      const parsed = JSON.parse(withoutLine);
-      const plugins = parsed?.plugin;
-      return Array.isArray(plugins) ? plugins.filter(p => typeof p === "string") : [];
-   } catch {
-      return [];
-   }
-}
+// Single source of truth: ./src/ralph-agent-config (shared by builtin +
+// custom-agent paths). ralph.ts keeps a thin wrapper binding module stateDir —
+// the duplicated bodies here had already drifted (GitNexus flagged the pair).
+export { loadPluginsFromConfig } from "./src/ralph-agent-config";
 export function ensureRalphConfig(options: { filterPlugins?: boolean; allowAllPermissions?: boolean }): string {
-   if (!existsSync(stateDir)) {
-      mkdirSync(stateDir, { recursive: true });
-   }
-   const configPath = join(stateDir, "ralph-opencode.config.json");
-   const userConfigPath = join(process.env.XDG_CONFIG_HOME ?? join(process.env.HOME ?? "", ".config"), "opencode", "opencode.json");
-    const projectConfigPath = join(process.cwd(), ".ralph", "opencode.json");
-   const legacyProjectConfigPath = join(process.cwd(), ".opencode", "opencode.json");
-
-   const config: Record<string, unknown> = {
-      $schema: "https://opencode.ai/config.json",
-   };
-
-   if (options.filterPlugins) {
-      const plugins = [
-         ...loadPluginsFromConfig(userConfigPath),
-         ...loadPluginsFromConfig(projectConfigPath),
-         ...loadPluginsFromConfig(legacyProjectConfigPath),
-      ];
-      config.plugin = Array.from(new Set(plugins)).filter(p => /auth/i.test(p));
-   }
-
-   if (options.allowAllPermissions) {
-      config.permission = {
-         read: "allow",
-         edit: "allow",
-         glob: "allow",
-         grep: "allow",
-         list: "allow",
-         bash: "allow",
-         task: "allow",
-         webfetch: "allow",
-         websearch: "allow",
-         codesearch: "allow",
-         todowrite: "allow",
-         todoread: "allow",
-         question: "allow",
-         lsp: "allow",
-      };
-   }
-
-   writeFileSync(configPath, JSON.stringify(config, null, 2));
-   return configPath;
+   return ensureRalphConfigImpl(options, stateDir);
 }
 
 export const ENV_TEMPLATES: Record<string, (options: AgentEnvOptions) => Record<string, string>> = {
