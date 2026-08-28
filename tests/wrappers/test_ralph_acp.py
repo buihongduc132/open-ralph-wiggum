@@ -348,3 +348,54 @@ def test_profile_flag_forwarded_to_binary(tmp_path):
     assert raw_args[p_idx + 1] == "test-profile", (
         f"expected profile 'test-profile', got {raw_args[p_idx+1]!r}"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Orphan-leak regression (2026-08-28): killing the wrapper must kill the
+# WHOLE child tree. The wrapper spawns via `sh -c` (shell=True); killing only
+# the sh (proc.terminate) orphaned the real agent under ppid=1 (fleet kill
+# left 66 orphaned wrappers + agents). Fix: start_new_session + os.killpg.
+# ─────────────────────────────────────────────────────────────────────────────
+def test_sigterm_kills_grandchild_not_just_sh(tmp_path):
+    # Long prompt (no final response) + a grandchild that outlives everything.
+    events = [
+        {"type": "notification", "delay": 0.5, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "."}}},
+    ] * 50
+    env = _env(tmp_path, events)
+    env["MOCK_GRANDCHILD_PIDFILE"] = str(tmp_path / "grandchild.pid")
+
+    proc = subprocess.Popen(
+        [str(WRAPPER), "hi"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    # Wait for mock server to spawn + record its grandchild (10s ceiling)
+    pidfile = Path(env["MOCK_GRANDCHILD_PIDFILE"])
+    deadline = time.time() + 10
+    while not pidfile.exists() and time.time() < deadline:
+        time.sleep(0.1)
+    assert pidfile.exists(), "mock server never spawned grandchild"
+    grandchild_pid = int(pidfile.read_text().strip())
+
+    def _alive(pid):
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+
+    assert _alive(grandchild_pid), "grandchild died before SIGTERM — test invalid"
+
+    proc.send_signal(signal.SIGTERM)
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        pytest.fail("wrapper did not exit within 10s of SIGTERM")
+    assert proc.returncode in (0, 130, 143, -15)
+
+    # The orphan-leak fix: grandchild (agent) must be reaped with the wrapper.
+    deadline = time.time() + 5
+    while _alive(grandchild_pid) and time.time() < deadline:
+        time.sleep(0.2)
+    assert not _alive(grandchild_pid), (
+        f"grandchild pid={grandchild_pid} survived wrapper SIGTERM — orphan leak regressed"
+    )

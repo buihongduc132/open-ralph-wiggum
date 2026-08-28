@@ -657,10 +657,30 @@ def run(prompt: str, model: str, extra: list[str], binary: str,
             stdout=subprocess.PIPE,
             stderr=child_stderr,
             bufsize=0,
+            # New session for the child: `sh` becomes session/pgroup leader and
+            # the real agent (e.g. hermes) inherits the group. This lets
+            # _kill_child_group() reap the WHOLE tree — killing just `sh`
+            # (proc.terminate) orphaned the agent under ppid=1 (observed
+            # 2026-08-28: 66 orphaned wrappers after fleet kill).
+            start_new_session=True,
         )
     except FileNotFoundError as e:
         _emit_stderr(f"ralph-acp: failed to spawn agent binary {binary!r}: {e}")
         return 127
+
+    def _kill_child_group() -> None:
+        """SIGKILL the child's whole process group (sh + agent).
+
+        Group-kill mirrors ralph engine semantics (process.kill(-pid, SIGKILL)).
+        Fallback to proc.kill() when no group support / already-exited leader.
+        """
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, AttributeError, OSError):
+            try:
+                proc.kill()
+            except OSError:
+                pass
 
     client = AcpClient(proc)
     client.start()
@@ -687,20 +707,10 @@ def run(prompt: str, model: str, extra: list[str], binary: str,
         received_signal["signum"] = signum
         shutting_down["flag"] = True
         client.stop()
-        try:
-            proc.terminate()
-        except OSError:
-            pass
-        # Force exit on second signal
-        if signum in (signal.SIGTERM, signal.SIGINT):
-            # Give the reader a moment, then hard-exit
-            try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-            # os._exit bypasses Python exception machinery — guaranteed
-            # exit code matches the signal semantics (143=SIGTERM, 130=SIGINT)
-            os._exit(143 if signum == signal.SIGTERM else 130)
+        _kill_child_group()
+        # os._exit bypasses Python exception machinery — guaranteed
+        # exit code matches the signal semantics (143=SIGTERM, 130=SIGINT)
+        os._exit(143 if signum == signal.SIGTERM else 130)
 
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
@@ -803,14 +813,11 @@ def run(prompt: str, model: str, extra: list[str], binary: str,
         heartbeat_stop["stop"] = True
         _reset_activity()
         client.stop()
+        _kill_child_group()
         try:
-            proc.terminate()
             proc.wait(timeout=3)
         except (subprocess.TimeoutExpired, OSError):
-            try:
-                proc.kill()
-            except OSError:
-                pass
+            pass
 
     # Honor signal exit codes even if we got here via normal flow
     if received_signal["signum"] == signal.SIGTERM:

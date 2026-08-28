@@ -34,7 +34,7 @@ export interface BeautifierConfig {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const INTRINSIC_JSON_AGENTS = new Set(["claude-code", "cursor-agent", "grok", "agy"]);
+const INTRINSIC_JSON_AGENTS = new Set(["claude-code", "cursor-agent", "grok", "agy", "pi"]);
 
 const JSON_FLAGS = new Set([
   "--json",
@@ -49,6 +49,7 @@ const ADAPTER_REGISTRY = new Map<string, (payload: Record<string, unknown>, cfg:
   ["gemini", geminiAdapter],
   ["grok", grokAdapter],
   ["agy", agyAdapter],
+  ["pi", piAdapter],
 ]);
 
 // ─── isJsonModeAgent ────────────────────────────────────────────────────────
@@ -612,6 +613,96 @@ function agyAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[]
   return [];
 }
 
+// ─── pi Adapter ─────────────────────────────────────────────────────────────
+// pi `--mode json --print` event stream (JSONL):
+//   session, entry_appended, custom, message_start, message_update
+//   (assistantMessageEvent: thinking_delta/text_delta/toolcall_delta/…),
+//   message_end (full message incl. content blocks), tool_execution_start/end,
+//   turn_end (final message + toolResults).
+// Deltas are per-token → suppress entirely (they dominate log volume ~95%);
+// full text always arrives in message_end/turn_end so nothing is lost,
+// and completion-promise detection still sees assistant text.
+
+function piAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[] {
+  const t = typeof p.type === "string" ? p.type : "";
+
+  // Errors: loud even when compacting
+  if (t === "error" || p.error) {
+    if (!cfg.showError) return [];
+    return claudeError(p, cfg);
+  }
+
+  // Stream chatter — suppress
+  if (
+    t === "message_update" ||
+    t === "message_start" ||
+    t === "session" ||
+    t === "entry_appended" ||
+    t === "custom" ||
+    t === "tool_execution_update"
+  ) {
+    return [];
+  }
+
+  if (t === "tool_execution_start") {
+    const name = typeof p.toolName === "string" ? p.toolName : "unknown";
+    if (!cfg.verboseTools) return [];
+    return [ANSI.yellow(`🔧 ${name}`)];
+  }
+
+  if (t === "tool_execution_end") {
+    if (!cfg.showError) return [];
+    const isError = p.isError === true;
+    if (!isError) return [];
+    const name = typeof p.toolName === "string" ? p.toolName : "unknown";
+    const result = (p.result && typeof p.result === "object")
+      ? (p.result as Record<string, unknown>)
+      : {};
+    const content = Array.isArray(result.content) ? result.content : [];
+    let firstLine = "";
+    for (const block of content) {
+      if (block && typeof block === "object" && typeof (block as Record<string, unknown>).text === "string") {
+        firstLine = ((block as Record<string, unknown>).text as string).split(/\r?\n/).find(s => s.trim()) ?? "";
+        break;
+      }
+    }
+    const truncated = firstLine.length > 120 ? firstLine.slice(0, 120) + "..." : firstLine;
+    return [ANSI.red(`⚠️ ${name}: ${truncated}`)];
+  }
+
+  if (t === "message_end" || t === "turn_end") {
+    const message = (p.message && typeof p.message === "object")
+      ? p.message as Record<string, unknown>
+      : null;
+    if (!message) return [];
+    // Tool-result echo messages are huge and already surfaced as tool events
+    if (message.role === "toolResult") return [];
+    const content = Array.isArray(message.content) ? message.content : [];
+    const lines: string[] = [];
+    for (const block of content) {
+      if (!block || typeof block !== "object") continue;
+      const b = block as Record<string, unknown>;
+      if (b.type === "thinking" && typeof b.thinking === "string") {
+        if (!cfg.showThinking) continue;
+        for (const s of b.thinking.split(/\r?\n/)) {
+          const trimmed = s.trim();
+          if (trimmed) lines.push(ANSI.gray(`💭 ${trimmed}`));
+        }
+      } else if (b.type === "text" && typeof b.text === "string") {
+        for (const s of b.text.split(/\r?\n/)) {
+          const trimmed = s.trim();
+          if (trimmed) lines.push(trimmed);
+        }
+      } else if (b.type === "toolCall" && typeof b.name === "string") {
+        if (cfg.verboseTools) lines.push(ANSI.yellow(`🔧 ${b.name}`));
+      }
+    }
+    return lines;
+  }
+
+  return [];
+}
+
 // ─── Generic Adapter ────────────────────────────────────────────────────────
 
 function genericAdapter(p: Record<string, unknown>, cfg?: BeautifierConfig): string[] {
@@ -715,6 +806,14 @@ function textExtract(p: Record<string, unknown>, agentType: string): string[] {
     // Codex: type=message with text content
     // addContent handles both string and array content, no need for separate addText
     addContent(p.content);
+  } else if (t === "message_end" || t === "turn_end") {
+    // pi event stream: full message carried in p.message.content
+    if (p.message && typeof p.message === "object") {
+      const msg = p.message as Record<string, unknown>;
+      if (msg.role !== "toolResult") {
+        addContent(msg.content);
+      }
+    }
   } else if (t === "complete") {
     // Codex: type=complete with output
     addText(p.output);
@@ -727,7 +826,7 @@ function textExtract(p: Record<string, unknown>, agentType: string): string[] {
   }
 
   // Gemini: top-level text or content fields (any event type)
-  if (t !== "assistant" && t !== "content_block_delta" && t !== "stream_event" && t !== "result" && t !== "message" && t !== "complete" && t !== "error" && t !== "text" && t !== "end") {
+  if (t !== "assistant" && t !== "content_block_delta" && t !== "stream_event" && t !== "result" && t !== "message" && t !== "message_end" && t !== "turn_end" && t !== "complete" && t !== "error" && t !== "text" && t !== "end") {
     addText(p.text);
     addText(p.data);
     if (typeof p.content === "string") addText(p.content);

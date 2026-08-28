@@ -1068,3 +1068,134 @@ describe("gemini adapter (beautify mode) – result/complete events", () => {
     expect(out).toEqual([]);
   });
 });
+
+// ─── pi adapter ──────────────────────────────────────────────────────────────
+// Log-volume guard: pi `--mode json --print` streams per-token message_update
+// deltas (~95% of lines). Adapter must suppress them and still surface the
+// final assistant text (completion-promise detection depends on it).
+
+describe("pi adapter", () => {
+  const cfg: BeautifierConfig = {
+    mode: "beautify",
+    agentType: "pi",
+    verboseTools: true,
+    showThinking: false,
+    showRetry: true,
+    showError: true,
+    showCost: true,
+    maxErrorLength: 120,
+  };
+
+  it("classifies pi as intrinsic JSON agent", () => {
+    expect(isJsonModeAgent("pi")).toBe(true);
+  });
+
+  it("has a registered adapter", () => {
+    expect(hasJsonAdapter("pi")).toBe(true);
+  });
+
+  it("suppresses per-token thinking/text deltas (log-volume guard)", () => {
+    const lines = [
+      JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "wor" } }),
+      JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "ld" } }),
+      JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "toolcall_delta", delta: "{\"" } }),
+      JSON.stringify({ type: "message_start", message: {} }),
+      JSON.stringify({ type: "session", sessionId: "x" }),
+      JSON.stringify({ type: "entry_appended", entry: {} }),
+      JSON.stringify({ type: "custom", customType: "y" }),
+      JSON.stringify({ type: "tool_execution_update", toolCallId: "c1" }),
+    ];
+    for (const line of lines) {
+      expect(beautifyJsonLine(line, cfg)).toEqual([]);
+    }
+  });
+
+  it("emits final assistant text from message_end (promise must stay visible)", () => {
+    const line = JSON.stringify({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal reasoning" },
+          { type: "text", text: "Work done.\n<promise>COMPLETE</promise>" },
+        ],
+      },
+    });
+    const out = beautifyJsonLine(line, cfg);
+    expect(out.length).toBe(2);
+    expect(out[0]).toBe("Work done.");
+    expect(out[1]).toContain("<promise>COMPLETE</promise>");
+  });
+
+  it("emits final assistant text from turn_end too", () => {
+    const line = JSON.stringify({
+      type: "turn_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "<promise>COMPLETE</promise>" }],
+      },
+      toolResults: [],
+    });
+    const out = beautifyJsonLine(line, cfg);
+    expect(out.length).toBe(1);
+    expect(out[0]).toContain("<promise>COMPLETE</promise>");
+  });
+
+  it("shows thinking blocks only when showThinking is on", () => {
+    const line = JSON.stringify({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "thinking", thinking: "deep thought" }] },
+    });
+    expect(beautifyJsonLine(line, cfg)).toEqual([]);
+    const out = beautifyJsonLine(line, { ...cfg, showThinking: true });
+    expect(out.length).toBe(1);
+    expect(stripAnsi(out[0])).toContain("deep thought");
+  });
+
+  it("renders tool_execution_start as compact tool line when verboseTools", () => {
+    const line = JSON.stringify({ type: "tool_execution_start", toolCallId: "c1", toolName: "bash", args: {} });
+    const out = beautifyJsonLine(line, cfg);
+    expect(out.length).toBe(1);
+    expect(stripAnsi(out[0])).toContain("🔧 bash");
+    expect(beautifyJsonLine(line, { ...cfg, verboseTools: false })).toEqual([]);
+  });
+
+  it("suppresses toolResult echo messages and successful tool_execution_end", () => {
+    const echo = JSON.stringify({
+      type: "message_end",
+      message: { role: "toolResult", toolCallId: "c1", toolName: "bash", content: [{ type: "text", text: "huge output..." }] },
+    });
+    expect(beautifyJsonLine(echo, cfg)).toEqual([]);
+    const ok = JSON.stringify({ type: "tool_execution_end", toolCallId: "c1", toolName: "bash", result: { content: [{ type: "text", text: "ok" }] }, isError: false });
+    expect(beautifyJsonLine(ok, cfg)).toEqual([]);
+  });
+
+  it("surfaces failed tool_execution_end as truncated error line", () => {
+    const line = JSON.stringify({
+      type: "tool_execution_end",
+      toolCallId: "c1",
+      toolName: "bash",
+      result: { content: [{ type: "text", text: "first\nsecond" }] },
+      isError: true,
+    });
+    const out = beautifyJsonLine(line, cfg);
+    expect(out.length).toBe(1);
+    expect(stripAnsi(out[0])).toContain("⚠️ bash: first");
+  });
+
+  it("surfaces error events", () => {
+    const line = JSON.stringify({ type: "error", error: { message: "model exploded" } });
+    const out = beautifyJsonLine(line, cfg);
+    expect(out.length).toBe(1);
+    expect(stripAnsi(out[0])).toContain("model exploded");
+  });
+
+  it("textExtract understands pi message_end/turn_end (extract-mode parity)", () => {
+    const line = JSON.stringify({
+      type: "turn_end",
+      message: { role: "assistant", content: [{ type: "text", text: "final answer" }] },
+    });
+    const out = extractJsonCompletionText(line, "pi");
+    expect(out).toContain("final answer");
+  });
+});

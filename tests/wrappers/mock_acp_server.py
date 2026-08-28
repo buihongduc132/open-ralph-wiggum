@@ -154,6 +154,15 @@ def main():
     if os.environ.get("MOCK_CAPTURE_ARGS") == "1":
         log_event({"kind": "raw_args", "args": list(sys.argv)})
     log_event({"kind": "start", "pid": os.getpid()})
+    # MOCK_GRANDCHILD_PIDFILE: spawn a long-lived grandchild (like the real
+    # `sh -c` -> hermes chain) and record its pid. Used by the orphan-leak
+    # regression test: the wrapper's group-kill must reap this process.
+    grandchild_pidfile = os.environ.get("MOCK_GRANDCHILD_PIDFILE")
+    if grandchild_pidfile:
+        import subprocess
+        gc = subprocess.Popen(["sleep", "300"])
+        with open(grandchild_pidfile, "w") as f:
+            f.write(str(gc.pid))
     buf = ""
     while True:
         ch = sys.stdin.read(1)
