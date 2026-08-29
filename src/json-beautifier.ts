@@ -684,8 +684,11 @@ function piAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[] 
       ? p.message as Record<string, unknown>
       : null;
     if (!message) return [];
-    // Tool-result echo messages are huge and already surfaced as tool events
-    if (message.role === "toolResult") return [];
+    // Only ASSISTANT text may surface: user-role echoes carry the prompt,
+    // which contains the literal completion-promise tag → ralph false-detects
+    // the promise on the echo and SIGKILLs the agent mid-cold-start
+    // (2026-08-28 fx24 tester fleet incident; beet-orches LSL same date).
+    if (message.role !== "assistant") return [];
     const content = Array.isArray(message.content) ? message.content : [];
     const lines: string[] = [];
     for (const block of content) {
