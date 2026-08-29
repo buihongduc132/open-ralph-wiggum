@@ -182,10 +182,37 @@ export async function captureFileSnapshot(): Promise<FileSnapshot> {
          }
       }
 
-      for (const file of allFiles) {
+      // Batch hash: ONE git spawn for all files (git hash-object --stdin-paths).
+      // Was: per-file spawn — N files x ~100ms under the git guard wrapper
+      // = minutes-scale stalls at every loop iteration (2 snapshots/iter).
+      const pathList = [...allFiles].filter(Boolean);
+      if (pathList.length > 0) {
          try {
-            const hash = await $`git hash-object ${file} 2>/dev/null || stat -c '%Y' ${file} 2>/dev/null || echo ''`.cwd(cwd).text();
-            files.set(file, hash.trim());
+            const hashProc = Bun.spawn(["git", "hash-object", "--stdin-paths"], {
+               cwd,
+               stdout: "pipe",
+               stderr: "pipe",
+               stdin: "pipe",
+            });
+            hashProc.stdin.write(pathList.join("\n") + "\n");
+            hashProc.stdin.end();
+            const hashOut = await new Response(hashProc.stdout).text();
+            const hashLines = hashOut.split("\n");
+            for (let i = 0; i < pathList.length; i++) {
+               const h = (hashLines[i] ?? "").trim();
+               if (h) files.set(pathList[i], h);
+            }
+         } catch {
+            // Batch failed — per-file stat fallback below
+         }
+      }
+      // Fallback only for files the batch pass could not hash (missing/unreadable)
+      for (const file of pathList) {
+         if (files.has(file)) continue;
+         try {
+            const stat = await $`stat -c '%Y' ${file} 2>/dev/null || echo ''`.cwd(cwd).text();
+            const s = stat.trim();
+            if (s) files.set(file, s);
          } catch {
             // File may not exist, skip
          }

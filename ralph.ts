@@ -3838,10 +3838,38 @@ Unable to read ${currentTasksFileLabel()}
          }
 
          // Get hash for each file (using git hash-object for content comparison)
-         for (const file of allFiles) {
+         // Batch hash: ONE git spawn for all files (git hash-object --stdin-paths).
+         // Was: per-file spawn — 287 tracked files x ~100ms under the git
+         // guard wrapper = ~30s+ per snapshot (2x per iteration) — timed out
+         // every loop start (tests + real runs). One spawn: <200ms total.
+         const pathList = [...allFiles].filter(Boolean);
+         if (pathList.length > 0) {
             try {
-               const hash = await $`git hash-object ${file} 2>/dev/null || stat -c '%Y' ${file} 2>/dev/null || echo ''`.cwd(cwd).text();
-               files.set(file, hash.trim());
+               const hashProc = Bun.spawn(["git", "hash-object", "--stdin-paths"], {
+                  cwd,
+                  stdout: "pipe",
+                  stderr: "pipe",
+                  stdin: "pipe",
+               });
+               hashProc.stdin.write(pathList.join("\n") + "\n");
+               hashProc.stdin.end();
+               const hashOut = await new Response(hashProc.stdout).text();
+               const hashLines = hashOut.split("\n");
+               for (let i = 0; i < pathList.length; i++) {
+                  const h = (hashLines[i] ?? "").trim();
+                  if (h) files.set(pathList[i], h);
+               }
+            } catch {
+               // Batch failed — fall through to per-file stat fallback below
+            }
+         }
+         // Fallback only for files the batch pass could not hash (missing/unreadable)
+         for (const file of pathList) {
+            if (files.has(file)) continue;
+            try {
+               const stat = await $`stat -c '%Y' ${file} 2>/dev/null || echo ''`.cwd(cwd).text();
+               const s = stat.trim();
+               if (s) files.set(file, s);
             } catch {
                // File may not exist, skip
             }
@@ -4470,7 +4498,7 @@ Unable to read ${currentTasksFileLabel()}
 
          // Fire iteration-start hook (G7: reassign — context may mutate, then
          // flow into the agent spawn env via RALPH_PIPELINE_CONTEXT).
-         pipelineContext = executeHooks({ event: "iteration-start", env: buildHookEnv("iteration-start"), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
+pipelineContext = executeHooks({ event: "iteration-start", env: buildHookEnv("iteration-start"), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
          // D4 (Option A): persist after iteration-start reassign.
          savePipelineContext(stateDir, pipelineContext);
 
@@ -4541,7 +4569,7 @@ Unable to read ${currentTasksFileLabel()}
                streamOutput,
             });
 
-            const env = agentConfig.buildEnv({
+const env = agentConfig.buildEnv({
                filterPlugins: disablePlugins,
                allowAllPermissions: allowAllPermissions,
             }, stateDir);

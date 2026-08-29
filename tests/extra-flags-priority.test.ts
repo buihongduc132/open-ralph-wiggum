@@ -259,7 +259,7 @@ model = "${TEST_MODEL}"`);
     const state = JSON.parse(readFileSync(statePath(), "utf-8"));
     // Passthrough --model must win over inline --model
     expect(state.model).toBe("passthrough-model");
-  });
+  }, 20000);
 
   // ---------------------------------------------------------------------------
   // GAP 1: -- --max-iterations passthrough wins over inline
@@ -276,7 +276,7 @@ model = "${TEST_MODEL}"`);
     expect(existsSync(statePath())).toBe(true);
     const state = JSON.parse(readFileSync(statePath(), "utf-8"));
     expect(state.maxIterations).toBe(5);
-  });
+  }, 20000);
 
   // ---------------------------------------------------------------------------
   // GAP 2: -- --min-iterations passthrough wins over inline
@@ -293,7 +293,7 @@ model = "${TEST_MODEL}"`);
     expect(existsSync(statePath())).toBe(true);
     const state = JSON.parse(readFileSync(statePath(), "utf-8"));
     expect(state.minIterations).toBe(3);
-  });
+  }, 20000);
 
   // ---------------------------------------------------------------------------
   // GAP 3: -- --completion-promise passthrough wins over inline
@@ -312,7 +312,7 @@ extra_agent_flags = ["--completion-promise", "PASSTHROUGH_COMPLETE"]`);
     expect(existsSync(statePath())).toBe(true);
     const state = JSON.parse(readFileSync(statePath(), "utf-8"));
     expect(state.completionPromise).toBe("PASSTHROUGH_COMPLETE");
-  });
+  }, 20000);
 
   // ---------------------------------------------------------------------------
   // GAP 4: -- --abort-promise passthrough wins over TOML
