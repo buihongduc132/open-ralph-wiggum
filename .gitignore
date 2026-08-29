@@ -160,5 +160,4 @@ bin/ralph
 .pi-opa-net/
 
 # runtime artifacts (untracked)
-.test-last-run
 .hindsight/

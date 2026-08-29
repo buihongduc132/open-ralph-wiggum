@@ -4498,7 +4498,7 @@ Unable to read ${currentTasksFileLabel()}
 
          // Fire iteration-start hook (G7: reassign — context may mutate, then
          // flow into the agent spawn env via RALPH_PIPELINE_CONTEXT).
-pipelineContext = executeHooks({ event: "iteration-start", env: buildHookEnv("iteration-start"), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
+            pipelineContext = executeHooks({ event: "iteration-start", env: buildHookEnv("iteration-start"), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
          // D4 (Option A): persist after iteration-start reassign.
          savePipelineContext(stateDir, pipelineContext);
 
@@ -4569,7 +4569,7 @@ pipelineContext = executeHooks({ event: "iteration-start", env: buildHookEnv("it
                streamOutput,
             });
 
-const env = agentConfig.buildEnv({
+            const env = agentConfig.buildEnv({
                filterPlugins: disablePlugins,
                allowAllPermissions: allowAllPermissions,
             }, stateDir);

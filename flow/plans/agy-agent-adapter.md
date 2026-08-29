@@ -23,9 +23,9 @@ Resolved engineering substance from same context:
 
 Plan done when ALL below true:
 - [x] `ralph --agent agy` completes one iteration end-to-end using agy headless mode [evidence: 2026-08-27 live run, exit 0, 8s, iteration summary via agy headless; agy json envelope SUCCESS]
-- [ ] `ralph` help text lists `agy` among supported agent types
-- [ ] Existing test suite passes with `agy` included in agent-type expectations
-- [ ] `bin/ralph` (compiled) supports `agy` agent type
+- [x] `ralph` help text lists `agy` among supported agent types [probe: ralph.ts:271 usage + README.md:54,161,257 — arbiter-verified 2026-08-29]
+- [x] Existing test suite passes with `agy` included in agent-type expectations [probe: grok-agy 15/15, args-templates 85/85 — re-verified 2026-08-29]
+- [x] `bin/ralph` (compiled) supports `agy` agent type [probe: `rg -c agy bin/ralph.js` = 16 — arbiter-verified]
 
 ## Tasks
 
