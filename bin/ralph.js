@@ -4,8 +4,8 @@ var __require = import.meta.require;
 
 // ralph.ts
 var {$ } = globalThis.Bun;
-import { existsSync as existsSync5, readFileSync as readFileSync6, writeFileSync as writeFileSync5, mkdirSync, statSync as statSync3, lstatSync, renameSync as renameSync2 } from "fs";
-import { basename as basename2, dirname, isAbsolute, join as join3, relative, resolve, sep } from "path";
+import { existsSync as existsSync6, readFileSync as readFileSync7, writeFileSync as writeFileSync6, mkdirSync as mkdirSync2, statSync as statSync3, lstatSync, renameSync as renameSync2 } from "fs";
+import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve2, sep } from "path";
 
 // src/strip-ansi.ts
 var ANSI_PATTERN = /\x1b\[[0-9;]*[A-Za-z]/g;
@@ -21,7 +21,7 @@ var ANSI = {
   green: (s) => `\x1B[32m${s}\x1B[0m`,
   red: (s) => `\x1B[31m${s}\x1B[0m`
 };
-var INTRINSIC_JSON_AGENTS = new Set(["claude-code", "cursor-agent", "grok", "agy"]);
+var INTRINSIC_JSON_AGENTS = new Set(["claude-code", "cursor-agent", "grok", "agy", "pi"]);
 var JSON_FLAGS = new Set([
   "--json"
 ]);
@@ -32,7 +32,8 @@ var ADAPTER_REGISTRY = new Map([
   ["codex", codexAdapter],
   ["gemini", geminiAdapter],
   ["grok", grokAdapter],
-  ["agy", agyAdapter]
+  ["agy", agyAdapter],
+  ["pi", piAdapter]
 ]);
 function isJsonModeAgent(agentType, extraFlags) {
   if (INTRINSIC_JSON_AGENTS.has(agentType))
@@ -63,6 +64,9 @@ function beautifyJsonLine(rawLine, cfg) {
     }
   } else {
     return [rawLine];
+  }
+  if (cfg.agentType === "pi" && rawLine.includes('"message_update"')) {
+    return [];
   }
   let payload;
   try {
@@ -504,6 +508,76 @@ function agyAdapter(p, cfg) {
   }
   return [];
 }
+function piAdapter(p, cfg) {
+  const t = typeof p.type === "string" ? p.type : "";
+  if (t === "error" || p.error) {
+    if (!cfg.showError)
+      return [];
+    return claudeError(p, cfg);
+  }
+  if (t === "message_update" || t === "message_start" || t === "session" || t === "entry_appended" || t === "custom" || t === "tool_execution_update") {
+    return [];
+  }
+  if (t === "tool_execution_start") {
+    const name = typeof p.toolName === "string" ? p.toolName : "unknown";
+    if (!cfg.verboseTools)
+      return [];
+    return [ANSI.yellow(`\uD83D\uDD27 ${name}`)];
+  }
+  if (t === "tool_execution_end") {
+    if (!cfg.showError)
+      return [];
+    const isError = p.isError === true;
+    if (!isError)
+      return [];
+    const name = typeof p.toolName === "string" ? p.toolName : "unknown";
+    const result = p.result && typeof p.result === "object" ? p.result : {};
+    const content = Array.isArray(result.content) ? result.content : [];
+    let firstLine = "";
+    for (const block of content) {
+      if (block && typeof block === "object" && typeof block.text === "string") {
+        firstLine = block.text.split(/\r?\n/).find((s) => s.trim()) ?? "";
+        break;
+      }
+    }
+    const truncated = firstLine.length > 120 ? firstLine.slice(0, 120) + "..." : firstLine;
+    return [ANSI.red(`\u26A0\uFE0F ${name}: ${truncated}`)];
+  }
+  if (t === "message_end" || t === "turn_end") {
+    const message = p.message && typeof p.message === "object" ? p.message : null;
+    if (!message)
+      return [];
+    if (message.role !== "assistant")
+      return [];
+    const content = Array.isArray(message.content) ? message.content : [];
+    const lines = [];
+    for (const block of content) {
+      if (!block || typeof block !== "object")
+        continue;
+      const b = block;
+      if (b.type === "thinking" && typeof b.thinking === "string") {
+        if (!cfg.showThinking)
+          continue;
+        for (const s of b.thinking.split(/\r?\n/)) {
+          const trimmed = s.trim();
+          if (trimmed)
+            lines.push(ANSI.gray(`\uD83D\uDCAD ${trimmed}`));
+        }
+      } else if (b.type === "text" && typeof b.text === "string") {
+        for (const s of b.text.split(/\r?\n/)) {
+          const trimmed = s.trim();
+          if (trimmed)
+            lines.push(trimmed);
+        }
+      } else if (b.type === "toolCall" && typeof b.name === "string") {
+        if (cfg.verboseTools)
+          lines.push(ANSI.yellow(`\uD83D\uDD27 ${b.name}`));
+      }
+    }
+    return lines;
+  }
+  return [];
+}
 function genericAdapter(p, cfg) {
   if (p.error && typeof p.error === "object") {
     if (cfg && !cfg.showError)
@@ -597,6 +671,13 @@ function textExtract(p, agentType) {
     addText(p.data);
   } else if (t === "message") {
     addContent(p.content);
+  } else if (t === "message_end" || t === "turn_end") {
+    if (p.message && typeof p.message === "object") {
+      const msg = p.message;
+      if (msg.role !== "toolResult") {
+        addContent(msg.content);
+      }
+    }
   } else if (t === "complete") {
     addText(p.output);
   } else if (t === "error") {
@@ -606,7 +687,7 @@ function textExtract(p, agentType) {
       addText(p.error);
     }
   }
-  if (t !== "assistant" && t !== "content_block_delta" && t !== "stream_event" && t !== "result" && t !== "message" && t !== "complete" && t !== "error" && t !== "text" && t !== "end") {
+  if (t !== "assistant" && t !== "content_block_delta" && t !== "stream_event" && t !== "result" && t !== "message" && t !== "message_end" && t !== "turn_end" && t !== "complete" && t !== "error" && t !== "text" && t !== "end") {
     addText(p.text);
     addText(p.data);
     if (typeof p.content === "string")
@@ -917,7 +998,7 @@ var ARGS_TEMPLATES = {
     if (model?.trim())
       cmdArgs.push("--model", model);
     if (options?.allowAllPermissions)
-      cmdArgs.push("--full-auto");
+      cmdArgs.push("--dangerously-bypass-approvals-and-sandbox");
     if (options?.extraFlags?.length)
       cmdArgs.push(...options.extraFlags);
     cmdArgs.push(prompt);
@@ -952,6 +1033,429 @@ var ARGS_TEMPLATES = {
   hermes: hermesBuilder
 };
 
+// src/ralph-agent-config.ts
+import { existsSync, readFileSync as readFileSync2, writeFileSync, mkdirSync } from "fs";
+import { dirname, isAbsolute, join, resolve } from "path";
+var DEFAULT_CONFIG_PATH = join(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
+var IS_WINDOWS = process.platform === "win32";
+var PARSE_PATTERNS = {
+  opencode: (line) => {
+    const match = stripAnsi(line).match(/^\|\s{2}([A-Za-z0-9_-]+)/);
+    return match ? match[1] : null;
+  },
+  "claude-code": (line) => {
+    const cleanLine = stripAnsi(line);
+    const match = cleanLine.match(/(?:Using|Called|Tool:)\s+([A-Za-z0-9_.-]+)/i);
+    if (match)
+      return match[1];
+    if (/"type"\s*:\s*"tool_use"/.test(cleanLine)) {
+      const nameMatch = cleanLine.match(/"name"\s*:\s*"([^"]+)"/);
+      if (nameMatch)
+        return nameMatch[1];
+    }
+    return null;
+  },
+  default: (line) => {
+    const match = stripAnsi(line).match(/(?:Tool:|Using|Called|Running)\s+([A-Za-z0-9_-]+)/i);
+    return match ? match[1] : null;
+  }
+};
+var defaultParseToolOutput = (line) => {
+  const match = stripAnsi(line).match(/(?:Tool:|Using|Calling|Running)\s+([A-Za-z0-9_-]+)/i);
+  return match ? match[1] : null;
+};
+PARSE_PATTERNS["codex"] = defaultParseToolOutput;
+PARSE_PATTERNS["copilot"] = defaultParseToolOutput;
+PARSE_PATTERNS["pi"] = (line) => {
+  if (!line.includes('"turn_end"'))
+    return null;
+  try {
+    const evt = JSON.parse(line);
+    if (evt.type === "turn_end" && evt.toolResults?.length > 0) {
+      return evt.toolResults[0].toolName || null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+function parseJsonStreamToolName(line) {
+  try {
+    const evt = JSON.parse(stripAnsi(line));
+    if (!evt || typeof evt !== "object")
+      return null;
+    if (typeof evt.toolName === "string" && evt.toolName)
+      return evt.toolName;
+    if (evt.type === "tool_call") {
+      if (typeof evt.toolName === "string" && evt.toolName)
+        return evt.toolName;
+      if (typeof evt.name === "string" && evt.name)
+        return evt.name;
+    }
+    if (evt.type === "assistant" && evt.message && typeof evt.message === "object") {
+      const content = evt.message.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block && typeof block === "object" && block.type === "tool_use") {
+            const name = block.name;
+            if (typeof name === "string" && name)
+              return name;
+          }
+        }
+      }
+    }
+    const step = evt.step_update;
+    if (evt.event === "step_update" && step && typeof step === "object") {
+      if (typeof step.tool_name === "string" && step.tool_name)
+        return step.tool_name;
+      const info = step.tool_info;
+      if (info && typeof info === "object" && typeof info.name === "string" && info.name) {
+        return info.name;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+PARSE_PATTERNS["grok"] = parseJsonStreamToolName;
+PARSE_PATTERNS["agy"] = parseJsonStreamToolName;
+PARSE_PATTERNS["hermes"] = defaultParseToolOutput;
+function loadPluginsFromConfig(configPath) {
+  if (!existsSync(configPath)) {
+    return [];
+  }
+  try {
+    const raw = readFileSync2(configPath, "utf-8");
+    const withoutBlock = raw.replace(/\/\*[\s\S]*?\*\//g, "");
+    const withoutLine = withoutBlock.replace(/^\s*\/\/.*$/gm, "");
+    const parsed = JSON.parse(withoutLine);
+    const plugins = parsed?.plugin;
+    return Array.isArray(plugins) ? plugins.filter((p) => typeof p === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function ensureRalphConfig(options, stateDir) {
+  if (!existsSync(stateDir)) {
+    mkdirSync(stateDir, { recursive: true });
+  }
+  const configPath = join(stateDir, "ralph-opencode.config.json");
+  const userConfigPath = join(process.env.XDG_CONFIG_HOME ?? join(process.env.HOME ?? "", ".config"), "opencode", "opencode.json");
+  const projectConfigPath = join(process.cwd(), ".ralph", "opencode.json");
+  const legacyProjectConfigPath = join(process.cwd(), ".opencode", "opencode.json");
+  const config = {
+    $schema: "https://opencode.ai/config.json"
+  };
+  if (options.filterPlugins) {
+    const plugins = [
+      ...loadPluginsFromConfig(userConfigPath),
+      ...loadPluginsFromConfig(projectConfigPath),
+      ...loadPluginsFromConfig(legacyProjectConfigPath)
+    ];
+    config.plugin = Array.from(new Set(plugins)).filter((p) => /auth/i.test(p));
+  }
+  if (options.allowAllPermissions) {
+    config.permission = {
+      read: "allow",
+      edit: "allow",
+      glob: "allow",
+      grep: "allow",
+      list: "allow",
+      bash: "allow",
+      task: "allow",
+      webfetch: "allow",
+      websearch: "allow",
+      codesearch: "allow",
+      todowrite: "allow",
+      todoread: "allow",
+      question: "allow",
+      lsp: "allow"
+    };
+  }
+  writeFileSync(configPath, JSON.stringify(config, null, 2));
+  return configPath;
+}
+var ENV_TEMPLATES = {
+  opencode: (options, stateDir) => {
+    const env = { ...process.env };
+    if (options.filterPlugins || options.allowAllPermissions) {
+      env.OPENCODE_CONFIG = ensureRalphConfig({
+        filterPlugins: options.filterPlugins,
+        allowAllPermissions: options.allowAllPermissions
+      }, stateDir || join(process.cwd(), ".ralph"));
+    }
+    return env;
+  },
+  default: () => ({ ...process.env })
+};
+function resolveConfigRelativePath(baseFilePath, targetPath) {
+  if (!targetPath)
+    return targetPath;
+  return isAbsolute(targetPath) ? targetPath : resolve(dirname(baseFilePath), targetPath);
+}
+function resolveCommand(cmd, envOverride, basePath) {
+  if (envOverride)
+    return envOverride;
+  if (IS_WINDOWS && !/[\\/]/.test(cmd) && !/\.(cmd|exe|bat)$/i.test(cmd)) {
+    const cmdWithExt = `${cmd}.cmd`;
+    if (Bun.which(cmdWithExt))
+      return cmdWithExt;
+  }
+  if (!isAbsolute(cmd)) {
+    const ralphDir = import.meta.dirname;
+    const base = ralphDir ? resolve(ralphDir, cmd) : basePath || process.cwd();
+    const resolved = isAbsolute(base) ? base : resolveConfigRelativePath(base, cmd);
+    if (existsSync(resolved))
+      return resolved;
+    const whichPath = Bun.which(cmd);
+    if (whichPath)
+      return whichPath;
+    return resolved;
+  }
+  return cmd;
+}
+var BUILT_IN_AGENTS = {
+  opencode: {
+    command: resolveCommand("opencode", process.env.RALPH_OPENCODE_BINARY),
+    type: "opencode",
+    buildArgs: ARGS_TEMPLATES["opencode"],
+    buildEnv: ENV_TEMPLATES["opencode"],
+    parseToolOutput: PARSE_PATTERNS["opencode"],
+    configName: "OpenCode"
+  },
+  "claude-code": {
+    type: "claude-code",
+    command: resolveCommand("claude", process.env.RALPH_CLAUDE_BINARY),
+    buildArgs: ARGS_TEMPLATES["claude-code"],
+    buildEnv: ENV_TEMPLATES["default"],
+    parseToolOutput: PARSE_PATTERNS["claude-code"],
+    configName: "Claude Code"
+  },
+  codex: {
+    type: "codex",
+    command: resolveCommand("codex", process.env.RALPH_CODEX_BINARY),
+    buildArgs: ARGS_TEMPLATES["codex"],
+    buildEnv: ENV_TEMPLATES["default"],
+    parseToolOutput: PARSE_PATTERNS["codex"],
+    configName: "Codex"
+  },
+  copilot: {
+    type: "copilot",
+    command: resolveCommand("copilot", process.env.RALPH_COPILOT_BINARY),
+    buildArgs: ARGS_TEMPLATES["copilot"],
+    buildEnv: ENV_TEMPLATES["default"],
+    parseToolOutput: PARSE_PATTERNS["copilot"],
+    configName: "Copilot CLI"
+  },
+  "cursor-agent": {
+    type: "cursor-agent",
+    command: resolveCommand("cursor-agent", process.env.RALPH_CURSOR_BINARY),
+    buildArgs: ARGS_TEMPLATES["claude-code"],
+    buildEnv: ENV_TEMPLATES["default"],
+    parseToolOutput: PARSE_PATTERNS["claude-code"],
+    configName: "Cursor Agent"
+  },
+  grok: {
+    type: "grok",
+    command: resolveCommand("grok", process.env.RALPH_GROK_BINARY),
+    buildArgs: ARGS_TEMPLATES["grok"],
+    buildEnv: ENV_TEMPLATES["default"],
+    parseToolOutput: PARSE_PATTERNS["grok"],
+    configName: "Grok"
+  },
+  agy: {
+    type: "agy",
+    command: resolveCommand("agy", process.env.RALPH_AGY_BINARY),
+    buildArgs: ARGS_TEMPLATES["agy"],
+    buildEnv: ENV_TEMPLATES["default"],
+    parseToolOutput: PARSE_PATTERNS["agy"],
+    configName: "AGY"
+  },
+  hermes: {
+    type: "hermes",
+    command: resolveCommand("hermes", process.env.RALPH_HERMES_BINARY),
+    buildArgs: ARGS_TEMPLATES["hermes"],
+    buildEnv: ENV_TEMPLATES["default"],
+    parseToolOutput: PARSE_PATTERNS["hermes"],
+    configName: "Hermes"
+  }
+};
+
+// src/bounded-stream-buffer.ts
+var DEFAULT_TAIL_BYTES = 1024 * 1024;
+var MIN_TAIL_BYTES = 64 * 1024;
+var MAX_TAIL_BYTES = 8192 * 1024;
+function resolveTailCapBytes(env = process.env) {
+  const raw = env["RALPH_STREAM_TAIL_KB"];
+  if (!raw)
+    return DEFAULT_TAIL_BYTES;
+  const kb = Number(raw);
+  if (!Number.isFinite(kb) || kb <= 0)
+    return DEFAULT_TAIL_BYTES;
+  const bytes = Math.floor(kb) * 1024;
+  return Math.min(Math.max(bytes, MIN_TAIL_BYTES), MAX_TAIL_BYTES);
+}
+function isUtf8Continuation(byte) {
+  return (byte & 192) === 128;
+}
+function backToCharStart(bytes, idx) {
+  let i = idx;
+  while (i > 0 && isUtf8Continuation(bytes[i]))
+    i--;
+  return i;
+}
+
+class BoundedHeadTailBuffer {
+  encoder = new TextEncoder;
+  decoder = new TextDecoder;
+  headChunks = [];
+  headLen = 0;
+  headDone = false;
+  tailChunks = [];
+  tailLen = 0;
+  dropped = 0;
+  tailCap;
+  headCap;
+  constructor(tailCapBytes) {
+    this.tailCap = tailCapBytes ?? resolveTailCapBytes();
+    this.headCap = Math.floor(this.tailCap / 4);
+  }
+  append(chunk) {
+    if (!chunk)
+      return;
+    this.appendBytes(this.encoder.encode(chunk));
+  }
+  appendBytes(chunk) {
+    if (chunk.length === 0)
+      return;
+    if (!this.headDone) {
+      const room = this.headCap - this.headLen;
+      if (chunk.length <= room) {
+        this.headChunks.push(chunk);
+        this.headLen += chunk.length;
+        if (this.headLen === this.headCap)
+          this.headDone = true;
+        return;
+      }
+      const cut = backToCharStart(chunk, room);
+      if (cut > 0) {
+        this.headChunks.push(chunk.slice(0, cut));
+        this.headLen += cut;
+      }
+      this.headDone = true;
+      this.pushTail(chunk.slice(cut));
+      return;
+    }
+    this.pushTail(chunk);
+  }
+  pushTail(chunk) {
+    this.tailChunks.push(chunk);
+    this.tailLen += chunk.length;
+    while (this.tailLen > this.tailCap && this.tailChunks.length > 0) {
+      const oldest = this.tailChunks.shift();
+      this.dropped += oldest.length;
+      this.tailLen -= oldest.length;
+    }
+  }
+  get totalFed() {
+    return this.headLen + this.dropped + this.tailLen;
+  }
+  get bytesDropped() {
+    return this.dropped;
+  }
+  get headView() {
+    return this.decodeChunks(this.headChunks);
+  }
+  decodeChunks(chunks) {
+    if (chunks.length === 0)
+      return "";
+    const all = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+    let off = 0;
+    for (const c of chunks) {
+      all.set(c, off);
+      off += c.length;
+    }
+    return this.decoder.decode(all);
+  }
+  toString() {
+    if (this.dropped === 0) {
+      return this.decodeChunks(this.headChunks) + this.decodeChunks(this.tailChunks);
+    }
+    const kept = this.headLen + this.tailLen;
+    const marker = `
+\u2026[ralph: ${this.dropped} bytes elided \u2014 kept head+tail ${kept}B; full stream in logs]\u2026
+`;
+    return this.decodeChunks(this.headChunks) + marker + this.decodeChunks(this.tailChunks);
+  }
+}
+
+// src/byte-line-filter.ts
+class ByteLineSplitter {
+  pending = new Uint8Array(0);
+  feed(chunk) {
+    if (chunk.length === 0)
+      return [];
+    const merged = new Uint8Array(this.pending.length + chunk.length);
+    merged.set(this.pending, 0);
+    merged.set(chunk, this.pending.length);
+    const lines = [];
+    let start = 0;
+    for (let i = 0;i < merged.length; i++) {
+      const b = merged[i];
+      if (b === 10) {
+        let end = i;
+        if (end > start && merged[end - 1] === 13)
+          end--;
+        if (end > start)
+          lines.push(merged.slice(start, end));
+        else
+          lines.push(new Uint8Array(0));
+        start = i + 1;
+      }
+    }
+    this.pending = merged.slice(start);
+    return lines;
+  }
+  drain() {
+    if (this.pending.length === 0)
+      return null;
+    const out = this.pending;
+    this.pending = new Uint8Array(0);
+    return out;
+  }
+}
+var NOISE_NEEDLES = [
+  '"message_update"',
+  '"message_start"',
+  '"session"',
+  '"entry_appended"',
+  '"custom"',
+  '"tool_execution_update"'
+].map((s) => new TextEncoder().encode(s));
+function bytesContains(hay, needle) {
+  outer:
+    for (let i = 0;i + needle.length <= hay.length; i++) {
+      for (let j = 0;j < needle.length; j++) {
+        if (hay[i + j] !== needle[j])
+          continue outer;
+      }
+      return true;
+    }
+  return false;
+}
+function isPiNoiseLineBytes(line) {
+  if (line.length === 0)
+    return false;
+  if (line[0] !== 123)
+    return false;
+  for (const n of NOISE_NEEDLES) {
+    if (bytesContains(line, n))
+      return true;
+  }
+  return false;
+}
+
 // template-utils.ts
 function stripFrontmatter(content) {
   const fmMatch = content.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n---\r?\n/);
@@ -984,7 +1488,7 @@ function isYamlFrontmatter(body) {
 
 // src/review-gate.ts
 import { randomBytes, createHash } from "crypto";
-import { existsSync, readFileSync as readFileSync2, appendFileSync } from "fs";
+import { existsSync as existsSync2, readFileSync as readFileSync3, appendFileSync } from "fs";
 function generateRunHash(cwd, stateDir) {
   const raw = `${cwd}:${stateDir}:${process.pid}:${Date.now()}:${randomBytes(8).toString("hex")}`;
   return createHash("sha256").update(raw).digest("hex").slice(0, 16);
@@ -1027,8 +1531,8 @@ If APPROVE: no additional explanation needed.`;
 function buildReviewPrompt(params) {
   let template = DEFAULT_REVIEW_PROMPT;
   if (params.customPromptTemplate) {
-    if (existsSync(params.customPromptTemplate)) {
-      template = readFileSync2(params.customPromptTemplate, "utf-8");
+    if (existsSync2(params.customPromptTemplate)) {
+      template = readFileSync3(params.customPromptTemplate, "utf-8");
     } else {
       console.warn(`\u26A0\uFE0F Custom review prompt file not found: ${params.customPromptTemplate}. Using built-in prompt.`);
     }
@@ -1160,13 +1664,13 @@ async function dispatchVoters(params) {
         cwd
       });
       let timerId;
-      const timeoutPromise = new Promise((resolve) => {
+      const timeoutPromise = new Promise((resolve2) => {
         timerId = setTimeout(() => {
           timedOut = true;
           try {
             proc.kill("SIGKILL");
           } catch {}
-          resolve();
+          resolve2();
         }, timeoutMs);
       });
       const exitPromise = proc.exited.then(() => {});
@@ -1247,8 +1751,8 @@ function validateReviewConfig(config) {
 }
 
 // src/lifecycle-hooks.ts
-import { existsSync as existsSync2, readdirSync, statSync, readFileSync as readFileSync3, writeFileSync as writeFileSync2, unlinkSync } from "fs";
-import { join } from "path";
+import { existsSync as existsSync3, readdirSync, statSync, readFileSync as readFileSync4, writeFileSync as writeFileSync3, unlinkSync } from "fs";
+import { join as join2 } from "path";
 import { spawnSync } from "child_process";
 var TIMEOUT_BIN_AVAILABLE = (() => {
   try {
@@ -1279,7 +1783,7 @@ var LIFECYCLE_EVENTS = [
   "loop-error",
   "loop-cancel"
 ];
-var DEFAULT_GLOBAL_CONFIG_DIR = join(process.env.HOME || process.env.USERPROFILE || "~", ".config", "open-ralph-wiggum");
+var DEFAULT_GLOBAL_CONFIG_DIR = join2(process.env.HOME || process.env.USERPROFILE || "~", ".config", "open-ralph-wiggum");
 var LOCAL_HOOKS_DIR = ".ralph/hooks";
 var DEFAULT_HOOK_TIMEOUT_MS = 30000;
 var HOOK_FILENAME_RE = /^(\d+)-(.+)\.sh$/;
@@ -1287,12 +1791,12 @@ var PIPELINE_CONTEXT_START = "---RALPH_PIPELINE_CONTEXT---";
 var PIPELINE_CONTEXT_END = "---END_PIPELINE_CONTEXT---";
 var PIPELINE_CONTEXT_FILE = "pipeline-context.json";
 function loadPipelineContext(stateDir) {
-  const contextPath = join(stateDir, PIPELINE_CONTEXT_FILE);
-  if (!existsSync2(contextPath)) {
+  const contextPath = join2(stateDir, PIPELINE_CONTEXT_FILE);
+  if (!existsSync3(contextPath)) {
     return {};
   }
   try {
-    const content = readFileSync3(contextPath, "utf-8");
+    const content = readFileSync4(contextPath, "utf-8");
     return JSON.parse(content);
   } catch (err) {
     console.warn(`[hooks] Failed to load pipeline context: ${err}`);
@@ -1300,9 +1804,9 @@ function loadPipelineContext(stateDir) {
   }
 }
 function savePipelineContext(stateDir, context) {
-  const contextPath = join(stateDir, PIPELINE_CONTEXT_FILE);
+  const contextPath = join2(stateDir, PIPELINE_CONTEXT_FILE);
   try {
-    writeFileSync2(contextPath, JSON.stringify(context, null, 2));
+    writeFileSync3(contextPath, JSON.stringify(context, null, 2));
   } catch (err) {
     console.warn(`[hooks] Failed to save pipeline context: ${err}`);
   }
@@ -1362,8 +1866,8 @@ function filterPipelineContextFromOutput(output) {
 function discoverHooks(options) {
   const { event, cwd } = options;
   const globalConfigDir = options.globalConfigDir ?? DEFAULT_GLOBAL_CONFIG_DIR;
-  const globalDir = join(globalConfigDir, "hooks", event);
-  const localDir = join(cwd, LOCAL_HOOKS_DIR, event);
+  const globalDir = join2(globalConfigDir, "hooks", event);
+  const localDir = join2(cwd, LOCAL_HOOKS_DIR, event);
   const globalHooks = scanDirectory(globalDir, event, "global");
   const localHooks = scanDirectory(localDir, event, "local");
   checkPriorityCollision(globalHooks, "global", event);
@@ -1371,7 +1875,7 @@ function discoverHooks(options) {
   return sortHooks([...globalHooks, ...localHooks]);
 }
 function scanDirectory(dir, event, scope) {
-  if (!existsSync2(dir))
+  if (!existsSync3(dir))
     return [];
   const stat = statSync(dir);
   if (!stat.isDirectory())
@@ -1384,7 +1888,7 @@ function scanDirectory(dir, event, scope) {
       continue;
     const priority = parseInt(match[1], 10);
     const name = match[2];
-    const filePath = join(dir, file);
+    const filePath = join2(dir, file);
     if (!statSync(filePath).isFile())
       continue;
     entries.push({ event, priority, name, scope, filePath });
@@ -1578,8 +2082,8 @@ function showPipelineContext(stateDir) {
   return JSON.stringify(context, null, 2);
 }
 function clearPipelineContext(stateDir) {
-  const contextPath = join(stateDir, PIPELINE_CONTEXT_FILE);
-  if (existsSync2(contextPath)) {
+  const contextPath = join2(stateDir, PIPELINE_CONTEXT_FILE);
+  if (existsSync3(contextPath)) {
     try {
       unlinkSync(contextPath);
     } catch (err) {
@@ -1692,14 +2196,14 @@ function parseReviewConfig(parsed) {
 }
 
 // src/goal-parser.ts
-import { readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "fs";
+import { readFileSync as readFileSync5, writeFileSync as writeFileSync4 } from "fs";
 function parseGoalMd(filePath, slug) {
   if (!filePath) {
     throw new Error(`goal.md path is empty`);
   }
   let content;
   try {
-    content = readFileSync4(filePath, "utf-8");
+    content = readFileSync5(filePath, "utf-8");
   } catch {
     throw new Error(`goal.md not found: ${filePath}`);
   }
@@ -1796,7 +2300,7 @@ function escapeRegex2(str) {
 }
 
 // src/goal-state.ts
-import { readFileSync as readFileSync5, writeFileSync as writeFileSync4, existsSync as existsSync3 } from "fs";
+import { readFileSync as readFileSync6, writeFileSync as writeFileSync5, existsSync as existsSync4 } from "fs";
 var VALID_PHASES = ["planning", "executing", "verifying", "done"];
 var VALID_PHASE_SET = new Set(VALID_PHASES);
 var PHASE_ORDER = {
@@ -1842,10 +2346,10 @@ function validateNestedFields(parsed) {
   return true;
 }
 function loadGoalState(filePath) {
-  if (!existsSync3(filePath))
+  if (!existsSync4(filePath))
     return null;
   try {
-    const raw = readFileSync5(filePath, "utf-8");
+    const raw = readFileSync6(filePath, "utf-8");
     const parsed = JSON.parse(raw);
     if (typeof parsed?.slug !== "string" || typeof parsed?.phase !== "string" || !VALID_PHASE_SET.has(parsed.phase) || typeof parsed?.startedAt !== "string" || typeof parsed?.lastIterationAt !== "string" || typeof parsed?.completionPromise !== "string") {
       return null;
@@ -1861,7 +2365,7 @@ function loadGoalState(filePath) {
   }
 }
 function saveGoalState(filePath, state) {
-  writeFileSync4(filePath, JSON.stringify(state, null, 2), "utf-8");
+  writeFileSync5(filePath, JSON.stringify(state, null, 2), "utf-8");
 }
 function transitionPhase(state, target) {
   const currentIdx = PHASE_ORDER[state.phase];
@@ -1956,8 +2460,8 @@ function syncGoalStateAfterIteration(goalFilePath, goalStateFilePath, iteration,
 }
 
 // src/goal-inventory.ts
-import { existsSync as existsSync4, readdirSync as readdirSync2, statSync as statSync2 } from "fs";
-import { join as join2 } from "path";
+import { existsSync as existsSync5, readdirSync as readdirSync2, statSync as statSync2 } from "fs";
+import { join as join3 } from "path";
 var PHASE_PRIORITY = {
   executing: 0,
   verifying: 1,
@@ -1965,7 +2469,7 @@ var PHASE_PRIORITY = {
   done: 3
 };
 function buildInventory(goalsDir) {
-  if (!existsSync4(goalsDir))
+  if (!existsSync5(goalsDir))
     return { goals: [] };
   let entries;
   try {
@@ -1975,7 +2479,7 @@ function buildInventory(goalsDir) {
   }
   const goals = [];
   for (const entry of entries) {
-    const entryPath = join2(goalsDir, entry);
+    const entryPath = join3(goalsDir, entry);
     let stat;
     try {
       stat = statSync2(entryPath);
@@ -1984,12 +2488,12 @@ function buildInventory(goalsDir) {
     }
     if (!stat.isDirectory())
       continue;
-    const goalMdPath = join2(entryPath, "goal.md");
-    if (!existsSync4(goalMdPath))
+    const goalMdPath = join3(entryPath, "goal.md");
+    if (!existsSync5(goalMdPath))
       continue;
     try {
       const goal = parseGoalMd(goalMdPath, entry);
-      const statePath = join2(entryPath, "goal.state.json");
+      const statePath = join3(entryPath, "goal.state.json");
       let phase = "planning";
       let lastIterationAt = "";
       let factsVerified = goal.facts.filter((f) => f.verified).length;
@@ -2147,26 +2651,25 @@ All facts verified.
 function titleToSlug(title) {
   return title.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
 }
-
 // ralph.ts
 var VERSION = "1.3.0";
-var IS_WINDOWS = process.platform === "win32";
-var stateDir = join3(process.cwd(), ".ralph");
-var statePath = join3(stateDir, "ralph-loop.state.json");
-var contextPath = join3(stateDir, "ralph-context.md");
-var historyPath = join3(stateDir, "ralph-history.json");
-var tasksPath = join3(stateDir, "ralph-tasks.md");
-var questionsPath = join3(stateDir, "ralph-questions.json");
+var IS_WINDOWS2 = process.platform === "win32";
+var stateDir = join4(process.cwd(), ".ralph");
+var statePath = join4(stateDir, "ralph-loop.state.json");
+var contextPath = join4(stateDir, "ralph-context.md");
+var historyPath = join4(stateDir, "ralph-history.json");
+var tasksPath = join4(stateDir, "ralph-tasks.md");
+var questionsPath = join4(stateDir, "ralph-questions.json");
 function setStatePaths(nextStateDir) {
-  stateDir = resolve(nextStateDir);
-  statePath = join3(stateDir, "ralph-loop.state.json");
-  contextPath = join3(stateDir, "ralph-context.md");
-  historyPath = join3(stateDir, "ralph-history.json");
-  tasksPath = join3(stateDir, "ralph-tasks.md");
-  questionsPath = join3(stateDir, "ralph-questions.json");
+  stateDir = resolve2(nextStateDir);
+  statePath = join4(stateDir, "ralph-loop.state.json");
+  contextPath = join4(stateDir, "ralph-context.md");
+  historyPath = join4(stateDir, "ralph-history.json");
+  tasksPath = join4(stateDir, "ralph-tasks.md");
+  questionsPath = join4(stateDir, "ralph-questions.json");
 }
 function ensureStateDir() {
-  if (existsSync5(stateDir)) {
+  if (existsSync6(stateDir)) {
     try {
       const stats = statSync3(stateDir);
       if (!stats.isDirectory()) {
@@ -2205,149 +2708,16 @@ function currentTasksFileLabel() {
 var customConfigPath = "";
 var initConfigPath = undefined;
 var AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot", "cursor-agent", "grok", "agy", "hermes"];
-var DEFAULT_CONFIG_PATH = join3(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
-var stateDirInput = join3(process.cwd(), ".ralph");
-var PARSE_PATTERNS = {
-  opencode: (line) => {
-    const match = stripAnsi(line).match(/^\|\s{2}([A-Za-z0-9_-]+)/);
-    return match ? match[1] : null;
-  },
-  "claude-code": (line) => {
-    const cleanLine = stripAnsi(line);
-    const match = cleanLine.match(/(?:Using|Called|Tool:)\s+([A-Za-z0-9_.-]+)/i);
-    if (match)
-      return match[1];
-    if (/"type"\s*:\s*"tool_use"/.test(cleanLine)) {
-      const nameMatch = cleanLine.match(/"name"\s*:\s*"([^"]+)"/);
-      if (nameMatch)
-        return nameMatch[1];
-    }
-    return null;
-  },
-  default: (line) => {
-    const match = stripAnsi(line).match(/(?:Tool:|Using|Called|Running)\s+([A-Za-z0-9_-]+)/i);
-    return match ? match[1] : null;
-  }
-};
-var defaultParseToolOutput = (line) => {
-  const match = stripAnsi(line).match(/(?:Tool:|Using|Calling|Running)\s+([A-Za-z0-9_-]+)/i);
-  return match ? match[1] : null;
-};
-PARSE_PATTERNS["codex"] = defaultParseToolOutput;
-PARSE_PATTERNS["copilot"] = defaultParseToolOutput;
-PARSE_PATTERNS["pi"] = (line) => {
-  try {
-    const evt = JSON.parse(line);
-    if (evt.type === "turn_end" && evt.toolResults?.length > 0) {
-      return evt.toolResults[0].toolName || null;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-};
-function parseJsonStreamToolName(line) {
-  try {
-    const evt = JSON.parse(stripAnsi(line));
-    if (!evt || typeof evt !== "object")
-      return null;
-    if (typeof evt.toolName === "string" && evt.toolName)
-      return evt.toolName;
-    if (evt.type === "tool_call") {
-      if (typeof evt.toolName === "string" && evt.toolName)
-        return evt.toolName;
-      if (typeof evt.name === "string" && evt.name)
-        return evt.name;
-    }
-    if (evt.type === "assistant" && evt.message && typeof evt.message === "object") {
-      const content = evt.message.content;
-      if (Array.isArray(content)) {
-        for (const block of content) {
-          if (block && typeof block === "object" && block.type === "tool_use") {
-            const name = block.name;
-            if (typeof name === "string" && name)
-              return name;
-          }
-        }
-      }
-    }
-    const step = evt.step_update;
-    if (evt.event === "step_update" && step && typeof step === "object") {
-      if (typeof step.tool_name === "string" && step.tool_name)
-        return step.tool_name;
-      const info = step.tool_info;
-      if (info && typeof info === "object" && typeof info.name === "string" && info.name) {
-        return info.name;
-      }
-    }
-    return null;
-  } catch {
-    return null;
-  }
+var DEFAULT_CONFIG_PATH2 = join4(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
+var stateDirInput = join4(process.cwd(), ".ralph");
+function ensureRalphConfig2(options) {
+  return ensureRalphConfig(options, stateDir);
 }
-PARSE_PATTERNS["grok"] = parseJsonStreamToolName;
-PARSE_PATTERNS["agy"] = parseJsonStreamToolName;
-PARSE_PATTERNS["hermes"] = defaultParseToolOutput;
-function loadPluginsFromConfig(configPath) {
-  if (!existsSync5(configPath)) {
-    return [];
-  }
-  try {
-    const raw = readFileSync6(configPath, "utf-8");
-    const withoutBlock = raw.replace(/\/\*[\s\S]*?\*\//g, "");
-    const withoutLine = withoutBlock.replace(/^\s*\/\/.*$/gm, "");
-    const parsed = JSON.parse(withoutLine);
-    const plugins = parsed?.plugin;
-    return Array.isArray(plugins) ? plugins.filter((p) => typeof p === "string") : [];
-  } catch {
-    return [];
-  }
-}
-function ensureRalphConfig(options) {
-  if (!existsSync5(stateDir)) {
-    mkdirSync(stateDir, { recursive: true });
-  }
-  const configPath = join3(stateDir, "ralph-opencode.config.json");
-  const userConfigPath = join3(process.env.XDG_CONFIG_HOME ?? join3(process.env.HOME ?? "", ".config"), "opencode", "opencode.json");
-  const projectConfigPath = join3(process.cwd(), ".ralph", "opencode.json");
-  const legacyProjectConfigPath = join3(process.cwd(), ".opencode", "opencode.json");
-  const config = {
-    $schema: "https://opencode.ai/config.json"
-  };
-  if (options.filterPlugins) {
-    const plugins = [
-      ...loadPluginsFromConfig(userConfigPath),
-      ...loadPluginsFromConfig(projectConfigPath),
-      ...loadPluginsFromConfig(legacyProjectConfigPath)
-    ];
-    config.plugin = Array.from(new Set(plugins)).filter((p) => /auth/i.test(p));
-  }
-  if (options.allowAllPermissions) {
-    config.permission = {
-      read: "allow",
-      edit: "allow",
-      glob: "allow",
-      grep: "allow",
-      list: "allow",
-      bash: "allow",
-      task: "allow",
-      webfetch: "allow",
-      websearch: "allow",
-      codesearch: "allow",
-      todowrite: "allow",
-      todoread: "allow",
-      question: "allow",
-      lsp: "allow"
-    };
-  }
-  writeFileSync5(configPath, JSON.stringify(config, null, 2));
-  return configPath;
-}
-var ENV_TEMPLATES = {
+var ENV_TEMPLATES2 = {
   opencode: (options) => {
     const env = { ...process.env };
     if (options.filterPlugins || options.allowAllPermissions) {
-      env.OPENCODE_CONFIG = ensureRalphConfig({
+      env.OPENCODE_CONFIG = ensureRalphConfig2({
         filterPlugins: options.filterPlugins,
         allowAllPermissions: options.allowAllPermissions
       });
@@ -2357,11 +2727,11 @@ var ENV_TEMPLATES = {
   default: () => ({ ...process.env })
 };
 function loadAgentConfig(configPath) {
-  const path = configPath || DEFAULT_CONFIG_PATH;
-  if (!existsSync5(path))
+  const path = configPath || DEFAULT_CONFIG_PATH2;
+  if (!existsSync6(path))
     return null;
   try {
-    const content = readFileSync6(path, "utf-8");
+    const content = readFileSync7(path, "utf-8");
     const config = JSON.parse(content);
     const agents = {};
     for (const agent of config.agents) {
@@ -2378,7 +2748,7 @@ function createAgentConfig(json, basePath) {
   if (json.args) {
     const toolRegex = json.toolPattern ? new RegExp(json.toolPattern) : null;
     return {
-      command: resolveCommand(json.command, process.env[`RALPH_${type.toUpperCase()}_BINARY`], basePath),
+      command: resolveCommand2(json.command, process.env[`RALPH_${type.toUpperCase()}_BINARY`], basePath),
       type,
       buildArgs: (prompt, model, options) => {
         const cmdArgs = [];
@@ -2423,10 +2793,10 @@ function createAgentConfig(json, basePath) {
   const envTemplate = json.envTemplate || "default";
   const parsePattern = json.parsePattern || "default";
   return {
-    command: resolveCommand(json.command, process.env[`RALPH_${type.toUpperCase()}_BINARY`]),
+    command: resolveCommand2(json.command, process.env[`RALPH_${type.toUpperCase()}_BINARY`]),
     type,
     buildArgs: ARGS_TEMPLATES[argsTemplate] || ARGS_TEMPLATES["default"],
-    buildEnv: ENV_TEMPLATES[envTemplate] || ENV_TEMPLATES["default"],
+    buildEnv: ENV_TEMPLATES2[envTemplate] || ENV_TEMPLATES2["default"],
     parseToolOutput: PARSE_PATTERNS[parsePattern] || PARSE_PATTERNS["default"],
     configName: json.configName
   };
@@ -2709,13 +3079,13 @@ function normalizeRuntimeConfigValue2(path, value, expected) {
   }
   return value;
 }
-function resolveConfigRelativePath(baseFilePath, targetPath) {
+function resolveConfigRelativePath2(baseFilePath, targetPath) {
   if (!targetPath)
     return targetPath;
-  return isAbsolute(targetPath) ? targetPath : resolve(dirname(baseFilePath), targetPath);
+  return isAbsolute2(targetPath) ? targetPath : resolve2(dirname2(baseFilePath), targetPath);
 }
 function loadRuntimeTomlConfig(configPath, explicit) {
-  if (!existsSync5(configPath)) {
+  if (!existsSync6(configPath)) {
     if (explicit) {
       console.error(`Error: Ralph TOML config not found: ${configPath}`);
       process.exit(1);
@@ -2723,7 +3093,7 @@ function loadRuntimeTomlConfig(configPath, explicit) {
     return null;
   }
   try {
-    const raw = readFileSync6(configPath, "utf-8");
+    const raw = readFileSync7(configPath, "utf-8");
     const parsed = Bun.TOML.parse(raw);
     const config = {};
     config.prompt = normalizeRuntimeConfigValue2("prompt", parsed.prompt, "string");
@@ -2773,13 +3143,13 @@ function loadRuntimeTomlConfig(configPath, explicit) {
     config.goal_dir = normalizeRuntimeConfigValue2("goal_dir", parsed.goal_dir, "string");
     config.goal_promise = normalizeRuntimeConfigValue2("goal_promise", parsed.goal_promise, "string");
     if (config.prompt_file) {
-      config.prompt_file = resolveConfigRelativePath(configPath, config.prompt_file);
+      config.prompt_file = resolveConfigRelativePath2(configPath, config.prompt_file);
     }
     if (config.prompt_template) {
-      config.prompt_template = resolveConfigRelativePath(configPath, config.prompt_template);
+      config.prompt_template = resolveConfigRelativePath2(configPath, config.prompt_template);
     }
     if (config.agent_config) {
-      config.agent_config = resolveConfigRelativePath(configPath, config.agent_config);
+      config.agent_config = resolveConfigRelativePath2(configPath, config.agent_config);
     }
     return config;
   } catch (error) {
@@ -2795,13 +3165,13 @@ function loadRulesToml(currentStateDir) {
   const stateDirName = extractStateDirBasename(currentStateDir);
   const tomlName = `.ralph-${stateDirName}.toml`;
   const candidates = [
-    join3(currentStateDir, tomlName),
-    join3(process.cwd(), tomlName)
+    join4(currentStateDir, tomlName),
+    join4(process.cwd(), tomlName)
   ];
   for (const path of candidates) {
-    if (existsSync5(path)) {
+    if (existsSync6(path)) {
       try {
-        const raw = readFileSync6(path, "utf-8");
+        const raw = readFileSync7(path, "utf-8");
         if (raw.trim().length === 0)
           return null;
         const parsed = Bun.TOML.parse(raw);
@@ -2823,19 +3193,19 @@ function loadRulesToml(currentStateDir) {
 function resolveRulesTomlPath(currentStateDir) {
   const stateDirName = extractStateDirBasename(currentStateDir);
   const tomlName = `.ralph-${stateDirName}.toml`;
-  if (existsSync5(join3(currentStateDir, tomlName)))
-    return join3(currentStateDir, tomlName);
-  return join3(process.cwd(), tomlName);
+  if (existsSync6(join4(currentStateDir, tomlName)))
+    return join4(currentStateDir, tomlName);
+  return join4(process.cwd(), tomlName);
 }
 function scaffoldRulesToml(rulesName, currentStateDir) {
   const stateDirName = extractStateDirBasename(currentStateDir);
-  const tomlPath = join3(currentStateDir, `.ralph-${stateDirName}.toml`);
-  const tomlDir = dirname(tomlPath);
-  if (!existsSync5(tomlDir))
-    mkdirSync(tomlDir, { recursive: true });
+  const tomlPath = join4(currentStateDir, `.ralph-${stateDirName}.toml`);
+  const tomlDir = dirname2(tomlPath);
+  if (!existsSync6(tomlDir))
+    mkdirSync2(tomlDir, { recursive: true });
   let existingContent = "";
-  if (existsSync5(tomlPath)) {
-    existingContent = readFileSync6(tomlPath, "utf-8");
+  if (existsSync6(tomlPath)) {
+    existingContent = readFileSync7(tomlPath, "utf-8");
   }
   if (existingContent) {
     const headerRegex = new RegExp(`(?<=^|
@@ -2859,7 +3229,7 @@ enabled = true
 at = 1
 prompt = "PLACEHOLDER: configure rules.${rulesName} entries"
 `;
-  writeFileSync5(tomlPath, section, { flag: "a" });
+  writeFileSync6(tomlPath, section, { flag: "a" });
   return `\u26A0\uFE0F SCAFFOLDED [rules.${rulesName}] \u2014 PLACEHOLDER detected. Configure your rules in ${tomlPath} before continuing.
 
 [rules.${rulesName}]
@@ -2986,20 +3356,20 @@ function resolveInjectPlaceholders(template, state, currentStateDir, toml) {
     const cfg = toml.state_injection;
     if (!cfg.source || typeof cfg.source !== "string")
       return "";
-    if (isAbsolute(cfg.source) || cfg.source.includes("..")) {
+    if (isAbsolute2(cfg.source) || cfg.source.includes("..")) {
       console.warn(`\u26A0\uFE0F Ralph: state_injection.source rejected (unsafe path): ${cfg.source}`);
       return "";
     }
-    const sourcePath = resolve(currentStateDir, cfg.source);
-    const stateDirRoot = resolve(currentStateDir) + sep;
+    const sourcePath = resolve2(currentStateDir, cfg.source);
+    const stateDirRoot = resolve2(currentStateDir) + sep;
     if (!sourcePath.startsWith(stateDirRoot)) {
       console.warn(`\u26A0\uFE0F Ralph: state_injection.source resolved outside state-dir: ${sourcePath}`);
       return "";
     }
-    if (!existsSync5(sourcePath))
+    if (!existsSync6(sourcePath))
       return "";
     try {
-      const raw = readFileSync6(sourcePath, "utf-8");
+      const raw = readFileSync7(sourcePath, "utf-8");
       if (raw.length > 1048576) {
         console.warn(`\u26A0\uFE0F Ralph: state_injection.source too large (${raw.length} bytes), skipping`);
         return "";
@@ -3043,7 +3413,7 @@ function resolveAgentBinary(agentType, cliBinary) {
   const envName = getAgentBinaryEnvName(agentType);
   const envOverride = process.env[envName];
   if (cliBinary)
-    return resolveCommand(cliBinary);
+    return resolveCommand2(cliBinary);
   if (envOverride)
     return envOverride;
   const defaults = {
@@ -3056,21 +3426,21 @@ function resolveAgentBinary(agentType, cliBinary) {
     agy: "agy",
     hermes: "hermes"
   };
-  return resolveCommand(defaults[agentType] ?? agentType);
+  return resolveCommand2(defaults[agentType] ?? agentType);
 }
-function resolveCommand(cmd, envOverride, basePath) {
+function resolveCommand2(cmd, envOverride, basePath) {
   if (envOverride)
     return envOverride;
-  if (IS_WINDOWS && !/[\\/]/.test(cmd) && !/\.(cmd|exe|bat)$/i.test(cmd)) {
+  if (IS_WINDOWS2 && !/[\\/]/.test(cmd) && !/\.(cmd|exe|bat)$/i.test(cmd)) {
     const cmdWithExt = `${cmd}.cmd`;
     if (Bun.which(cmdWithExt))
       return cmdWithExt;
   }
-  if (!isAbsolute(cmd)) {
+  if (!isAbsolute2(cmd)) {
     const ralphDir = import.meta.dirname;
-    const base = ralphDir ? resolve(ralphDir, cmd) : basePath || process.cwd();
-    const resolved = isAbsolute(base) ? base : resolveConfigRelativePath(base, cmd);
-    if (existsSync5(resolved))
+    const base = ralphDir ? resolve2(ralphDir, cmd) : basePath || process.cwd();
+    const resolved = isAbsolute2(base) ? base : resolveConfigRelativePath2(base, cmd);
+    if (existsSync6(resolved))
       return resolved;
     const whichPath = Bun.which(cmd);
     if (whichPath)
@@ -3079,89 +3449,23 @@ function resolveCommand(cmd, envOverride, basePath) {
   }
   return cmd;
 }
-var BUILT_IN_AGENTS = {
-  opencode: {
-    command: resolveCommand("opencode", process.env.RALPH_OPENCODE_BINARY),
-    type: "opencode",
-    buildArgs: ARGS_TEMPLATES["opencode"],
-    buildEnv: ENV_TEMPLATES["opencode"],
-    parseToolOutput: PARSE_PATTERNS["opencode"],
-    configName: "OpenCode"
-  },
-  "claude-code": {
-    type: "claude-code",
-    command: resolveCommand("claude", process.env.RALPH_CLAUDE_BINARY),
-    buildArgs: ARGS_TEMPLATES["claude-code"],
-    buildEnv: ENV_TEMPLATES["default"],
-    parseToolOutput: PARSE_PATTERNS["claude-code"],
-    configName: "Claude Code"
-  },
-  codex: {
-    type: "codex",
-    command: resolveCommand("codex", process.env.RALPH_CODEX_BINARY),
-    buildArgs: ARGS_TEMPLATES["codex"],
-    buildEnv: ENV_TEMPLATES["default"],
-    parseToolOutput: PARSE_PATTERNS["codex"],
-    configName: "Codex"
-  },
-  copilot: {
-    type: "copilot",
-    command: resolveCommand("copilot", process.env.RALPH_COPILOT_BINARY),
-    buildArgs: ARGS_TEMPLATES["copilot"],
-    buildEnv: ENV_TEMPLATES["default"],
-    parseToolOutput: PARSE_PATTERNS["copilot"],
-    configName: "Copilot CLI"
-  },
-  "cursor-agent": {
-    type: "cursor-agent",
-    command: resolveCommand("cursor-agent", process.env.RALPH_CURSOR_BINARY),
-    buildArgs: ARGS_TEMPLATES["claude-code"],
-    buildEnv: ENV_TEMPLATES["default"],
-    parseToolOutput: PARSE_PATTERNS["claude-code"],
-    configName: "Cursor Agent"
-  },
-  grok: {
-    type: "grok",
-    command: resolveCommand("grok", process.env.RALPH_GROK_BINARY),
-    buildArgs: ARGS_TEMPLATES["grok"],
-    buildEnv: ENV_TEMPLATES["default"],
-    parseToolOutput: PARSE_PATTERNS["grok"],
-    configName: "Grok"
-  },
-  agy: {
-    type: "agy",
-    command: resolveCommand("agy", process.env.RALPH_AGY_BINARY),
-    buildArgs: ARGS_TEMPLATES["agy"],
-    buildEnv: ENV_TEMPLATES["default"],
-    parseToolOutput: PARSE_PATTERNS["agy"],
-    configName: "AGY"
-  },
-  hermes: {
-    type: "hermes",
-    command: resolveCommand("hermes", process.env.RALPH_HERMES_BINARY),
-    buildArgs: ARGS_TEMPLATES["hermes"],
-    buildEnv: ENV_TEMPLATES["default"],
-    parseToolOutput: PARSE_PATTERNS["hermes"],
-    configName: "Hermes"
-  }
-};
 if (import.meta.main) {
   let loadHistory = function() {
-    if (!existsSync5(historyPath)) {
+    if (!existsSync6(historyPath)) {
       return EMPTY_HISTORY;
     }
     try {
-      return JSON.parse(readFileSync6(historyPath, "utf-8"));
+      return JSON.parse(readFileSync7(historyPath, "utf-8"));
     } catch {
       return EMPTY_HISTORY;
     }
   }, saveHistory = function(history) {
-    if (!existsSync5(stateDir)) {
-      mkdirSync(stateDir, { recursive: true });
+    if (!existsSync6(stateDir)) {
+      mkdirSync2(stateDir, { recursive: true });
     }
-    writeFileSync5(historyPath, JSON.stringify(history, null, 2));
+    writeFileSync6(historyPath, JSON.stringify(history, null, 2));
   }, clearHistory = function() {
-    if (existsSync5(historyPath)) {
+    if (existsSync6(historyPath)) {
       try {
         __require("fs").unlinkSync(historyPath);
       } catch {}
@@ -3292,7 +3596,7 @@ if (import.meta.main) {
         process.exit(1);
     }
   }, readPromptFile = function(path) {
-    if (!existsSync5(path)) {
+    if (!existsSync6(path)) {
       console.error(`Error: Prompt file not found: ${path}`);
       process.exit(1);
     }
@@ -3307,7 +3611,7 @@ if (import.meta.main) {
       process.exit(1);
     }
     try {
-      const content = readFileSync6(path, "utf-8");
+      const content = readFileSync7(path, "utf-8");
       if (!content.trim()) {
         console.error(`Error: Prompt file is empty: ${path}`);
         process.exit(1);
@@ -3329,7 +3633,7 @@ if (import.meta.main) {
   }, getStallRetryDelayMs = function(minutes) {
     return Math.max(0, Math.round(minutes * 60000));
   }, saveState = function(state) {
-    if (existsSync5(stateDir)) {
+    if (existsSync6(stateDir)) {
       try {
         const stats = lstatSync(stateDir);
         if (!stats.isDirectory()) {
@@ -3349,60 +3653,60 @@ Fix: rm ${stateDir}  # remove the file/symlink`);
         process.exit(1);
       }
     } else {
-      mkdirSync(stateDir, { recursive: true });
+      mkdirSync2(stateDir, { recursive: true });
     }
     const tmpPath = `${statePath}.tmp-${process.pid}-${Date.now()}`;
-    writeFileSync5(tmpPath, JSON.stringify(state, null, 2));
+    writeFileSync6(tmpPath, JSON.stringify(state, null, 2));
     renameSync2(tmpPath, statePath);
   }, loadState = function() {
-    if (!existsSync5(statePath)) {
+    if (!existsSync6(statePath)) {
       return null;
     }
     try {
-      return JSON.parse(readFileSync6(statePath, "utf-8"));
+      return JSON.parse(readFileSync7(statePath, "utf-8"));
     } catch {
       return null;
     }
   }, clearState = function() {
-    if (existsSync5(statePath)) {
+    if (existsSync6(statePath)) {
       try {
         __require("fs").unlinkSync(statePath);
       } catch {}
     }
   }, loadContext = function() {
-    if (!existsSync5(contextPath)) {
+    if (!existsSync6(contextPath)) {
       return null;
     }
     try {
-      const content = readFileSync6(contextPath, "utf-8").trim();
+      const content = readFileSync7(contextPath, "utf-8").trim();
       return content || null;
     } catch {
       return null;
     }
   }, clearContext = function() {
-    if (existsSync5(contextPath)) {
+    if (existsSync6(contextPath)) {
       try {
         __require("fs").unlinkSync(contextPath);
       } catch {}
     }
   }, savePendingQuestion = function(question) {
-    if (!existsSync5(stateDir)) {
-      mkdirSync(stateDir, { recursive: true });
+    if (!existsSync6(stateDir)) {
+      mkdirSync2(stateDir, { recursive: true });
     }
     const questions = loadPendingQuestions();
     questions.push({ question, timestamp: new Date().toISOString() });
-    writeFileSync5(questionsPath, JSON.stringify(questions, null, 2));
+    writeFileSync6(questionsPath, JSON.stringify(questions, null, 2));
   }, loadPendingQuestions = function() {
-    if (!existsSync5(questionsPath)) {
+    if (!existsSync6(questionsPath)) {
       return [];
     }
     try {
-      return JSON.parse(readFileSync6(questionsPath, "utf-8"));
+      return JSON.parse(readFileSync7(questionsPath, "utf-8"));
     } catch {
       return [];
     }
   }, clearPendingQuestions = function() {
-    if (existsSync5(questionsPath)) {
+    if (existsSync6(questionsPath)) {
       try {
         __require("fs").unlinkSync(questionsPath);
       } catch {}
@@ -3415,7 +3719,7 @@ Fix: rm ${stateDir}  # remove the file/symlink`);
     const question = questions[0].question;
     const remaining = questions.slice(1);
     if (remaining.length > 0) {
-      writeFileSync5(questionsPath, JSON.stringify(remaining, null, 2));
+      writeFileSync6(questionsPath, JSON.stringify(remaining, null, 2));
     } else {
       clearPendingQuestions();
     }
@@ -3435,12 +3739,12 @@ Fix: rm ${stateDir}  # remove the file/symlink`);
     }
     return null;
   }, loadCustomPromptTemplate = function(templatePath, state) {
-    if (!existsSync5(templatePath)) {
+    if (!existsSync6(templatePath)) {
       console.error(`Error: Prompt template not found: ${templatePath}`);
       process.exit(1);
     }
     try {
-      let template = readFileSync6(templatePath, "utf-8");
+      let template = readFileSync7(templatePath, "utf-8");
       template = stripFrontmatter(template);
       if (!template?.trim())
         return null;
@@ -3459,8 +3763,8 @@ Fix: rm ${stateDir}  # remove the file/symlink`);
       }
       const context = loadContext() || "";
       let tasksContent = "";
-      if (state.tasksMode && existsSync5(tasksPath)) {
-        tasksContent = readFileSync6(tasksPath, "utf-8");
+      if (state.tasksMode && existsSync6(tasksPath)) {
+        tasksContent = readFileSync7(tasksPath, "utf-8");
       }
       template = template.replace(/\{\{iteration\}\}/g, String(state.iteration)).replace(/\{\{max_iterations\}\}/g, state.maxIterations > 0 ? String(state.maxIterations) : "unlimited").replace(/\{\{min_iterations\}\}/g, String(state.minIterations)).replace(/\{\{prompt\}\}/g, state.prompt).replace(/\{\{completion_promise\}\}/g, state.completionPromise).replace(/\{\{abort_promise\}\}/g, state.abortPromise || "").replace(/\{\{task_promise\}\}/g, state.taskPromise).replace(/\{\{context\}\}/g, context).replace(/\{\{tasks\}\}/g, tasksContent);
       return template;
@@ -3485,7 +3789,7 @@ ${context}
     if (state.goalSlug && goalPath) {
       try {
         const goal = parseGoalMd(goalPath, state.goalSlug);
-        const goalStatePath = join3(dirname(goalPath), "goal.state.json");
+        const goalStatePath = join4(dirname2(goalPath), "goal.state.json");
         const goalState = loadGoalState(goalStatePath) ?? createInitialState(state.goalSlug, state.completionPromise);
         const goalSection = buildGoalPromptSection(goal, goalState, state.iteration);
         return `
@@ -3575,7 +3879,7 @@ ${state.prompt}
 Now, work on the task. Good luck!
 `.trim();
   }, getTasksModeSection = function(state) {
-    if (!existsSync5(tasksPath)) {
+    if (!existsSync6(tasksPath)) {
       return `
 ## TASKS MODE: Enabled (no tasks file found)
 
@@ -3583,7 +3887,7 @@ Create ${currentTasksFileLabel()} with your task list, or use \`ralph --add-task
 `;
     }
     try {
-      const tasksContent = readFileSync6(tasksPath, "utf-8");
+      const tasksContent = readFileSync7(tasksPath, "utf-8");
       const tasks = parseTasks(tasksContent);
       const currentTask = findCurrentTask(tasks);
       const nextTask = findNextTask(tasks);
@@ -3822,22 +4126,22 @@ Iteration Summary`);
   setStatePaths(stateDirInput);
   ensureStateDir();
   if (!tomlConfigPath) {
-    tomlConfigPath = join3(stateDir, "config.toml");
+    tomlConfigPath = join4(stateDir, "config.toml");
   }
   if (initConfigPath !== undefined) {
-    const agentConfigPath = initConfigPath || DEFAULT_CONFIG_PATH;
-    const tomlConfigPathOutput = join3(stateDir, "config.toml");
-    const agentConfigDir = join3(agentConfigPath, "..");
-    if (!existsSync5(agentConfigDir)) {
-      mkdirSync(agentConfigDir, { recursive: true });
+    const agentConfigPath = initConfigPath || DEFAULT_CONFIG_PATH2;
+    const tomlConfigPathOutput = join4(stateDir, "config.toml");
+    const agentConfigDir = join4(agentConfigPath, "..");
+    if (!existsSync6(agentConfigDir)) {
+      mkdirSync2(agentConfigDir, { recursive: true });
     }
-    writeFileSync5(agentConfigPath, JSON.stringify(getDefaultConfig(), null, 2));
+    writeFileSync6(agentConfigPath, JSON.stringify(getDefaultConfig(), null, 2));
     console.log(`Created agent config at: ${agentConfigPath}`);
-    const tomlDir = join3(tomlConfigPathOutput, "..");
-    if (!existsSync5(tomlDir)) {
-      mkdirSync(tomlDir, { recursive: true });
+    const tomlDir = join4(tomlConfigPathOutput, "..");
+    if (!existsSync6(tomlDir)) {
+      mkdirSync2(tomlDir, { recursive: true });
     }
-    writeFileSync5(tomlConfigPathOutput, getDefaultTomlConfig());
+    writeFileSync6(tomlConfigPathOutput, getDefaultTomlConfig());
     console.log(`Created runtime config at: ${tomlConfigPathOutput}`);
     console.log(`
 Configuration initialized! You can edit these files to customize Ralph.`);
@@ -3847,15 +4151,15 @@ Configuration initialized! You can edit these files to customize Ralph.`);
   if (args.includes("--init-rules")) {
     const stateDirName = extractStateDirBasename(stateDir);
     const tomlName = `.ralph-${stateDirName}.toml`;
-    const tomlPath = join3(stateDir, tomlName);
-    if (existsSync5(tomlPath)) {
+    const tomlPath = join4(stateDir, tomlName);
+    if (existsSync6(tomlPath)) {
       console.log(`Rules TOML already exists: ${tomlPath}`);
       console.log("Remove it first if you want to re-scaffold.");
       process.exit(0);
     }
-    if (!existsSync5(stateDir))
-      mkdirSync(stateDir, { recursive: true });
-    writeFileSync5(tomlPath, getDefaultRulesToml());
+    if (!existsSync6(stateDir))
+      mkdirSync2(stateDir, { recursive: true });
+    writeFileSync6(tomlPath, getDefaultRulesToml());
     console.log(`Created rules TOML at: ${tomlPath}`);
     console.log("Edit this file to configure deterministic rule injections.");
     process.exit(0);
@@ -3993,13 +4297,13 @@ Learn more: https://ghuntley.com/ralph/
     if (reasonIdx !== -1 && reviewArgs[reasonIdx + 1]) {
       reason = reviewArgs[reasonIdx + 1];
     }
-    if (!existsSync5(statePath)) {
+    if (!existsSync6(statePath)) {
       console.error("Error: No active Ralph state file found. Is Ralph running in this directory?");
       process.exit(1);
     }
     const reviewState = (() => {
       try {
-        return JSON.parse(readFileSync6(statePath, "utf-8"));
+        return JSON.parse(readFileSync7(statePath, "utf-8"));
       } catch {
         return null;
       }
@@ -4050,7 +4354,7 @@ Learn more: https://ghuntley.com/ralph/
       reviewState.reviewGate.votes[voterKey] = { status: "rejected", at: now, reason };
     }
     const tmpPath = `${statePath}.tmp-${process.pid}-${Date.now()}`;
-    writeFileSync5(tmpPath, JSON.stringify(reviewState, null, 2));
+    writeFileSync6(tmpPath, JSON.stringify(reviewState, null, 2));
     renameSync2(tmpPath, statePath);
     console.log(JSON.stringify({
       action,
@@ -4078,7 +4382,7 @@ Learn more: https://ghuntley.com/ralph/
       }
     }
     if (!dir) {
-      dir = join3(process.cwd(), "goals");
+      dir = join4(process.cwd(), "goals");
     }
     const inv = buildInventory(dir);
     console.log(formatGoalInventory(inv.goals));
@@ -4095,18 +4399,18 @@ Learn more: https://ghuntley.com/ralph/
       console.error("Error: --init-goal title produces empty slug");
       process.exit(1);
     }
-    const goalDir2 = join3(process.cwd(), "goals", slug);
-    mkdirSync(goalDir2, { recursive: true });
-    const goalMdPath = join3(goalDir2, "goal.md");
-    if (existsSync5(goalMdPath)) {
+    const goalDir2 = join4(process.cwd(), "goals", slug);
+    mkdirSync2(goalDir2, { recursive: true });
+    const goalMdPath = join4(goalDir2, "goal.md");
+    if (existsSync6(goalMdPath)) {
       console.error(`Error: goal already exists at ${goalMdPath}`);
       process.exit(1);
     }
-    writeFileSync5(goalMdPath, scaffoldGoalMd(title), "utf-8");
-    const goalStatePath = join3(goalDir2, "goal.state.json");
-    if (!existsSync5(goalStatePath)) {
+    writeFileSync6(goalMdPath, scaffoldGoalMd(title), "utf-8");
+    const goalStatePath = join4(goalDir2, "goal.state.json");
+    if (!existsSync6(goalStatePath)) {
       const initState = createInitialState(slug);
-      writeFileSync5(goalStatePath, JSON.stringify(initState, null, 2), "utf-8");
+      writeFileSync6(goalStatePath, JSON.stringify(initState, null, 2), "utf-8");
     }
     console.log(`\u2705 Created goal scaffold: ${goalDir2}/`);
     process.exit(0);
@@ -4126,7 +4430,7 @@ Learn more: https://ghuntley.com/ralph/
           console.error("No active goals found in " + dir);
           process.exit(1);
         }
-        statusGoalPath = join3(dir, next.slug, "goal.md");
+        statusGoalPath = join4(dir, next.slug, "goal.md");
       }
     }
     if (!statusGoalPath) {
@@ -4137,18 +4441,18 @@ Learn more: https://ghuntley.com/ralph/
         const inv = buildInventory(tomlCfg.goal_dir);
         const next = findNextActionableGoal(inv);
         if (next) {
-          statusGoalPath = join3(tomlCfg.goal_dir, next.slug, "goal.md");
+          statusGoalPath = join4(tomlCfg.goal_dir, next.slug, "goal.md");
         }
       }
     }
-    if (!statusGoalPath || !existsSync5(statusGoalPath)) {
+    if (!statusGoalPath || !existsSync6(statusGoalPath)) {
       console.error("Error: --goal-status requires --goal <path> or --goal-dir <dir> (or TOML config) with an active goal");
       process.exit(1);
     }
     try {
-      const slug = basename2(dirname(statusGoalPath));
+      const slug = basename2(dirname2(statusGoalPath));
       const goal = parseGoalMd(statusGoalPath, slug);
-      const goalStatePath = join3(dirname(statusGoalPath), "goal.state.json");
+      const goalStatePath = join4(dirname2(statusGoalPath), "goal.state.json");
       const goalState = loadGoalState(goalStatePath) ?? createInitialState(slug);
       console.log(formatGoalStatus(goal, goalState));
       process.exit(0);
@@ -4159,9 +4463,9 @@ Learn more: https://ghuntley.com/ralph/
   }
   const runtimeTomlConfig = loadRuntimeTomlConfig(tomlConfigPath, explicitTomlConfigPath);
   let reviewConfig = null;
-  if (existsSync5(tomlConfigPath)) {
+  if (existsSync6(tomlConfigPath)) {
     try {
-      const raw = readFileSync6(tomlConfigPath, "utf-8");
+      const raw = readFileSync7(tomlConfigPath, "utf-8");
       const parsed = Bun.TOML.parse(raw);
       reviewConfig = parseReviewConfig(parsed);
       if (reviewConfig) {
@@ -4179,7 +4483,7 @@ Learn more: https://ghuntley.com/ralph/
   const AGENTS = { ...BUILT_IN_AGENTS };
   if (customAgents) {
     for (const [type, json] of Object.entries(customAgents)) {
-      AGENTS[type] = createAgentConfig(json, customConfigPath ? dirname(customConfigPath) : undefined);
+      AGENTS[type] = createAgentConfig(json, customConfigPath ? dirname2(customConfigPath) : undefined);
     }
   }
   const EMPTY_HISTORY = {
@@ -4240,9 +4544,9 @@ ${params.stderr}`);
     let fixesApplied = 0;
     console.log(`
 \uD83D\uDCC1 Checking state directory...`);
-    if (!existsSync5(stateDir)) {
+    if (!existsSync6(stateDir)) {
       console.log("  \u26A0\uFE0F  State directory does not exist. Creating...");
-      mkdirSync(stateDir, { recursive: true });
+      mkdirSync2(stateDir, { recursive: true });
       console.log(`  \u2705 Created: ${stateDir}/`);
       fixesApplied++;
     } else {
@@ -4263,10 +4567,10 @@ ${params.stderr}`);
     }
     console.log(`
 \u2699\uFE0F  Checking configuration files...`);
-    const agentConfigPath = DEFAULT_CONFIG_PATH;
-    if (existsSync5(agentConfigPath)) {
+    const agentConfigPath = DEFAULT_CONFIG_PATH2;
+    if (existsSync6(agentConfigPath)) {
       try {
-        const content = readFileSync6(agentConfigPath, "utf-8");
+        const content = readFileSync7(agentConfigPath, "utf-8");
         JSON.parse(content);
         console.log("  \u2705 Agent config is valid JSON");
       } catch {
@@ -4276,10 +4580,10 @@ ${params.stderr}`);
     } else {
       console.log(`  \u2139\uFE0F  No agent config found (will use defaults)`);
     }
-    const runtimeConfigPath = join3(stateDir, "config.toml");
-    if (existsSync5(runtimeConfigPath)) {
+    const runtimeConfigPath = join4(stateDir, "config.toml");
+    if (existsSync6(runtimeConfigPath)) {
       try {
-        const content = readFileSync6(runtimeConfigPath, "utf-8");
+        const content = readFileSync7(runtimeConfigPath, "utf-8");
         Bun.TOML.parse(content);
         console.log("  \u2705 Runtime config is valid TOML");
       } catch (err) {
@@ -4302,9 +4606,9 @@ ${params.stderr}`);
     }
     console.log(`
 \uD83D\uDD0D Checking for common issues...`);
-    if (existsSync5(statePath)) {
+    if (existsSync6(statePath)) {
       try {
-        const state = JSON.parse(readFileSync6(statePath, "utf-8"));
+        const state = JSON.parse(readFileSync7(statePath, "utf-8"));
         if (state.active) {
           console.log("  \u26A0\uFE0F  Active loop detected. Use 'ralph --status' for details.");
         } else {
@@ -4317,9 +4621,9 @@ ${params.stderr}`);
     } else {
       console.log("  \u2705 No active loop");
     }
-    if (existsSync5(historyPath)) {
+    if (existsSync6(historyPath)) {
       try {
-        const history = JSON.parse(readFileSync6(historyPath, "utf-8"));
+        const history = JSON.parse(readFileSync7(historyPath, "utf-8"));
         console.log(`  \u2705 History file valid (${history.iterations?.length || 0} iterations)`);
       } catch {
         console.log("  \u26A0\uFE0F  History file is corrupted");
@@ -4345,7 +4649,7 @@ Tip: Run 'ralph --init-config' to create default configuration files.`);
   if (args.includes("--status")) {
     const state = loadState();
     const history = loadHistory();
-    const context = existsSync5(contextPath) ? readFileSync6(contextPath, "utf-8").trim() : null;
+    const context = existsSync6(contextPath) ? readFileSync7(contextPath, "utf-8").trim() : null;
     const showTasks = args.includes("--tasks") || args.includes("-t") || state?.tasksMode;
     console.log(`
 \u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557
@@ -4392,9 +4696,9 @@ Tip: Run 'ralph --init-config' to create default configuration files.`);
    `)}`);
     }
     if (showTasks) {
-      if (existsSync5(tasksPath)) {
+      if (existsSync6(tasksPath)) {
         try {
-          const tasksContent = readFileSync6(tasksPath, "utf-8");
+          const tasksContent = readFileSync7(tasksPath, "utf-8");
           const tasks = parseTasks(tasksContent);
           if (tasks.length > 0) {
             console.log(`
@@ -4525,19 +4829,19 @@ Tip: Run 'ralph --init-config' to create default configuration files.`);
       console.error('Usage: ralph --add-context "Your context or hint here"');
       process.exit(1);
     }
-    if (!existsSync5(stateDir)) {
-      mkdirSync(stateDir, { recursive: true });
+    if (!existsSync6(stateDir)) {
+      mkdirSync2(stateDir, { recursive: true });
     }
     const timestamp = new Date().toISOString();
     const newEntry = `
 ## Context added at ${timestamp}
 ${contextText}
 `;
-    if (existsSync5(contextPath)) {
-      const existing = readFileSync6(contextPath, "utf-8");
-      writeFileSync5(contextPath, existing + newEntry);
+    if (existsSync6(contextPath)) {
+      const existing = readFileSync7(contextPath, "utf-8");
+      writeFileSync6(contextPath, existing + newEntry);
     } else {
-      writeFileSync5(contextPath, `# Ralph Loop Context
+      writeFileSync6(contextPath, `# Ralph Loop Context
 ${newEntry}`);
     }
     console.log(`\u2705 Context added for next iteration`);
@@ -4551,7 +4855,7 @@ ${newEntry}`);
     process.exit(0);
   }
   if (args.includes("--clear-context")) {
-    if (existsSync5(contextPath)) {
+    if (existsSync6(contextPath)) {
       __require("fs").unlinkSync(contextPath);
       console.log(`\u2705 Context cleared`);
     } else {
@@ -4560,12 +4864,12 @@ ${newEntry}`);
     process.exit(0);
   }
   if (args.includes("--list-tasks")) {
-    if (!existsSync5(tasksPath)) {
+    if (!existsSync6(tasksPath)) {
       console.log("No tasks file found. Use --add-task to create your first task.");
       process.exit(0);
     }
     try {
-      const tasksContent = readFileSync6(tasksPath, "utf-8");
+      const tasksContent = readFileSync7(tasksPath, "utf-8");
       const tasks = parseTasks(tasksContent);
       displayTasksWithIndices(tasks);
     } catch (error) {
@@ -4582,13 +4886,13 @@ ${newEntry}`);
       console.error('Usage: ralph --add-task "Task description"');
       process.exit(1);
     }
-    if (!existsSync5(stateDir)) {
-      mkdirSync(stateDir, { recursive: true });
+    if (!existsSync6(stateDir)) {
+      mkdirSync2(stateDir, { recursive: true });
     }
     try {
       let tasksContent = "";
-      if (existsSync5(tasksPath)) {
-        tasksContent = readFileSync6(tasksPath, "utf-8");
+      if (existsSync6(tasksPath)) {
+        tasksContent = readFileSync7(tasksPath, "utf-8");
       } else {
         tasksContent = `# Ralph Tasks
 
@@ -4597,7 +4901,7 @@ ${newEntry}`);
       const newTaskContent = tasksContent.trimEnd() + `
 ` + `- [ ] ${taskDescription}
 `;
-      writeFileSync5(tasksPath, newTaskContent);
+      writeFileSync6(tasksPath, newTaskContent);
       console.log(`\u2705 Task added: "${taskDescription}"`);
     } catch (error) {
       console.error("Error adding task:", error);
@@ -4614,12 +4918,12 @@ ${newEntry}`);
       process.exit(1);
     }
     const taskIndex = parseInt(taskIndexStr);
-    if (!existsSync5(tasksPath)) {
+    if (!existsSync6(tasksPath)) {
       console.error("Error: No tasks file found");
       process.exit(1);
     }
     try {
-      const tasksContent = readFileSync6(tasksPath, "utf-8");
+      const tasksContent = readFileSync7(tasksPath, "utf-8");
       const tasks = parseTasks(tasksContent);
       if (taskIndex < 1 || taskIndex > tasks.length) {
         console.error(`Error: Task index ${taskIndex} is out of range (1-${tasks.length})`);
@@ -4645,7 +4949,7 @@ ${newEntry}`);
         }
         newLines.push(line);
       }
-      writeFileSync5(tasksPath, newLines.join(`
+      writeFileSync6(tasksPath, newLines.join(`
 `));
       console.log(`\u2705 Removed task ${taskIndex} and its subtasks`);
     } catch (error) {
@@ -5048,13 +5352,13 @@ ${newEntry}`);
       stallRetryMinutes = parseInt(passthroughAgentFlags[i + 1]);
       i++;
     } else if (passthroughAgentFlags[i] === "--state-dir" && passthroughAgentFlags[i + 1]) {
-      stateDirInput = resolve(passthroughAgentFlags[i + 1]);
+      stateDirInput = resolve2(passthroughAgentFlags[i + 1]);
       setStatePaths(stateDirInput);
       i++;
     }
   }
   ensureStateDir();
-  const usingCustomStateDir = stateDir !== resolve(process.cwd(), ".ralph");
+  const usingCustomStateDir = stateDir !== resolve2(process.cwd(), ".ralph");
   if (usingCustomStateDir && autoCommit) {
     console.error("Error: --state-dir currently requires --no-commit.");
     console.error("Shared git/worktree side effects are not isolated for custom state directories yet.");
@@ -5074,13 +5378,13 @@ ${newEntry}`);
     process.exit(1);
   }
   if (agentBinary) {
-    const resolved = resolveCommand(agentBinary);
+    const resolved = resolveCommand2(agentBinary);
     AGENTS[agentType] = { ...AGENTS[agentType], command: resolved };
   }
   if (promptFile) {
     promptSource = promptFile;
     prompt = readPromptFile(promptFile);
-  } else if (promptParts.length === 1 && existsSync5(promptParts[0])) {
+  } else if (promptParts.length === 1 && existsSync6(promptParts[0])) {
     promptSource = promptParts[0];
     prompt = readPromptFile(promptParts[0]);
   } else if (promptParts.length > 0) {
@@ -5121,7 +5425,7 @@ ${newEntry}`);
     const delayMs = getStallRetryDelayMs(minutes);
     if (delayMs === 0)
       return;
-    await new Promise((resolve2) => setTimeout(resolve2, delayMs));
+    await new Promise((resolve3) => setTimeout(resolve3, delayMs));
   }
   async function validateAgent(agent) {
     const path = Bun.which(agent.command);
@@ -5131,7 +5435,7 @@ ${newEntry}`);
     }
   }
   async function promptUser(question) {
-    return new Promise((resolve2) => {
+    return new Promise((resolve3) => {
       const rl = __require("readline").createInterface({
         input: process.stdin,
         output: process.stdout
@@ -5140,14 +5444,24 @@ ${newEntry}`);
 \uD83E\uDD14 Question: ${question}
 Your answer: `, (answer) => {
         rl.close();
-        resolve2(answer);
+        resolve3(answer);
       });
     });
   }
   async function streamProcessOutput(proc, procPid, options) {
     const toolCounts = new Map;
-    let stdoutText = "";
-    let stderrText = "";
+    const jsonBeautifierCfg = isJsonModeAgent(options.agent.type, options.extraFlags) ? {
+      mode: "beautify",
+      agentType: options.agent.type,
+      verboseTools: !!verboseTools,
+      showThinking: true,
+      showRetry: true,
+      showError: true,
+      showCost: true,
+      maxErrorLength: 120
+    } : null;
+    const stdoutBuffer = new BoundedHeadTailBuffer;
+    const stderrBuffer = new BoundedHeadTailBuffer;
     let lastPrintedAt = Date.now();
     const activityTracker = new StreamActivityTracker;
     let lastToolSummaryAt = 0;
@@ -5188,17 +5502,7 @@ Your answer: `, (answer) => {
       let outputLines;
       const extraFlags = options.extraFlags;
       if (isJsonModeAgent(options.agent.type, extraFlags)) {
-        const cfg = {
-          mode: "beautify",
-          agentType: options.agent.type,
-          verboseTools: !!verboseTools,
-          showThinking: true,
-          showRetry: true,
-          showError: true,
-          showCost: true,
-          maxErrorLength: 120
-        };
-        outputLines = beautifyJsonLine(line, cfg);
+        outputLines = beautifyJsonLine(line, jsonBeautifierCfg);
       } else {
         outputLines = options.agent.type === "claude-code" ? extractClaudeStreamDisplayLines(line) : [line];
       }
@@ -5246,8 +5550,11 @@ Your answer: `, (answer) => {
       const decoder = new TextDecoder;
       let buffer = "";
       let partialCharsDisplayed = 0;
+      const agentTypeStr = options.agent.type;
+      const useByteFilter = !isError && agentTypeStr === "pi" && isJsonModeAgent(agentTypeStr, options.extraFlags);
+      const splitter = useByteFilter ? new ByteLineSplitter : null;
       const abortSignals = [stopController.signal, options.abortSignal].filter(Boolean);
-      const abortPromise2 = abortSignals.length > 0 ? new Promise((resolve2) => {
+      const abortPromise2 = abortSignals.length > 0 ? new Promise((resolve3) => {
         const handlers = new Map;
         const cleanup = () => {
           for (const [signal, handler] of handlers) {
@@ -5256,7 +5563,7 @@ Your answer: `, (answer) => {
         };
         const resolveAbort = () => {
           cleanup();
-          resolve2({ value: undefined, done: true });
+          resolve3({ value: undefined, done: true });
         };
         for (const signal of abortSignals) {
           if (signal.aborted) {
@@ -5275,6 +5582,21 @@ Your answer: `, (answer) => {
         const { value, done } = result;
         if (done)
           break;
+        if (useByteFilter && splitter && value && value.length > 0) {
+          firstOutputReceived = true;
+          activityTracker.markLine();
+          for (const rawLine of splitter.feed(value)) {
+            if (isPiNoiseLineBytes(rawLine)) {
+              (isError ? stderrBuffer : stdoutBuffer).appendBytes(rawLine);
+            } else {
+              const decoded = decoder.decode(rawLine);
+              onText(decoded + `
+`);
+              handleLine(decoded, isError, 0);
+            }
+          }
+          continue;
+        }
         const text = decoder.decode(value, { stream: true });
         if (text.length > 0) {
           firstOutputReceived = true;
@@ -5287,7 +5609,7 @@ Your answer: `, (answer) => {
             handleLine(line, isError, partialCharsDisplayed);
             partialCharsDisplayed = 0;
           }
-          if (options.flushPartialLines && !options.suppressOutput && options.agent.type !== "claude-code" && buffer.length > partialCharsDisplayed) {
+          if (options.flushPartialLines && !options.suppressOutput && options.agent.type !== "claude-code" && !isJsonModeAgent(options.agent.type, options.extraFlags) && buffer.length > partialCharsDisplayed) {
             writeOutput(buffer.slice(partialCharsDisplayed), isError);
             partialCharsDisplayed = buffer.length;
             lastPrintedAt = Date.now();
@@ -5298,6 +5620,20 @@ Your answer: `, (answer) => {
       if (flushed.length > 0) {
         onText(flushed);
         buffer += flushed;
+      }
+      if (useByteFilter && splitter) {
+        const rest = splitter.drain();
+        if (rest && rest.length > 0) {
+          if (isPiNoiseLineBytes(rest)) {
+            (isError ? stderrBuffer : stdoutBuffer).appendBytes(rest);
+          } else {
+            const decoded = decoder.decode(rest);
+            onText(decoded + `
+`);
+            handleLine(decoded, isError, 0);
+          }
+        }
+        return;
       }
       if (buffer.length > 0) {
         handleLine(buffer, isError, partialCharsDisplayed);
@@ -5374,10 +5710,10 @@ Your answer: `, (answer) => {
     try {
       await Promise.all([
         streamText(proc.stdout, (chunk) => {
-          stdoutText += chunk;
+          stdoutBuffer.append(chunk);
         }, false),
         streamText(proc.stderr, (chunk) => {
-          stderrText += chunk;
+          stderrBuffer.append(chunk);
         }, true)
       ]);
     } finally {
@@ -5389,7 +5725,7 @@ Your answer: `, (answer) => {
     if (compactTools) {
       maybePrintToolSummary(true);
     }
-    return { stdoutText, stderrText, toolCounts, stalled, stalledForMs, preStartStalled: stalled && !firstOutputReceived, terminatedAfterPromise };
+    return { stdoutText: stdoutBuffer.toString(), stderrText: stderrBuffer.toString(), toolCounts, stalled, stalledForMs, preStartStalled: stalled && !firstOutputReceived, terminatedAfterPromise };
   }
   async function captureFileSnapshot() {
     const files = new Map;
@@ -5414,11 +5750,49 @@ Your answer: `, (answer) => {
           allFiles.add(file.trim());
         }
       }
-      for (const file of allFiles) {
+      const pathList = [...allFiles].filter(Boolean);
+      if (pathList.length > 0) {
+        let batchOk = false;
         try {
-          const hash = await $`git hash-object ${file} 2>/dev/null || stat -c '%Y' ${file} 2>/dev/null || echo ''`.cwd(cwd).text();
-          files.set(file, hash.trim());
-        } catch {}
+          const hashProc = Bun.spawn(["git", "hash-object", "--stdin-paths"], {
+            cwd,
+            stdout: "pipe",
+            stderr: "pipe",
+            stdin: "pipe"
+          });
+          await Promise.allSettled([
+            hashProc.stdin.write(pathList.join(`
+`) + `
+`),
+            hashProc.stdin.end()
+          ]);
+          const hashOut = await new Response(hashProc.stdout).text();
+          const hashExit = await hashProc.exited;
+          if (hashExit === 0) {
+            batchOk = true;
+            const hashLines = hashOut.split(`
+`);
+            for (let i = 0;i < pathList.length; i++) {
+              const h = (hashLines[i] ?? "").trim();
+              if (h)
+                files.set(pathList[i], h);
+            }
+          }
+        } catch {
+          batchOk = false;
+        }
+        if (!batchOk || files.size < pathList.length) {
+          const statSync4 = __require("fs").statSync;
+          for (const file of pathList) {
+            if (files.has(file))
+              continue;
+            try {
+              files.set(file, `m:${statSync4(file).mtimeMs}`);
+            } catch {
+              files.set(file, "deleted");
+            }
+          }
+        }
       }
     } catch {}
     return { files };
@@ -5599,8 +5973,8 @@ To start fresh, clear the state file:`);
 `);
     if (!goalPath && goalDir) {
       if (resuming && existingState?.goalSlug) {
-        const resumedGoalPath = join3(goalDir, existingState.goalSlug, "goal.md");
-        if (existsSync5(resumedGoalPath)) {
+        const resumedGoalPath = join4(goalDir, existingState.goalSlug, "goal.md");
+        if (existsSync6(resumedGoalPath)) {
           goalPath = resumedGoalPath;
           console.log(`\uD83D\uDCCB Resuming goal: ${existingState.goalSlug} (from previous session)`);
         }
@@ -5609,14 +5983,14 @@ To start fresh, clear the state file:`);
         const inv = buildInventory(goalDir);
         const next = findNextActionableGoal(inv);
         if (next) {
-          goalPath = join3(goalDir, next.slug, "goal.md");
+          goalPath = join4(goalDir, next.slug, "goal.md");
           console.log(`\uD83D\uDCCB Auto-selected goal: ${next.slug} (${next.phase})`);
         } else {
           console.warn("Warning: No actionable goals found in " + goalDir);
         }
       }
     }
-    const goalSlug = goalPath ? basename2(dirname(goalPath)) : "";
+    const goalSlug = goalPath ? basename2(dirname2(goalPath)) : "";
     const state = resuming && existingState ? existingState : {
       active: true,
       iteration: 1,
@@ -5649,7 +6023,7 @@ To start fresh, clear the state file:`);
     if (goalPath) {
       state.goalSlug = goalSlug;
       state.goalPhase = "planning";
-      const goalStateFilePath = join3(dirname(goalPath), "goal.state.json");
+      const goalStateFilePath = join4(dirname2(goalPath), "goal.state.json");
       const existingGoalState = loadGoalState(goalStateFilePath);
       if (existingGoalState) {
         state.goalPhase = existingGoalState.phase;
@@ -5714,11 +6088,11 @@ To start fresh, clear the state file:`);
     try {
       saveState(state);
     } catch {}
-    if (tasksMode && !existsSync5(tasksPath)) {
-      if (!existsSync5(stateDir)) {
-        mkdirSync(stateDir, { recursive: true });
+    if (tasksMode && !existsSync6(tasksPath)) {
+      if (!existsSync6(stateDir)) {
+        mkdirSync2(stateDir, { recursive: true });
       }
-      writeFileSync5(tasksPath, `# Ralph Tasks
+      writeFileSync6(tasksPath, `# Ralph Tasks
 
 Add your tasks below using: \`ralph --add-task "description"\`
 `);
@@ -5949,7 +6323,7 @@ Received SIGTERM, stopping Ralph loop...`);
         const env = agentConfig2.buildEnv({
           filterPlugins: disablePlugins,
           allowAllPermissions
-        });
+        }, stateDir);
         env.RALPH_PIPELINE_CONTEXT = JSON.stringify(pipelineContext);
         console.log(`DEBUG: Agent Command: ${agentConfig2.command}`);
         console.log(`DEBUG: Agent Args: ${JSON.stringify(cmdArgs)}`);
@@ -6173,8 +6547,8 @@ ${stderr}`;
         if (tasksMode && completionSignalDetected) {
           let tasksGatePassed = false;
           try {
-            if (existsSync5(tasksPath)) {
-              const tasksContent = readFileSync6(tasksPath, "utf-8");
+            if (existsSync6(tasksPath)) {
+              const tasksContent = readFileSync7(tasksPath, "utf-8");
               tasksGatePassed = tasksMarkdownAllComplete(tasksContent);
             }
           } catch {
@@ -6225,7 +6599,7 @@ ${stderr}`;
         let goalCompleted = false;
         if (state.goalSlug && goalPath) {
           try {
-            const goalStatePath = join3(dirname(goalPath), "goal.state.json");
+            const goalStatePath = join4(dirname2(goalPath), "goal.state.json");
             const updatedGoalState = syncGoalStateAfterIteration(goalPath, goalStatePath, state.iteration, completionPromise);
             if (updatedGoalState) {
               state.goalPhase = updatedGoalState.phase;
@@ -6316,8 +6690,8 @@ ${stderr}`;
             const answer = await promptUser(detectedQuestion);
             if (answer.trim()) {
               savePendingQuestion(answer);
-              if (!existsSync5(stateDir)) {
-                mkdirSync(stateDir, { recursive: true });
+              if (!existsSync6(stateDir)) {
+                mkdirSync2(stateDir, { recursive: true });
               }
               const existingContext = loadContext() || "";
               const answerContext = `
@@ -6325,9 +6699,9 @@ ${stderr}`;
 Your previous answer was: ${answer}
 `;
               if (existingContext) {
-                writeFileSync5(contextPath, existingContext + answerContext);
+                writeFileSync6(contextPath, existingContext + answerContext);
               } else {
-                writeFileSync5(contextPath, `# Ralph Loop Context
+                writeFileSync6(contextPath, `# Ralph Loop Context
 ${answerContext}`);
               }
               console.log(`\u2705 Answer saved and injected into context`);
@@ -6337,8 +6711,8 @@ ${answerContext}`);
           } else {
             const pendingAnswer = getAndClearPendingQuestion();
             if (pendingAnswer) {
-              if (!existsSync5(stateDir)) {
-                mkdirSync(stateDir, { recursive: true });
+              if (!existsSync6(stateDir)) {
+                mkdirSync2(stateDir, { recursive: true });
               }
               const existingContext = loadContext() || "";
               const answerContext = `
@@ -6346,9 +6720,9 @@ ${answerContext}`);
 Your previous answer was: ${pendingAnswer}
 `;
               if (existingContext) {
-                writeFileSync5(contextPath, existingContext + answerContext);
+                writeFileSync6(contextPath, existingContext + answerContext);
               } else {
-                writeFileSync5(contextPath, `# Ralph Loop Context
+                writeFileSync6(contextPath, `# Ralph Loop Context
 ${answerContext}`);
               }
             }
@@ -6402,7 +6776,7 @@ ${answerContext}`);
                 console.log(`\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D`);
                 executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "completion" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
                 clearPipelineContext(stateDir);
-                const defaultStateDir = join3(process.cwd(), ".ralph");
+                const defaultStateDir = join4(process.cwd(), ".ralph");
                 if (stateDirInput === defaultStateDir) {
                   clearState();
                   clearHistory();
@@ -6430,7 +6804,7 @@ ${answerContext}`);
               console.log(`\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D`);
               executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "completion" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
               clearPipelineContext(stateDir);
-              const defaultStateDir = join3(process.cwd(), ".ralph");
+              const defaultStateDir = join4(process.cwd(), ".ralph");
               if (stateDirInput === defaultStateDir) {
                 clearState();
                 clearHistory();
@@ -6449,7 +6823,7 @@ ${answerContext}`);
           } else {
             executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "completion" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
             clearPipelineContext(stateDir);
-            const defaultStateDir = join3(process.cwd(), ".ralph");
+            const defaultStateDir = join4(process.cwd(), ".ralph");
             if (stateDirInput === defaultStateDir) {
               clearState();
               clearHistory();
@@ -6570,8 +6944,8 @@ export {
   scaffoldRulesToml,
   resolveRulesTomlPath,
   resolveInjectPlaceholders,
-  resolveConfigRelativePath,
-  resolveCommand,
+  resolveConfigRelativePath2 as resolveConfigRelativePath,
+  resolveCommand2 as resolveCommand,
   resolveAgentBinary,
   normalizeRuntimeConfigValue2 as normalizeRuntimeConfigValue,
   loadRuntimeTomlConfig,
@@ -6584,15 +6958,15 @@ export {
   getAgentBinaryEnvName,
   formatStatePath,
   findPlaceholderRules,
-  ensureRalphConfig,
+  ensureRalphConfig2 as ensureRalphConfig,
   defaultParseToolOutput,
   currentTasksFileLabel,
   currentStateDirLabel,
   createAgentConfig,
   VERSION,
   PARSE_PATTERNS,
-  ENV_TEMPLATES,
-  DEFAULT_CONFIG_PATH,
+  ENV_TEMPLATES2 as ENV_TEMPLATES,
+  DEFAULT_CONFIG_PATH2 as DEFAULT_CONFIG_PATH,
   BUILT_IN_AGENTS,
   AGENT_TYPES
 };

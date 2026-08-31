@@ -14,6 +14,7 @@ export type AgentBuildArgsOptions = {
   profile?: string;
 };
 
+
 const geminiBuilder = (prompt: string, model: string, options?: AgentBuildArgsOptions) => {
   const cmdArgs: string[] = [];
   if (model?.trim()) cmdArgs.push("-m", model);
@@ -110,7 +111,7 @@ export const ARGS_TEMPLATES: Record<"opencode" | "opencode-raw" | "claude-code" 
   "codex": (prompt, model, options) => {
     const cmdArgs = ["exec"];
     if (model?.trim()) cmdArgs.push("--model", model);
-    if (options?.allowAllPermissions) cmdArgs.push("--full-auto");
+    if (options?.allowAllPermissions) cmdArgs.push("--dangerously-bypass-approvals-and-sandbox");
     if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
     cmdArgs.push(prompt);
     return cmdArgs;
@@ -137,4 +138,3 @@ export const ARGS_TEMPLATES: Record<"opencode" | "opencode-raw" | "claude-code" 
   "agy": agyBuilder,
   "hermes": hermesBuilder,
 };
-

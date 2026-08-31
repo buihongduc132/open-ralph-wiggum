@@ -187,6 +187,7 @@ export async function captureFileSnapshot(): Promise<FileSnapshot> {
       // = minutes-scale stalls at every loop iteration (2 snapshots/iter).
       const pathList = [...allFiles].filter(Boolean);
       if (pathList.length > 0) {
+         let batchOk = false;
          try {
             const hashProc = Bun.spawn(["git", "hash-object", "--stdin-paths"], {
                cwd,
@@ -194,27 +195,38 @@ export async function captureFileSnapshot(): Promise<FileSnapshot> {
                stderr: "pipe",
                stdin: "pipe",
             });
-            hashProc.stdin.write(pathList.join("\n") + "\n");
-            hashProc.stdin.end();
+            // Swallow EPIPE: git exits early on unhashable/missing paths
+            // and Bun turns a late stdin.write into an unhandled rejection.
+            await Promise.allSettled([
+               hashProc.stdin.write(pathList.join("\n") + "\n"),
+               hashProc.stdin.end(),
+            ]);
             const hashOut = await new Response(hashProc.stdout).text();
-            const hashLines = hashOut.split("\n");
-            for (let i = 0; i < pathList.length; i++) {
-               const h = (hashLines[i] ?? "").trim();
-               if (h) files.set(pathList[i], h);
+            const hashExit = await hashProc.exited;
+            if (hashExit === 0) {
+               batchOk = true;
+               const hashLines = hashOut.split("\n");
+               for (let i = 0; i < pathList.length; i++) {
+                  const h = (hashLines[i] ?? "").trim();
+                  if (h) files.set(pathList[i], h);
+               }
             }
          } catch {
-            // Batch failed — per-file stat fallback below
+            batchOk = false;
          }
-      }
-      // Fallback only for files the batch pass could not hash (missing/unreadable)
-      for (const file of pathList) {
-         if (files.has(file)) continue;
-         try {
-            const stat = await $`stat -c '%Y' ${file} 2>/dev/null || echo ''`.cwd(cwd).text();
-            const s = stat.trim();
-            if (s) files.set(file, s);
-         } catch {
-            // File may not exist, skip
+         // In-process mtime fallback (zero subprocesses). Covers:
+         // batch failure (missing tracked files make git exit 128 mid-stream)
+         // and individual files git could not hash.
+         if (!batchOk || files.size < pathList.length) {
+            const statSync = require("fs").statSync as (p: string) => { mtimeMs: number };
+            for (const file of pathList) {
+               if (files.has(file)) continue;
+               try {
+                  files.set(file, `m:${statSync(file).mtimeMs}`);
+               } catch {
+                  files.set(file, "deleted");
+               }
+            }
          }
       }
    } catch {
