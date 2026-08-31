@@ -161,3 +161,8 @@ bin/ralph
 
 # runtime artifacts (untracked)
 .hindsight/
+
+# mutation-testing artifacts (mutator-guard sidecar + stryker)
+.mutator-rules/
+.stryker-tmp/
+reports/mutation/
