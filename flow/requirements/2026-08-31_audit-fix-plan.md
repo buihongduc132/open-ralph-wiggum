@@ -17,15 +17,21 @@
 - loop-helpers.ts:161-240/ralph.ts twins: batch exit-128 → ALL m: markers vs other snapshot git hashes. FIX: !batchOk → mark snapshot degraded, skip diff that iteration (no false 'all modified'). Also rename porcelain parse (R old -> new).
 
 ### FA5 (MED) TOML silent partial: section-wrapped/unknown keys → all defaults
-- FIX: unknown top-level key → warn; config fully inside unexpected section (zero recognized keys) → exit 1.
+- FIX (single policy, cubic-resolved — FA5 warn WINS over any reject wording): unknown top-level key → console.warn (back-compat); config fully inside unexpected section (zero recognized keys) → exit 1.
 
 ### FA6 (MED) --init-config eats next positional → junk file
-- FIX: --init-config never consumes following positional. RED: `--init-config "Build API"` must NOT create 'Build API' file.
+- FIX (cubic-resolved contract): '--init-config [PATH]' — consume next token as PATH only when path-shaped (no spaces AND (starts ./|/|~ OR ends .json)); otherwise it is the PROMPT positional and survives. Document [PATH] in help. RED updated accordingly.
 
 ### FA7 (MED) passthrough NaN max-iterations → unlimited; --stalling-action unchecked
 - FIX: NaN → exit 1; stalling-action whitelist.
 
-### FA8/FA9/FA10 (LOW): FA9 fixed via FA2 template; FA8 doc keys as no-op in template (wire=deferred gap); FA10 reject duration<=0 at intake.
+### FA8/FA9 (LOW): FA9 fixed via FA2 template; FA8 doc keys as no-op in template (wire=deferred gap).
+
+### FA10 (LOW) blacklist 0-duration never expires
+- FIX (cubic-resolved): --blacklist-duration 0/negative rejected at FLAG-intake level ONLY. parseDuration keeps "0" valid globally ('--pre-start-timeout 0 to disable' documented); "-1"=Infinity sentinel honored per-flag (pre-start OK; blacklist rejects Infinity).
+
+### FA11 (MED, NEW — cubic review PR#32) codex --full-auto conflict
+- agent-builders.ts:114: user extra_agent_flags/passthrough '--full-auto' + auto-added bypass flag mutually exclusive → codex exec arg-error. FIX: if user flags already carry --full-auto/--danger-full-access, skip auto-adding bypass.
 
 ### Perf-audit P-findings (delivered): P1 history unbounded O(N²) rewrite; P2 repeatedErrors never pruned; P3 voter pipes deadlock (stdout-after-exit, stderr never drained); P4 partial-line uncapped; P6 SIGINT orphans voters; P7 stallingEvents unbounded (→P1 cap).
 

@@ -358,8 +358,9 @@ describe("captureFileSnapshot", () => {
    }, 20000);
 
    it("captures tracked files in a git repo", async () => {
-      // Snapshot runs two git subprocesses (status + ls-files); under shell
-      // wrappers (bash-guard) each costs seconds — 5s default flakes.
+      // Snapshot runs up to four git subprocesses (rev-parse, status
+      // --porcelain, ls-files, hash-object --stdin-paths); under shell wrappers
+      // (bash-guard) each costs seconds — 5s default flakes.
       const snapshot = await captureFileSnapshot();
       expect(snapshot.files.size).toBeGreaterThan(0);
    }, 20000);

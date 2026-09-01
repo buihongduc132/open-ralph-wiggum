@@ -1,3 +1,4 @@
+# STATUS: historical snapshot (2026-08-31). "Commit soon" note below was actioned — cov-* files are committed in PR #32. The Bun.TOML.parse bare-word leniency in §b is REAL for Bun (verified live; differs from spec-compliant parsers — that IS finding FA5).
 # Diagnosis: worker deaths + combined-run test failure
 
 ## (a) Worker death root cause — TRANSIENT upstream 401 + exhausted fallback chain (LiteLLM quota), NOT bad config

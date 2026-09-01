@@ -11,6 +11,8 @@
 #     opencode-spawn-e2e, sigint-cleanup, ralph-exports-*, ralph-dev-model-errors)
 #     — excluded for speed where they add no src/** kill power (they spawn the
 #     full ralph CLI, 45s+ agent startup class per run).
+#   - tests/hook-sigkill-escalation.test.ts INCLUDED (cubic PR#32): exercises
+#     src/lifecycle-hooks.ts SIGTERM→SIGKILL escalation — kills those mutants.
 #   - args-templates / completion-coverage / bugs-memory-resource — root-module
 #     coverage (completion.ts, template-utils.ts, loop-runtime.ts, agent-builders.ts
 #     are OUTSIDE the src/** mutate scope); no src mutant-kill power. NOTE: some
@@ -41,6 +43,7 @@ exec bun test \
   tests/lifecycle-hooks.test.ts \
   tests/pipeline-context.test.ts \
   tests/hook-timeout-config.test.ts \
+  tests/hook-sigkill-escalation.test.ts \
   tests/review-gate.test.ts \
   tests/bugs-error-handling.test.ts \
   tests/bugs-logic.test.ts \

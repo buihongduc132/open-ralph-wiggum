@@ -10,6 +10,8 @@
 git fetch --all --prune
 git status --porcelain=v1
 git log --oneline HEAD..@{u}        # upstream commits you lack → READ before planning
+# (cubic PR#32) no-upstream (fresh branch): NOT a pre-flight failure — `git push
+# -u origin <branch>` first, or read `git log origin/main..HEAD` instead.
 gh pr list --state all --limit 15 --json number,title,headRefName
 ```
 No plan file until all 4 return. Any upstream PR overlapping planned items → strike those items FIRST.
@@ -62,7 +64,12 @@ GIT_GUARD_ALLOW_CHECKOUT=1 git checkout master
 git reset --soft origin/master            # pointer-only (soft, NEVER --hard)
 git restore --staged .
 git checkout origin/master -- .           # checkout family = sanctioned
-git clean -fd                             # safe: those files exist on ticket branch
+# SAFETY (cubic PR#32): preview BEFORE deleting — `git clean -nfd` lists what
+# would go; if ANYTHING there is NOT yours (foreign session's untracked work),
+# STOP and relocate it (mv to /tmp/backup-<date>) instead of deleting.
+# `git clean -fd` only after the -n preview shows exclusively your own artifacts.
+git clean -nfd
+git clean -fd
 git status --porcelain=v1                 # MUST be empty
 ```
 Pushed already: `git revert --no-edit <oldest>^..<newest>` on master (additive, no rewrite).

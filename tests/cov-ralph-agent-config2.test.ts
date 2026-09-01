@@ -117,7 +117,7 @@ describe("ENV_TEMPLATES['opencode'] — sidecar config path", () => {
 
 describe("resolveAgentBinary — layered priority", () => {
    const savedEnv: Record<string, string | undefined> = {};
-   const keys = ["RALPH_OPENCODE_BINARY", "RALPH_GROK_BINARY", "RALPH_CLAUDE_CODE_BINARY", "RALPH_WEIRD_AGENT_BINARY"];
+   const keys = ["RALPH_OPENCODE_BINARY", "RALPH_GROK_BINARY", "RALPH_CLAUDE_CODE_BINARY", "RALPH_WEIRD_AGENT_BINARY", "RALPH_CURSOR_AGENT_BINARY", "RALPH_HERMES_BINARY"];
 
    beforeEach(() => { for (const k of keys) { savedEnv[k] = process.env[k]; delete process.env[k]; } });
    afterEach(() => { for (const k of keys) { const v = savedEnv[k]; if (v === undefined) delete process.env[k]; else process.env[k] = v; } });

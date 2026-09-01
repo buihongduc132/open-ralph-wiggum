@@ -283,10 +283,18 @@ describe("FA5: TOML strictness — section-wrapped exit(1), unknown key warn", (
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("FA6: --init-config positional consumption", () => {
-   it("parseEarlyArgs: --init-config never consumes the following positional", () => {
-      // RED now: initConfigPath === "Build API" (eats next arg).
+   it("parseEarlyArgs: --init-config does NOT eat a spaced prompt positional", () => {
+      // Contract (cubic review resolution): '--init-config [PATH]' — the next token is
+      // consumed as PATH only when path-shaped (no spaces AND (starts ./|/|~ OR ends .json));
+      // anything else (e.g. "Build API") is the PROMPT positional and must survive.
+      // RED now: initConfigPath === "Build API" (blindly eats next arg).
       const parsed = parseEarlyArgs(["--init-config", "Build API"]);
       expect(parsed.initConfigPath === undefined || parsed.initConfigPath === "").toBe(true);
+   });
+
+   it("parseEarlyArgs: --init-config DOES consume a path-shaped value", () => {
+      const parsed = parseEarlyArgs(["--init-config", "./my-agents.json"]);
+      expect(parsed.initConfigPath).toBe("./my-agents.json");
    });
 
    it("parseMainArgs: positional after --init-config survives as prompt", () => {
@@ -361,9 +369,12 @@ describe("FA7: passthrough (-- ...) flag validation", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("FA10: --blacklist-duration rejects 0 and negative non-(-1)", () => {
-   it("parseDuration: 0 is rejected at intake", () => {
-      // RED now: parseDuration("0") happily returns 0.
-      expect(() => parseDuration("0")).toThrow();
+   it("--blacklist-duration 0 exits (throws) at FLAG intake (parseDuration keeps 0 valid for --pre-start-timeout 'disable')", () => {
+      // RED now: accepted silently → blacklistDurationMs = 0.
+      // Policy (cubic review resolution): parseDuration("0") stays VALID (help documents
+      // '--pre-start-timeout 0 to disable'); the 0/negative rejection is BLACKLIST-SPECIFIC
+      // flag-level validation, not a global parseDuration change.
+      expect(() => parseMainArgs(["t", "--blacklist-duration", "0"], ["opencode"])).toThrow();
    });
 
    it("parseMainArgs: --blacklist-duration 0 exits (throws) instead of accepting", () => {
@@ -421,7 +432,12 @@ describe("P1: appendIterationHistory caps iterations (ring ≤200 + droppedItera
          }
          // FIX TARGET: ring buffer keeps last 200.
          // RED now: unbounded → 250.
-         expect(history.iterations.length).toBeLessThanOrEqual(200);
+         expect(history.iterations.length).toBe(200);
+         // Ring keeps the NEWEST: first retained = iteration 51, last = 250.
+         const first = history.iterations[0] as { iteration?: number };
+         const last = history.iterations[history.iterations.length - 1] as { iteration?: number };
+         expect(first.iteration).toBe(51);
+         expect(last.iteration).toBe(250);
          // FIX TARGET: dropped-iteration counter surfaced on the history object.
          // RED now: no such field.
          const dropped = (history as { droppedIterations?: number }).droppedIterations ?? 0;
@@ -683,8 +699,9 @@ describe("P7: stallingEvents capped at last 100", () => {
          });
       }
       // RED now (unreachable until helper exists): unbounded growth.
-      expect(history.stallingEvents?.length ?? 0).toBeLessThanOrEqual(100);
-      // Cap keeps the NEWEST events.
+      expect(history.stallingEvents?.length ?? 0).toBe(100);
+      // Cap keeps the NEWEST events: oldest retained = iteration 51, last = 150.
+      expect(history.stallingEvents?.[0]?.iteration).toBe(51);
       expect(history.stallingEvents?.[history.stallingEvents.length - 1]?.iteration).toBe(150);
    });
 });
