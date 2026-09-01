@@ -3,6 +3,12 @@
  *
  * Spec: flow/requirements/2026-08-31_audit-fix-plan.md
  *
+ * CI GATE (cubic #3900666549): this suite is env-gated — skipped by default so
+ * `bun test` / CI coverage gate stays green at RED-phase heads. Run the RED
+ * proof on demand: RUN_RED_AUDIT=1 bun test tests/red-audit-findings.test.ts
+ * (expect 20 fail / controls pass until GREEN lands; GREEN flips to green and
+ * the gate is removed in the GREEN commit).
+ *
  * Every test in this file encodes a FIX TARGET from the audit and is expected
  * to FAIL against current code (RED proof). The GREEN phase implements fixes
  * in src/ to turn these green. Existing suites untouched.
@@ -98,7 +104,10 @@ function withExitMocked(fn: () => void): ExitCapture {
 // FA1 — user-role JSONL echo with promise tag must NOT surface (HIGH)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("FA1: user-role promise-tag echo must not surface (completion safety)", () => {
+// CI gate: skip unless RUN_RED_AUDIT=1 (see header). Removed by GREEN phase.
+const d = process.env.RUN_RED_AUDIT === "1" ? describe : describe.skip;
+
+d("FA1: user-role promise-tag echo must not surface (completion safety)", () => {
    const TAG = "<promise>COMPLETE</promise>";
 
    const userEchoLine = JSON.stringify({
@@ -149,7 +158,7 @@ describe("FA1: user-role promise-tag echo must not surface (completion safety)",
 // FA2 — parseDuration("-1") sentinel + dead pre_start_timeout TOML key (HIGH)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("FA2: -1 duration sentinel + pre_start_timeout TOML wiring", () => {
+d("FA2: -1 duration sentinel + pre_start_timeout TOML wiring", () => {
    it('parseDuration("-1") returns Infinity (disable sentinel, as help text promises)', () => {
       // RED now: parseDuration throws "Invalid duration format '-1'".
       expect(parseDuration("-1")).toBe(Infinity);
@@ -174,7 +183,7 @@ describe("FA2: -1 duration sentinel + pre_start_timeout TOML wiring", () => {
 // FA4 — degraded snapshot must not diff-false "all files modified" (MED)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("FA4: cross-snapshot hash-type mixing (degraded snapshots)", () => {
+d("FA4: cross-snapshot hash-type mixing (degraded snapshots)", () => {
    async function setupDegradedRepo(): Promise<string> {
       const dir = makeTmpDir("fa4");
       const g = (cmd: string) =>
@@ -237,7 +246,7 @@ describe("FA4: cross-snapshot hash-type mixing (degraded snapshots)", () => {
 // FA5 — TOML silent partial loads (MED)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("FA5: TOML strictness — section-wrapped exit(1), unknown key warn", () => {
+d("FA5: TOML strictness — section-wrapped exit(1), unknown key warn", () => {
    it("config fully inside an unexpected [settings] section (zero recognized keys) → exit(1)", () => {
       const dir = makeTmpDir("fa5a");
       const tomlPath = join(dir, "config.toml");
@@ -282,7 +291,7 @@ describe("FA5: TOML strictness — section-wrapped exit(1), unknown key warn", (
 // FA6 — --init-config must not eat the next positional (MED)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("FA6: --init-config positional consumption", () => {
+d("FA6: --init-config positional consumption", () => {
    it("parseEarlyArgs: --init-config does NOT eat a spaced prompt positional", () => {
       // Contract (cubic review resolution): '--init-config [PATH]' — the next token is
       // consumed as PATH only when path-shaped (no spaces AND (starts ./|/|~ OR ends .json));
@@ -335,7 +344,7 @@ describe("FA6: --init-config positional consumption", () => {
 // FA7 — passthrough flag validation (MED)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("FA7: passthrough (-- ...) flag validation", () => {
+d("FA7: passthrough (-- ...) flag validation", () => {
    function parseWithPassthrough(args: string[]) {
       const result = parseMainArgs(args, ["opencode", "claude-code"]);
       applyPassthroughOverrides(result);
@@ -368,7 +377,7 @@ describe("FA7: passthrough (-- ...) flag validation", () => {
 // FA10 — duration intake guards (LOW)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("FA10: --blacklist-duration rejects 0 and negative non-(-1)", () => {
+d("FA10: --blacklist-duration rejects 0 and negative non-(-1)", () => {
    it("--blacklist-duration 0 exits (throws) at FLAG intake (parseDuration keeps 0 valid for --pre-start-timeout 'disable')", () => {
       // RED now: accepted silently → blacklistDurationMs = 0.
       // Policy (cubic review resolution): parseDuration("0") stays VALID (help documents
@@ -393,7 +402,7 @@ describe("FA10: --blacklist-duration rejects 0 and negative non-(-1)", () => {
 // P1 — history.iterations unbounded growth (HIGH)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("P1: appendIterationHistory caps iterations (ring ≤200 + droppedIterations)", () => {
+d("P1: appendIterationHistory caps iterations (ring ≤200 + droppedIterations)", () => {
    it("after 250 iterations: iterations.length ≤ 200 and droppedIterations ≥ 50", async () => {
       const dir = makeTmpDir("p1");
       // fast git shim so captureFileSnapshot short-circuits (not in a work tree)
@@ -454,7 +463,7 @@ describe("P1: appendIterationHistory caps iterations (ring ≤200 + droppedItera
 // P2 — repeatedErrors map never pruned (MED-HIGH)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("P2: repeatedErrors pruned to ≤50 keys, newest kept", () => {
+d("P2: repeatedErrors pruned to ≤50 keys, newest kept", () => {
    it("60 distinct error keys across iterations → map size ≤ 50 with newest key kept", async () => {
       const dir = makeTmpDir("p2");
       const shimDir = join(dir, "shim");
@@ -507,7 +516,7 @@ describe("P2: repeatedErrors pruned to ≤50 keys, newest kept", () => {
 // P3 — voter pipes deadlock: stdout read after exit, stderr never drained (MED-HIGH)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("P3: runVoter drains stdout+stderr concurrently, stderr tail ≤4KB", () => {
+d("P3: runVoter drains stdout+stderr concurrently, stderr tail ≤4KB", () => {
    // NOTE (spec-ambiguity finding): on Bun 1.3.11, Bun.spawn with stdout/stderr
    // "pipe" is drained eagerly by the runtime — a child flooding 2MB stdout +
    // 512KB stderr exits fine even when the app never reads the streams, so the
@@ -605,7 +614,7 @@ describe("P3: runVoter drains stdout+stderr concurrently, stderr tail ≤4KB", (
 // P6 — SIGINT orphans voters: in-flight voter PID registry (MED)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("P6: in-flight voter PID registry (SIGINT kill-group support)", () => {
+d("P6: in-flight voter PID registry (SIGINT kill-group support)", () => {
    // Full SIGINT-kill-group coverage needs process-signal integration; the
    // registry primitive is the testable seam. skip via SKIP_P6=1.
    it.skipIf(process.env.SKIP_P6 === "1")(
@@ -674,7 +683,7 @@ describe("P6: in-flight voter PID registry (SIGINT kill-group support)", () => {
 // P7 — stallingEvents unbounded (→ capped with P1 ring)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("P7: stallingEvents capped at last 100", () => {
+d("P7: stallingEvents capped at last 100", () => {
    it("appendStallingEvent helper caps stallingEvents at ≤100 (150 pushes)", () => {
       const mod = require("../src/loop-helpers") as Record<string, unknown>;
       // RED now: no capped append helper exists (ralph.ts pushes unbounded).

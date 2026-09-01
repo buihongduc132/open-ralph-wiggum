@@ -64,7 +64,7 @@ Source: delegated audits (perf delivered; func delivered; badfaith pending) + wo
 - FIX: either accept -1 (map to Infinity) or fix help text. Decide: accept -1 = user-intent honored (help already promises).
 
 ### F2 (confirmed by coverage worker A) Bun.TOML.parse leniency silently loads junk
-- loadRuntimeTomlConfig (src/runtime-config.ts:86-160). FIX: post-parse validation — reject unknown top-level keys + require known types (already types known keys; add unknown-key check → exit 1 fail-loud).
+- loadRuntimeTomlConfig (src/runtime-config.ts:86-160). FIX (superseded by FA5 single-policy resolution ABOVE — cubic #3900666550): unknown top-level keys → console.warn (NOT exit; FA5 warn-wins); types of known keys validated as today; section-wrapped-no-recognized-keys → exit 1.
 
 ## Delegation contract (per goal custom prompt)
 - RED sub-agent: writes failing tests ONLY (history cap, repeatedErrors prune, voter drain, line cap, SIGINT voter kill, -1 duration, TOML unknown-key). Tests named tests/red-audit-*.test.ts. Verify RED (fail) before GREEN starts.
