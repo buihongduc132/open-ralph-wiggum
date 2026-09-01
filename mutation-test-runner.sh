@@ -9,9 +9,13 @@
 # plus fs-only suites that drive src modules end-to-end. Excluded on purpose:
 #   - spawn-heavy e2e suites (extra-flags-priority, regression-gaps, hooks-pipeline-*,
 #     opencode-spawn-e2e, sigint-cleanup, ralph-exports-*, ralph-dev-model-errors)
-#     — they spawn the full ralph CLI (45s+ agent startup class) per run.
-#   - suites covering root-level modules outside the src/** mutate scope
-#     (completion.ts, template-utils.ts, loop-runtime.ts, agent-builders.ts).
+#     — excluded for speed where they add no src/** kill power (they spawn the
+#     full ralph CLI, 45s+ agent startup class per run).
+#   - args-templates / completion-coverage / bugs-memory-resource — root-module
+#     coverage (completion.ts, template-utils.ts, loop-runtime.ts, agent-builders.ts
+#     are OUTSIDE the src/** mutate scope); no src mutant-kill power. NOTE: some
+#     INCLUDED suites (bugs-logic, bugs-error-handling, grok-agy, hermes) also
+#     import root modules — they're included because they ALSO kill src mutants.
 #   - tests/src-goal-handlers.test.ts — spawns the compiled bin/ralph binary
 #     (90MB artifact, ignored in sandbox); covers ROOT ralph.ts early-exit CLI paths,
 #     which are OUTSIDE the src/** mutate scope anyway.
