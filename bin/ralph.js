@@ -1513,6 +1513,47 @@ function isYamlFrontmatter(body) {
   });
 }
 
+// src/loop-helpers.ts
+var MAX_HISTORY_ITERATIONS = 200;
+var MAX_REPEATED_ERROR_KEYS = 50;
+var MAX_STALLING_EVENTS = 100;
+function capHistoryIterations(history) {
+  if (history.iterations.length > MAX_HISTORY_ITERATIONS) {
+    const dropCount = history.iterations.length - MAX_HISTORY_ITERATIONS;
+    history.iterations.splice(0, dropCount);
+    history.droppedIterations = (history.droppedIterations ?? 0) + dropCount;
+  }
+}
+function capRepeatedErrors(history) {
+  const errorKeys = Object.keys(history.struggleIndicators.repeatedErrors);
+  if (errorKeys.length > MAX_REPEATED_ERROR_KEYS) {
+    const dropKeys = errorKeys.slice(0, errorKeys.length - MAX_REPEATED_ERROR_KEYS);
+    for (const k of dropKeys) {
+      delete history.struggleIndicators.repeatedErrors[k];
+    }
+  }
+}
+function stripInjectedPrompt(rawText, sentPrompt) {
+  if (!rawText || !sentPrompt)
+    return rawText;
+  let stripped = rawText.split(sentPrompt).join(`
+`);
+  const instructionLines = new Set(sentPrompt.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.includes("<promise>") && !/^<promise>[^<]*<\/promise>$/.test(l)));
+  if (instructionLines.size > 0) {
+    stripped = stripped.split(/\r?\n/).filter((line) => !instructionLines.has(line.trim())).join(`
+`);
+  }
+  return stripped;
+}
+function appendStallingEvent(history, event) {
+  if (!history.stallingEvents)
+    history.stallingEvents = [];
+  history.stallingEvents.push(event);
+  if (history.stallingEvents.length > MAX_STALLING_EVENTS) {
+    history.stallingEvents.splice(0, history.stallingEvents.length - MAX_STALLING_EVENTS);
+  }
+}
+
 // src/review-gate.ts
 import { randomBytes, createHash } from "crypto";
 import { existsSync as existsSync2, readFileSync as readFileSync3, appendFileSync } from "fs";
@@ -3618,12 +3659,6 @@ if (import.meta.main) {
         __require("fs").unlinkSync(historyPath);
       } catch {}
     }
-  }, capHistoryIterations = function(history) {
-    if (history.iterations.length > MAX_HISTORY_ITERATIONS) {
-      const dropCount = history.iterations.length - MAX_HISTORY_ITERATIONS;
-      history.iterations.splice(0, dropCount);
-      history.droppedIterations = (history.droppedIterations ?? 0) + dropCount;
-    }
   }, formatDurationLong = function(ms) {
     const totalSeconds = Math.max(0, Math.floor(ms / 1000));
     const hours = Math.floor(totalSeconds / 3600);
@@ -4093,16 +4128,18 @@ ${taskInstructions}
 Unable to read ${currentTasksFileLabel()}
 `;
     }
-  }, checkCompletion = function(output, promise, rawOutput, agentType2, extraFlags) {
+  }, checkCompletion = function(output, promise, rawOutput, agentType2, extraFlags, sentPrompt) {
     if (agentType2 && isJsonModeAgent(agentType2, extraFlags)) {
       const source = rawOutput ?? output;
       const assistantText = source.split(/\r?\n/).flatMap((line) => line ? extractJsonCompletionText(line, agentType2) : []).join(`
 `);
       return checkTerminalPromise(assistantText, promise) || containsPromiseTag(assistantText, promise);
     }
-    if (checkTerminalPromise(output, promise))
+    const scanOutput = sentPrompt ? stripInjectedPrompt(output, sentPrompt) : output;
+    const scanRaw = rawOutput !== undefined ? sentPrompt ? stripInjectedPrompt(rawOutput, sentPrompt) : rawOutput : undefined;
+    if (checkTerminalPromise(scanOutput, promise))
       return true;
-    if (rawOutput && containsPromiseTag(rawOutput, promise))
+    if (scanRaw !== undefined && containsPromiseTag(scanRaw, promise))
       return true;
     return false;
   }, detectPlaceholderPluginError = function(output) {
@@ -4655,9 +4692,6 @@ Learn more: https://ghuntley.com/ralph/
       AGENTS[type] = createAgentConfig(json, customConfigPath ? dirname2(customConfigPath) : undefined);
     }
   }
-  const MAX_HISTORY_ITERATIONS = 200;
-  const MAX_REPEATED_ERROR_KEYS = 50;
-  const MAX_STALLING_EVENTS = 100;
   const EMPTY_HISTORY = {
     iterations: [],
     totalDurationMs: 0,
@@ -4703,13 +4737,7 @@ ${params.stderr}`);
         const key = error.substring(0, 100);
         params.history.struggleIndicators.repeatedErrors[key] = (params.history.struggleIndicators.repeatedErrors[key] || 0) + 1;
       }
-      const errorKeys = Object.keys(params.history.struggleIndicators.repeatedErrors);
-      if (errorKeys.length > MAX_REPEATED_ERROR_KEYS) {
-        const dropKeys = errorKeys.slice(0, errorKeys.length - MAX_REPEATED_ERROR_KEYS);
-        for (const k of dropKeys) {
-          delete params.history.struggleIndicators.repeatedErrors[k];
-        }
-      }
+      capRepeatedErrors(params.history);
     }
     saveHistory(params.history);
   }
@@ -6587,13 +6615,7 @@ Received SIGTERM, stopping Ralph loop...`);
               lastActivityMs: streamed.stalledForMs ?? (state.stallingTimeoutMs || stallingTimeoutMs),
               action: state.stallingAction || stallingAction
             };
-            if (!history.stallingEvents) {
-              history.stallingEvents = [];
-            }
-            history.stallingEvents.push(stallingEvent);
-            if (history.stallingEvents.length > MAX_STALLING_EVENTS) {
-              history.stallingEvents.splice(0, history.stallingEvents.length - MAX_STALLING_EVENTS);
-            }
+            appendStallingEvent(history, stallingEvent);
             if (isPreStartStalled && currentProc) {
               try {
                 process.kill(-currentProc.pid, "SIGKILL");
@@ -6683,13 +6705,7 @@ Received SIGTERM, stopping Ralph loop...`);
               lastActivityMs: buffered.stalledForMs ?? (state.stallingTimeoutMs || stallingTimeoutMs),
               action: state.stallingAction || stallingAction
             };
-            if (!history.stallingEvents) {
-              history.stallingEvents = [];
-            }
-            history.stallingEvents.push(stallingEvent);
-            if (history.stallingEvents.length > MAX_STALLING_EVENTS) {
-              history.stallingEvents.splice(0, history.stallingEvents.length - MAX_STALLING_EVENTS);
-            }
+            appendStallingEvent(history, stallingEvent);
             const stalledExitCode = await exitCodePromise;
             currentProc = null;
             await appendIterationHistory({
@@ -6754,9 +6770,9 @@ Received SIGTERM, stopping Ralph loop...`);
         }
         const combinedOutput = `${result}
 ${stderr}`;
-        const completionSignalDetected = checkCompletion(result, completionPromise, result, agentConfig2.type, extraAgentFlags);
-        const abortDetected = abortPromise ? checkCompletion(result, abortPromise, result, agentConfig2.type, extraAgentFlags) : false;
-        const taskCompletionDetected = tasksMode ? checkCompletion(result, taskPromise, result, agentConfig2.type, extraAgentFlags) : false;
+        const completionSignalDetected = checkCompletion(result, completionPromise, result, agentConfig2.type, extraAgentFlags, fullPrompt);
+        const abortDetected = abortPromise ? checkCompletion(result, abortPromise, result, agentConfig2.type, extraAgentFlags, fullPrompt) : false;
+        const taskCompletionDetected = tasksMode ? checkCompletion(result, taskPromise, result, agentConfig2.type, extraAgentFlags, fullPrompt) : false;
         let completionDetected = completionSignalDetected;
         if (tasksMode && completionSignalDetected) {
           let tasksGatePassed = false;
