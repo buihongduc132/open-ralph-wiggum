@@ -1632,6 +1632,18 @@ Learn more: https://ghuntley.com/ralph/
       }
    }
 
+   /**
+    * P1: ring buffer — keep the newest MAX_HISTORY_ITERATIONS, count the rest.
+    * Shared by both history append sites (appendIterationHistory + catch-path errorRecord).
+    */
+   function capHistoryIterations(history: RalphHistory): void {
+      if (history.iterations.length > MAX_HISTORY_ITERATIONS) {
+         const dropCount = history.iterations.length - MAX_HISTORY_ITERATIONS;
+         history.iterations.splice(0, dropCount);
+         history.droppedIterations = (history.droppedIterations ?? 0) + dropCount;
+      }
+   }
+
    async function appendIterationHistory(params: {
       history: RalphHistory;
       iteration: number;
@@ -1665,12 +1677,7 @@ Learn more: https://ghuntley.com/ralph/
       };
 
       params.history.iterations.push(iterationRecord);
-      // P1: ring buffer — keep the newest MAX_HISTORY_ITERATIONS, count the rest.
-      if (params.history.iterations.length > MAX_HISTORY_ITERATIONS) {
-         const dropCount = params.history.iterations.length - MAX_HISTORY_ITERATIONS;
-         params.history.iterations.splice(0, dropCount);
-         params.history.droppedIterations = (params.history.droppedIterations ?? 0) + dropCount;
-      }
+      capHistoryIterations(params.history);
       params.history.totalDurationMs += iterationDuration;
 
       if (filesModified.length === 0) {
@@ -5374,6 +5381,7 @@ Unable to read ${currentTasksFileLabel()}
                errors: [String(error).substring(0, 200)],
             };
             history.iterations.push(errorRecord);
+            capHistoryIterations(history);
             history.totalDurationMs += iterationDuration;
             try { saveHistory(history); } catch { /* best-effort */ }
 
