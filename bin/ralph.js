@@ -674,7 +674,7 @@ function textExtract(p, agentType) {
   } else if (t === "message_end" || t === "turn_end") {
     if (p.message && typeof p.message === "object") {
       const msg = p.message;
-      if (msg.role !== "toolResult") {
+      if (msg.role !== "toolResult" && msg.role !== "user") {
         addContent(msg.content);
       }
     }
@@ -710,6 +710,30 @@ function textExtract(p, agentType) {
     addText(step.text);
   }
   return lines;
+}
+function extractJsonCompletionText(rawLine, agentType) {
+  const firstChar = rawLine.charCodeAt(0);
+  let line = rawLine;
+  if (firstChar === 123) {} else if (firstChar === 27) {
+    const stripped = stripAnsi(rawLine).trim();
+    if (stripped.charCodeAt(0) === 123) {
+      line = stripped;
+    } else {
+      return [rawLine];
+    }
+  } else {
+    return [rawLine];
+  }
+  let payload;
+  try {
+    payload = JSON.parse(line);
+  } catch {
+    return [rawLine];
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return [rawLine];
+  }
+  return textExtract(payload, agentType);
 }
 
 // completion.ts
@@ -997,10 +1021,13 @@ var ARGS_TEMPLATES = {
     const cmdArgs = ["exec"];
     if (model?.trim())
       cmdArgs.push("--model", model);
-    if (options?.allowAllPermissions)
+    const userFlags = options?.extraFlags ?? [];
+    const userHasAutoFlag = userFlags.some((f) => f === "--full-auto" || f === "--danger-full-access");
+    if (options?.allowAllPermissions && !userHasAutoFlag) {
       cmdArgs.push("--dangerously-bypass-approvals-and-sandbox");
-    if (options?.extraFlags?.length)
-      cmdArgs.push(...options.extraFlags);
+    }
+    if (userFlags.length)
+      cmdArgs.push(...userFlags);
     cmdArgs.push(prompt);
     return cmdArgs;
   },
@@ -1634,6 +1661,75 @@ function parseVoterTimeout(timeout) {
       return value * 60 * 1000;
   }
 }
+var inFlightVoterPids = new Set;
+async function runVoter(voter, voterIndex, opts) {
+  const { cwd, reviewPrompt, timeoutMs, config } = opts;
+  const voterKey = `voter-${voterIndex}`;
+  let voterOutput = "";
+  let stderrTail = "";
+  let timedOut = false;
+  let registeredPid;
+  try {
+    const promptFlag = voter.promptFlag || "-p";
+    const spawnArgs = [voter.agent, promptFlag, reviewPrompt];
+    if (voter.model && voter.model !== "default" && voter.model !== "") {
+      spawnArgs.push("--model", voter.model);
+    }
+    const proc = Bun.spawn(spawnArgs, {
+      stdout: "pipe",
+      stderr: "pipe",
+      cwd
+    });
+    if (typeof proc.pid === "number") {
+      registeredPid = proc.pid;
+      inFlightVoterPids.add(registeredPid);
+    }
+    const stdoutText = new Response(proc.stdout).text().catch(() => "");
+    const stderrText = new Response(proc.stderr).text().catch(() => "");
+    let timerId;
+    const timeoutPromise = new Promise((resolve2) => {
+      timerId = setTimeout(() => {
+        timedOut = true;
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+        resolve2();
+      }, timeoutMs);
+    });
+    const exitPromise = proc.exited.then(() => {});
+    await Promise.race([exitPromise, timeoutPromise]);
+    if (timerId !== undefined)
+      clearTimeout(timerId);
+    if (!timedOut) {
+      const [outStr, errStr] = await Promise.all([stdoutText, stderrText]);
+      voterOutput = outStr;
+      stderrTail = errStr.length > 4096 ? errStr.slice(errStr.length - 4096) : errStr;
+    }
+  } catch (err) {
+    console.warn(`\u26A0\uFE0F Voter ${voterKey} failed: ${err}`);
+    voterOutput = "";
+  } finally {
+    if (registeredPid !== undefined)
+      inFlightVoterPids.delete(registeredPid);
+  }
+  const now = new Date().toISOString();
+  if (timedOut) {
+    console.warn(`\u26A0\uFE0F Voter ${voterKey} timed out after ${config.voterTimeout}`);
+    return { key: voterKey, vote: { status: "timeout", at: now, reason: "voter timeout" }, stderrTail };
+  }
+  const isApprove = checkTerminalPromise(voterOutput, "APPROVE");
+  const isReject = checkTerminalPromise(voterOutput, "REJECT");
+  if (isApprove) {
+    return { key: voterKey, vote: { status: "approved", at: now, reason: "" }, stderrTail };
+  } else if (isReject) {
+    const reasonMatch = voterOutput.match(/REASON:\s*([\s\S]{1,500}?)(?=\n<promise>|$)/i);
+    const reason = reasonMatch ? reasonMatch[1].trim() : "No reason provided";
+    return { key: voterKey, vote: { status: "rejected", at: now, reason }, stderrTail };
+  } else {
+    console.warn(`\u26A0\uFE0F Voter ${voterKey} output unrecognized (no <promise> tag found)`);
+    return { key: voterKey, vote: { status: "rejected", at: now, reason: "voter output unrecognized" }, stderrTail };
+  }
+}
 async function dispatchVoters(params) {
   const { state, config, cwd, prompt, iterationCount, saveStateFn, runHash } = params;
   const rejectionHistory = state.lastRejectionReasons;
@@ -1648,58 +1744,12 @@ async function dispatchVoters(params) {
   const timeoutMs = parseVoterTimeout(config.voterTimeout);
   const batchSize = config.batchSize;
   let currentState = { ...state, phase: "waiting_review" };
-  async function runVoter(voter, voterIndex) {
-    const voterKey = `voter-${voterIndex}`;
-    let voterOutput = "";
-    let timedOut = false;
-    try {
-      const promptFlag = voter.promptFlag || "-p";
-      const spawnArgs = [voter.agent, promptFlag, reviewPrompt];
-      if (voter.model && voter.model !== "default" && voter.model !== "") {
-        spawnArgs.push("--model", voter.model);
-      }
-      const proc = Bun.spawn(spawnArgs, {
-        stdout: "pipe",
-        stderr: "pipe",
-        cwd
-      });
-      let timerId;
-      const timeoutPromise = new Promise((resolve2) => {
-        timerId = setTimeout(() => {
-          timedOut = true;
-          try {
-            proc.kill("SIGKILL");
-          } catch {}
-          resolve2();
-        }, timeoutMs);
-      });
-      const exitPromise = proc.exited.then(() => {});
-      await Promise.race([exitPromise, timeoutPromise]);
-      if (timerId !== undefined)
-        clearTimeout(timerId);
-      voterOutput = timedOut ? "" : await new Response(proc.stdout).text();
-    } catch (err) {
-      console.warn(`\u26A0\uFE0F Voter ${voterKey} failed: ${err}`);
-      voterOutput = "";
-    }
-    const now = new Date().toISOString();
-    if (timedOut) {
-      console.warn(`\u26A0\uFE0F Voter ${voterKey} timed out after ${config.voterTimeout}`);
-      return { key: voterKey, vote: { status: "timeout", at: now, reason: "voter timeout" } };
-    }
-    const isApprove = checkTerminalPromise(voterOutput, "APPROVE");
-    const isReject = checkTerminalPromise(voterOutput, "REJECT");
-    if (isApprove) {
-      return { key: voterKey, vote: { status: "approved", at: now, reason: "" } };
-    } else if (isReject) {
-      const reasonMatch = voterOutput.match(/REASON:\s*([\s\S]{1,500}?)(?=\n<promise>|$)/i);
-      const reason = reasonMatch ? reasonMatch[1].trim() : "No reason provided";
-      return { key: voterKey, vote: { status: "rejected", at: now, reason } };
-    } else {
-      console.warn(`\u26A0\uFE0F Voter ${voterKey} output unrecognized (no <promise> tag found)`);
-      return { key: voterKey, vote: { status: "rejected", at: now, reason: "voter output unrecognized" } };
-    }
-  }
+  const runVoterOpts = {
+    cwd,
+    reviewPrompt,
+    timeoutMs,
+    config: { voterTimeout: config.voterTimeout }
+  };
   for (let batchStart = 0;batchStart < config.voters.length; batchStart += batchSize) {
     const batchEnd = Math.min(batchStart + batchSize, config.voters.length);
     const batchIndices = [];
@@ -1707,7 +1757,7 @@ async function dispatchVoters(params) {
       batchIndices.push(i);
     const batchLabel = batchIndices.length === 1 ? `Dispatching voter ${batchStart + 1}/${config.voters.length}` : `Dispatching batch ${Math.floor(batchStart / batchSize) + 1}: voters ${batchStart + 1}-${batchEnd}/${config.voters.length}`;
     console.log(`\uD83D\uDCCB ${batchLabel}`);
-    const batchPromises = batchIndices.map((i) => runVoter(config.voters[i], i));
+    const batchPromises = batchIndices.map((i) => runVoter(config.voters[i], i, runVoterOpts));
     const batchResults = await Promise.all(batchPromises);
     for (const { key, vote } of batchResults) {
       currentState.votes[key] = vote;
@@ -2142,6 +2192,93 @@ function normalizeRuntimeConfigValue(path, value, expected) {
   }
   return value;
 }
+var RECOGNIZED_TOML_KEYS = new Set([
+  "prompt",
+  "agent",
+  "agent_binary",
+  "min_iterations",
+  "max_iterations",
+  "completion_promise",
+  "abort_promise",
+  "tasks",
+  "task_promise",
+  "model",
+  "rotation",
+  "stalling_timeout",
+  "blacklist_duration",
+  "stalling_action",
+  "heartbeat_interval",
+  "pre_start_timeout",
+  "no_commit",
+  "no_plugins",
+  "allow_all",
+  "prompt_file",
+  "prompt_template",
+  "stream",
+  "verbose_tools",
+  "questions",
+  "agent_config",
+  "extra_agent_flags",
+  "stall_retries",
+  "stall_retry_minutes",
+  "json_display",
+  "output_buffer_bytes",
+  "reuse_check",
+  "reuse_skip_model",
+  "reuse_skip_agent",
+  "reuse_skip_rotation",
+  "reuse_skip_min_iterations",
+  "reuse_skip_max_iterations",
+  "goal",
+  "goal_dir",
+  "goal_promise",
+  "review"
+]);
+function enforceTomlStrictness(parsed) {
+  const topLevelKeys = Object.keys(parsed);
+  if (topLevelKeys.length === 0)
+    return;
+  const recognized = topLevelKeys.filter((k) => RECOGNIZED_TOML_KEYS.has(k));
+  const unknown = topLevelKeys.filter((k) => !RECOGNIZED_TOML_KEYS.has(k));
+  if (recognized.length === 0) {
+    const wrappedInSection = unknown.some((k) => {
+      const v = parsed[k];
+      return v !== null && typeof v === "object" && !Array.isArray(v);
+    });
+    if (wrappedInSection) {
+      console.error(`Error: Ralph TOML config has no recognized top-level keys \u2014 all settings are ` + `nested inside unexpected section(s): [${unknown.join(", ")}]. Move keys to the top ` + `level (Ralph does not use TOML sections for core settings).`);
+      process.exit(1);
+    }
+  }
+  for (const key of unknown) {
+    console.warn(`\u26A0\uFE0F Ralph: unknown TOML config key '${key}' \u2014 ignored.`);
+  }
+}
+function normalizePreStartTimeout(value) {
+  if (value === undefined)
+    return;
+  if (typeof value === "number") {
+    if (Number.isNaN(value)) {
+      console.error(`Error: Ralph TOML config key 'pre_start_timeout' must be a number or "auto".`);
+      process.exit(1);
+    }
+    return value;
+  }
+  if (typeof value === "string") {
+    if (value === "auto")
+      return;
+    if (value === "-1")
+      return Infinity;
+    const n = Number(value);
+    if (!Number.isFinite(n)) {
+      console.error(`Error: Ralph TOML config key 'pre_start_timeout' must be a number, "-1", or "auto".`);
+      process.exit(1);
+    }
+    return n;
+  }
+  console.error(`Error: Ralph TOML config key 'pre_start_timeout' must be a number or "auto".`);
+  process.exit(1);
+}
 function parseReviewConfig(parsed) {
   const reviewSection = parsed.review;
   if (!reviewSection || typeof reviewSection !== "object") {
@@ -2193,6 +2330,15 @@ function parseReviewConfig(parsed) {
     reviewPromptFile,
     voters
   };
+}
+
+// src/parse-args.ts
+function isInitConfigPathShaped(token) {
+  if (token === undefined || token === null)
+    return false;
+  if (token.includes(" "))
+    return false;
+  return token.startsWith("./") || token.startsWith("/") || token.startsWith("~") || token.endsWith(".json");
 }
 
 // src/goal-parser.ts
@@ -3095,6 +3241,7 @@ function loadRuntimeTomlConfig(configPath, explicit) {
   try {
     const raw = readFileSync7(configPath, "utf-8");
     const parsed = Bun.TOML.parse(raw);
+    enforceTomlStrictness(parsed);
     const config = {};
     config.prompt = normalizeRuntimeConfigValue2("prompt", parsed.prompt, "string");
     config.agent = normalizeRuntimeConfigValue2("agent", parsed.agent, "string");
@@ -3111,6 +3258,7 @@ function loadRuntimeTomlConfig(configPath, explicit) {
     config.blacklist_duration = normalizeRuntimeConfigValue2("blacklist_duration", parsed.blacklist_duration, "string");
     config.stalling_action = normalizeRuntimeConfigValue2("stalling_action", parsed.stalling_action, "string");
     config.heartbeat_interval = normalizeRuntimeConfigValue2("heartbeat_interval", parsed.heartbeat_interval, "string");
+    config.pre_start_timeout = normalizePreStartTimeout(parsed.pre_start_timeout);
     config.no_commit = normalizeRuntimeConfigValue2("no_commit", parsed.no_commit, "boolean");
     config.no_plugins = normalizeRuntimeConfigValue2("no_plugins", parsed.no_plugins, "boolean");
     config.allow_all = normalizeRuntimeConfigValue2("allow_all", parsed.allow_all, "boolean");
@@ -3470,6 +3618,12 @@ if (import.meta.main) {
         __require("fs").unlinkSync(historyPath);
       } catch {}
     }
+  }, capHistoryIterations = function(history) {
+    if (history.iterations.length > MAX_HISTORY_ITERATIONS) {
+      const dropCount = history.iterations.length - MAX_HISTORY_ITERATIONS;
+      history.iterations.splice(0, dropCount);
+      history.droppedIterations = (history.droppedIterations ?? 0) + dropCount;
+    }
   }, formatDurationLong = function(ms) {
     const totalSeconds = Math.max(0, Math.floor(ms / 1000));
     const hours = Math.floor(totalSeconds / 3600);
@@ -3572,6 +3726,9 @@ if (import.meta.main) {
     return parsed;
   }, parseDuration = function(input) {
     const trimmed = input.trim();
+    if (trimmed === "-1") {
+      return Infinity;
+    }
     if (/^\d+$/.test(trimmed)) {
       return parseInt(trimmed);
     }
@@ -3936,7 +4093,13 @@ ${taskInstructions}
 Unable to read ${currentTasksFileLabel()}
 `;
     }
-  }, checkCompletion = function(output, promise, rawOutput) {
+  }, checkCompletion = function(output, promise, rawOutput, agentType2, extraFlags) {
+    if (agentType2 && isJsonModeAgent(agentType2, extraFlags)) {
+      const source = rawOutput ?? output;
+      const assistantText = source.split(/\r?\n/).flatMap((line) => line ? extractJsonCompletionText(line, agentType2) : []).join(`
+`);
+      return checkTerminalPromise(assistantText, promise) || containsPromiseTag(assistantText, promise);
+    }
     if (checkTerminalPromise(output, promise))
       return true;
     if (rawOutput && containsPromiseTag(rawOutput, promise))
@@ -4120,7 +4283,13 @@ Iteration Summary`);
       tomlConfigPath = val;
       explicitTomlConfigPath = true;
     } else if (earlyArgs[i] === "--init-config") {
-      initConfigPath = earlyArgs[++i] || "";
+      const next = earlyArgs[i + 1];
+      if (next !== undefined && isInitConfigPathShaped(next)) {
+        initConfigPath = next;
+        i++;
+      } else {
+        initConfigPath = "";
+      }
     }
   }
   setStatePaths(stateDirInput);
@@ -4232,7 +4401,7 @@ Goal Mode (opt-in, requires --goal or --goal-dir):
   --goal-status       Show current goal progress (facts + plan)
 
   --config PATH       Use custom agent config file
-  --init-config       Initialize agent config and runtime config
+  --init-config [PATH] Initialize agent config and runtime config (optional PATH)
   --init-rules        Initialize deterministic rules TOML for modulo injection
   --doctor            Diagnose and fix Ralph issues
   --version, -v       Show version
@@ -4486,6 +4655,9 @@ Learn more: https://ghuntley.com/ralph/
       AGENTS[type] = createAgentConfig(json, customConfigPath ? dirname2(customConfigPath) : undefined);
     }
   }
+  const MAX_HISTORY_ITERATIONS = 200;
+  const MAX_REPEATED_ERROR_KEYS = 50;
+  const MAX_STALLING_EVENTS = 100;
   const EMPTY_HISTORY = {
     iterations: [],
     totalDurationMs: 0,
@@ -4512,6 +4684,7 @@ ${params.stderr}`);
       errors
     };
     params.history.iterations.push(iterationRecord);
+    capHistoryIterations(params.history);
     params.history.totalDurationMs += iterationDuration;
     if (filesModified.length === 0) {
       params.history.struggleIndicators.noProgressIterations++;
@@ -4529,6 +4702,13 @@ ${params.stderr}`);
       for (const error of errors) {
         const key = error.substring(0, 100);
         params.history.struggleIndicators.repeatedErrors[key] = (params.history.struggleIndicators.repeatedErrors[key] || 0) + 1;
+      }
+      const errorKeys = Object.keys(params.history.struggleIndicators.repeatedErrors);
+      if (errorKeys.length > MAX_REPEATED_ERROR_KEYS) {
+        const dropKeys = errorKeys.slice(0, errorKeys.length - MAX_REPEATED_ERROR_KEYS);
+        for (const k of dropKeys) {
+          delete params.history.struggleIndicators.repeatedErrors[k];
+        }
       }
     }
     saveHistory(params.history);
@@ -5213,7 +5393,12 @@ ${newEntry}`);
         console.error("Error: --blacklist-duration requires a value");
         process.exit(1);
       }
-      blacklistDurationMs = parseDuration(val);
+      const ms = parseDuration(val);
+      if (!Number.isFinite(ms) || ms <= 0) {
+        console.error(`Error: --blacklist-duration must be a positive duration, got '${val}'`);
+        process.exit(1);
+      }
+      blacklistDurationMs = ms;
       blacklistDurationProvided = true;
     } else if (arg === "--stalling-action") {
       const val = args[++i];
@@ -5310,7 +5495,9 @@ ${newEntry}`);
     } else if (arg === "--config") {
       i++;
     } else if (arg === "--init-config") {
-      i++;
+      const next = args[i + 1];
+      if (next !== undefined && isInitConfigPathShaped(next))
+        i++;
     } else if (arg.startsWith("-")) {
       console.error(`Error: Unknown option: ${arg}`);
       console.error("Run 'ralph --help' for available options");
@@ -5324,10 +5511,20 @@ ${newEntry}`);
       model = passthroughAgentFlags[i + 1];
       i++;
     } else if (passthroughAgentFlags[i] === "--max-iterations" && passthroughAgentFlags[i + 1]) {
-      maxIterations = parseInt(passthroughAgentFlags[i + 1]);
+      const v = passthroughAgentFlags[i + 1];
+      if (!/^\d+$/.test(v)) {
+        console.error(`Error: --max-iterations requires a non-negative integer, got '${v}'`);
+        process.exit(1);
+      }
+      maxIterations = parseInt(v);
       i++;
     } else if (passthroughAgentFlags[i] === "--min-iterations" && passthroughAgentFlags[i + 1]) {
-      minIterations = parseInt(passthroughAgentFlags[i + 1]);
+      const v = passthroughAgentFlags[i + 1];
+      if (!/^\d+$/.test(v)) {
+        console.error(`Error: --min-iterations requires a non-negative integer, got '${v}'`);
+        process.exit(1);
+      }
+      minIterations = parseInt(v);
       i++;
     } else if (passthroughAgentFlags[i] === "--completion-promise" && passthroughAgentFlags[i + 1]) {
       completionPromise = passthroughAgentFlags[i + 1];
@@ -5339,10 +5536,21 @@ ${newEntry}`);
       stallingTimeoutMs = parseDuration(passthroughAgentFlags[i + 1]);
       i++;
     } else if (passthroughAgentFlags[i] === "--blacklist-duration" && passthroughAgentFlags[i + 1]) {
-      blacklistDurationMs = parseDuration(passthroughAgentFlags[i + 1]);
+      const v = passthroughAgentFlags[i + 1];
+      const ms = parseDuration(v);
+      if (!Number.isFinite(ms) || ms <= 0) {
+        console.error(`Error: --blacklist-duration must be a positive duration, got '${v}'`);
+        process.exit(1);
+      }
+      blacklistDurationMs = ms;
       i++;
     } else if (passthroughAgentFlags[i] === "--stalling-action" && passthroughAgentFlags[i + 1]) {
-      stallingAction = passthroughAgentFlags[i + 1];
+      const v = passthroughAgentFlags[i + 1];
+      if (v !== "stop" && v !== "rotate") {
+        console.error(`Error: --stalling-action requires 'stop' or 'rotate', got '${v}'`);
+        process.exit(1);
+      }
+      stallingAction = v;
       i++;
     } else if (passthroughAgentFlags[i] === "--stall-retries") {
       stallRetries = true;
@@ -6383,6 +6591,9 @@ Received SIGTERM, stopping Ralph loop...`);
               history.stallingEvents = [];
             }
             history.stallingEvents.push(stallingEvent);
+            if (history.stallingEvents.length > MAX_STALLING_EVENTS) {
+              history.stallingEvents.splice(0, history.stallingEvents.length - MAX_STALLING_EVENTS);
+            }
             if (isPreStartStalled && currentProc) {
               try {
                 process.kill(-currentProc.pid, "SIGKILL");
@@ -6476,6 +6687,9 @@ Received SIGTERM, stopping Ralph loop...`);
               history.stallingEvents = [];
             }
             history.stallingEvents.push(stallingEvent);
+            if (history.stallingEvents.length > MAX_STALLING_EVENTS) {
+              history.stallingEvents.splice(0, history.stallingEvents.length - MAX_STALLING_EVENTS);
+            }
             const stalledExitCode = await exitCodePromise;
             currentProc = null;
             await appendIterationHistory({
@@ -6540,9 +6754,9 @@ Received SIGTERM, stopping Ralph loop...`);
         }
         const combinedOutput = `${result}
 ${stderr}`;
-        const completionSignalDetected = checkCompletion(result, completionPromise, result);
-        const abortDetected = abortPromise ? checkCompletion(result, abortPromise, result) : false;
-        const taskCompletionDetected = tasksMode ? checkCompletion(result, taskPromise, result) : false;
+        const completionSignalDetected = checkCompletion(result, completionPromise, result, agentConfig2.type, extraAgentFlags);
+        const abortDetected = abortPromise ? checkCompletion(result, abortPromise, result, agentConfig2.type, extraAgentFlags) : false;
+        const taskCompletionDetected = tasksMode ? checkCompletion(result, taskPromise, result, agentConfig2.type, extraAgentFlags) : false;
         let completionDetected = completionSignalDetected;
         if (tasksMode && completionSignalDetected) {
           let tasksGatePassed = false;
@@ -6913,6 +7127,7 @@ ${answerContext}`);
           errors: [String(error).substring(0, 200)]
         };
         history.iterations.push(errorRecord);
+        capHistoryIterations(history);
         history.totalDurationMs += iterationDuration;
         try {
           saveHistory(history);
