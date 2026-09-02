@@ -50,6 +50,7 @@ export interface RalphRuntimeConfig {
    blacklist_duration?: string;
    stalling_action?: "stop" | "rotate";
    heartbeat_interval?: string;
+   pre_start_timeout?: number;
    no_commit?: boolean;
    no_plugins?: boolean;
    allow_all?: boolean;

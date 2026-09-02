@@ -19,7 +19,7 @@ import {
    type BlacklistedAgent,
 } from "./loop-runtime";
 import { ARGS_TEMPLATES, type AgentBuildArgsOptions } from "./agent-builders";
-import { beautifyJsonLine, isJsonModeAgent, type BeautifierConfig } from "./src/json-beautifier";
+import { beautifyJsonLine, extractJsonCompletionText, isJsonModeAgent, type BeautifierConfig } from "./src/json-beautifier";
 import { ensureRalphConfig as ensureRalphConfigImpl } from "./src/ralph-agent-config";
 import { BoundedHeadTailBuffer } from "./src/bounded-stream-buffer";
 import { ByteLineSplitter, isPiNoiseLineBytes } from "./src/byte-line-filter";
@@ -35,7 +35,8 @@ import {
    injectRejectionFeedback,
    validateReviewConfig,
 } from "./src/review-gate";
-import { parseReviewConfig, resolveHookTimeoutMs } from "./src/runtime-config";
+import { parseReviewConfig, resolveHookTimeoutMs, enforceTomlStrictness, normalizePreStartTimeout } from "./src/runtime-config";
+import { isInitConfigPathShaped } from "./src/parse-args";
 import type { ReviewConfig, ReviewGateState, ReviewVote } from "./src/types";
 import { parseGoalMd } from "./src/goal-parser";
 import { executeHooks, listAllHooks, formatHooksTable, loadPipelineContext, savePipelineContext, showPipelineContext, clearPipelineContext, filterPipelineContextFromOutput, type HookEnv, type LifecycleEvent, type PipelineContext, LIFECYCLE_EVENTS } from "./src/lifecycle-hooks";
@@ -164,6 +165,7 @@ export interface RalphRuntimeConfig {
    blacklist_duration?: string;
    stalling_action?: "stop" | "rotate";
    heartbeat_interval?: string;
+   pre_start_timeout?: number;
    no_commit?: boolean;
    no_plugins?: boolean;
    allow_all?: boolean;
@@ -639,6 +641,12 @@ export function loadRuntimeTomlConfig(configPath: string, explicit: boolean): Ra
    try {
       const raw = readFileSync(configPath, "utf-8");
       const parsed = Bun.TOML.parse(raw) as Record<string, unknown>;
+
+      // FA5 strictness (single policy, warn-wins): unknown top-level keys warn
+      // (back-compat); a config wholly wrapped in an unrecognized section (zero
+      // recognized top-level keys) is almost certainly a mistake → exit(1).
+      enforceTomlStrictness(parsed);
+
       const config: RalphRuntimeConfig = {};
 
       config.prompt = normalizeRuntimeConfigValue("prompt", parsed.prompt, "string") as string | undefined;
@@ -656,6 +664,7 @@ export function loadRuntimeTomlConfig(configPath: string, explicit: boolean): Ra
       config.blacklist_duration = normalizeRuntimeConfigValue("blacklist_duration", parsed.blacklist_duration, "string") as string | undefined;
       config.stalling_action = normalizeRuntimeConfigValue("stalling_action", parsed.stalling_action, "string") as "stop" | "rotate" | undefined;
       config.heartbeat_interval = normalizeRuntimeConfigValue("heartbeat_interval", parsed.heartbeat_interval, "string") as string | undefined;
+      config.pre_start_timeout = normalizePreStartTimeout(parsed.pre_start_timeout);
       config.no_commit = normalizeRuntimeConfigValue("no_commit", parsed.no_commit, "boolean") as boolean | undefined;
       config.no_plugins = normalizeRuntimeConfigValue("no_plugins", parsed.no_plugins, "boolean") as boolean | undefined;
       config.allow_all = normalizeRuntimeConfigValue("allow_all", parsed.allow_all, "boolean") as boolean | undefined;
@@ -1106,7 +1115,17 @@ if (import.meta.main) {
          tomlConfigPath = val;
          explicitTomlConfigPath = true;
       } else if (earlyArgs[i] === "--init-config") {
-         initConfigPath = earlyArgs[++i] || "";
+         // FA6: '--init-config [PATH]' — consume the next token as PATH only when
+         // path-shaped (no spaces AND starts ./|/|~ OR ends .json); otherwise the
+         // flag is valueless (init uses the default path) and the token survives
+         // as the prompt positional.
+         const next = earlyArgs[i + 1];
+         if (next !== undefined && isInitConfigPathShaped(next)) {
+            initConfigPath = next;
+            i++;
+         } else {
+            initConfigPath = "";
+         }
       }
    }
 
@@ -1235,7 +1254,7 @@ Goal Mode (opt-in, requires --goal or --goal-dir):
   --goal-status       Show current goal progress (facts + plan)
 
   --config PATH       Use custom agent config file
-  --init-config       Initialize agent config and runtime config
+  --init-config [PATH] Initialize agent config and runtime config (optional PATH)
   --init-rules        Initialize deterministic rules TOML for modulo injection
   --doctor            Diagnose and fix Ralph issues
   --version, -v       Show version
@@ -2352,6 +2371,11 @@ Learn more: https://ghuntley.com/ralph/
    function parseDuration(input: string): number {
       const trimmed = input.trim();
 
+      // FA2: "-1" is the sentinel for "disabled / no timeout" → Infinity.
+      if (trimmed === "-1") {
+         return Infinity;
+      }
+
       // If it's just a number, treat as milliseconds
       if (/^\d+$/.test(trimmed)) {
          return parseInt(trimmed);
@@ -2566,7 +2590,15 @@ Learn more: https://ghuntley.com/ralph/
             console.error("Error: --blacklist-duration requires a value");
             process.exit(1);
          }
-         blacklistDurationMs = parseDuration(val);
+         // FA10: a blacklist window must be a finite positive duration. 0, negative,
+         // and the "-1"/Infinity disable-sentinel are meaningless here — reject them
+         // at flag intake rather than silently blacklisting forever / never.
+         const ms = parseDuration(val);
+         if (!Number.isFinite(ms) || ms <= 0) {
+            console.error(`Error: --blacklist-duration must be a positive duration, got '${val}'`);
+            process.exit(1);
+         }
+         blacklistDurationMs = ms;
          blacklistDurationProvided = true;
       } else if (arg === "--stalling-action") {
          const val = args[++i];
@@ -2663,7 +2695,10 @@ Learn more: https://ghuntley.com/ralph/
       } else if (arg === "--config") {
          i++;
       } else if (arg === "--init-config") {
-         i++;
+         // FA6: consume the next token only when path-shaped; otherwise it is a
+         // valueless flag and the token falls through to the prompt positional.
+         const next = args[i + 1];
+         if (next !== undefined && isInitConfigPathShaped(next)) i++;
       } else if (arg.startsWith("-")) {
          console.error(`Error: Unknown option: ${arg}`);
          console.error("Run 'ralph --help' for available options");
@@ -2680,10 +2715,20 @@ Learn more: https://ghuntley.com/ralph/
          model = passthroughAgentFlags[i + 1];
          i++;
       } else if (passthroughAgentFlags[i] === "--max-iterations" && passthroughAgentFlags[i + 1]) {
-         maxIterations = parseInt(passthroughAgentFlags[i + 1]);
+         const v = passthroughAgentFlags[i + 1];
+         if (!/^\d+$/.test(v)) {
+            console.error(`Error: --max-iterations requires a non-negative integer, got '${v}'`);
+            process.exit(1);
+         }
+         maxIterations = parseInt(v);
          i++;
       } else if (passthroughAgentFlags[i] === "--min-iterations" && passthroughAgentFlags[i + 1]) {
-         minIterations = parseInt(passthroughAgentFlags[i + 1]);
+         const v = passthroughAgentFlags[i + 1];
+         if (!/^\d+$/.test(v)) {
+            console.error(`Error: --min-iterations requires a non-negative integer, got '${v}'`);
+            process.exit(1);
+         }
+         minIterations = parseInt(v);
          i++;
       } else if (passthroughAgentFlags[i] === "--completion-promise" && passthroughAgentFlags[i + 1]) {
          completionPromise = passthroughAgentFlags[i + 1];
@@ -2695,10 +2740,21 @@ Learn more: https://ghuntley.com/ralph/
          stallingTimeoutMs = parseDuration(passthroughAgentFlags[i + 1]);
          i++;
       } else if (passthroughAgentFlags[i] === "--blacklist-duration" && passthroughAgentFlags[i + 1]) {
-         blacklistDurationMs = parseDuration(passthroughAgentFlags[i + 1]);
+         const v = passthroughAgentFlags[i + 1];
+         const ms = parseDuration(v);
+         if (!Number.isFinite(ms) || ms <= 0) {
+            console.error(`Error: --blacklist-duration must be a positive duration, got '${v}'`);
+            process.exit(1);
+         }
+         blacklistDurationMs = ms;
          i++;
       } else if (passthroughAgentFlags[i] === "--stalling-action" && passthroughAgentFlags[i + 1]) {
-         stallingAction = passthroughAgentFlags[i + 1] as "stop" | "rotate";
+         const v = passthroughAgentFlags[i + 1];
+         if (v !== "stop" && v !== "rotate") {
+            console.error(`Error: --stalling-action requires 'stop' or 'rotate', got '${v}'`);
+            process.exit(1);
+         }
+         stallingAction = v as "stop" | "rotate";
          i++;
       } else if (passthroughAgentFlags[i] === "--stall-retries") {
          stallRetries = true;
@@ -3287,7 +3343,19 @@ Unable to read ${currentTasksFileLabel()}
     * Falls back to a full-text search of the raw output for stream-json agents
     * where the promise may appear inside JSON values rather than as a standalone line.
     */
-   function checkCompletion(output: string, promise: string, rawOutput?: string): boolean {
+   function checkCompletion(output: string, promise: string, rawOutput?: string, agentType?: string, extraFlags?: string[]): boolean {
+      // FA1: in JSON-stream mode the raw buffer contains user-role message echoes
+      // that repeat the prompt (including any promise tag). Checking the raw buffer
+      // directly yields false completions. Route through ASSISTANT-only extraction
+      // first so only the agent's own output can satisfy the promise.
+      if (agentType && isJsonModeAgent(agentType, extraFlags)) {
+         const source = rawOutput ?? output;
+         const assistantText = source
+            .split(/\r?\n/)
+            .flatMap(line => (line ? extractJsonCompletionText(line, agentType) : []))
+            .join("\n");
+         return checkTerminalPromise(assistantText, promise) || containsPromiseTag(assistantText, promise);
+      }
       if (checkTerminalPromise(output, promise)) return true;
       if (rawOutput && containsPromiseTag(rawOutput, promise)) return true;
       return false;
@@ -4853,9 +4921,9 @@ Unable to read ${currentTasksFileLabel()}
             }
 
             const combinedOutput = `${result}\n${stderr}`;
-            const completionSignalDetected = checkCompletion(result, completionPromise, result);
-            const abortDetected = abortPromise ? checkCompletion(result, abortPromise, result) : false;
-            const taskCompletionDetected = tasksMode ? checkCompletion(result, taskPromise, result) : false;
+            const completionSignalDetected = checkCompletion(result, completionPromise, result, agentConfig.type, extraAgentFlags);
+            const abortDetected = abortPromise ? checkCompletion(result, abortPromise, result, agentConfig.type, extraAgentFlags) : false;
+            const taskCompletionDetected = tasksMode ? checkCompletion(result, taskPromise, result, agentConfig.type, extraAgentFlags) : false;
 
             let completionDetected = completionSignalDetected;
             if (tasksMode && completionSignalDetected) {

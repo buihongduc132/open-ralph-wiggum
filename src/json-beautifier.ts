@@ -822,7 +822,10 @@ function textExtract(p: Record<string, unknown>, agentType: string): string[] {
     // pi event stream: full message carried in p.message.content
     if (p.message && typeof p.message === "object") {
       const msg = p.message as Record<string, unknown>;
-      if (msg.role !== "toolResult") {
+      // Only ASSISTANT (and non-user/tool) text may surface: user-role echoes
+      // carry the prompt back (incl. any completion promise tag) and must NOT
+      // be treated as agent output for completion detection (FA1).
+      if (msg.role !== "toolResult" && msg.role !== "user") {
         addContent(msg.content);
       }
     }

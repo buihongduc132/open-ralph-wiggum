@@ -111,8 +111,17 @@ export const ARGS_TEMPLATES: Record<"opencode" | "opencode-raw" | "claude-code" 
   "codex": (prompt, model, options) => {
     const cmdArgs = ["exec"];
     if (model?.trim()) cmdArgs.push("--model", model);
-    if (options?.allowAllPermissions) cmdArgs.push("--dangerously-bypass-approvals-and-sandbox");
-    if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
+    // FA11: the auto-added bypass flag is mutually exclusive with the user's own
+    // --full-auto / --danger-full-access (codex exec errors on the conflict).
+    // If the user already supplies one, don't auto-add the bypass flag.
+    const userFlags = options?.extraFlags ?? [];
+    const userHasAutoFlag = userFlags.some(
+      f => f === "--full-auto" || f === "--danger-full-access",
+    );
+    if (options?.allowAllPermissions && !userHasAutoFlag) {
+      cmdArgs.push("--dangerously-bypass-approvals-and-sandbox");
+    }
+    if (userFlags.length) cmdArgs.push(...userFlags);
     cmdArgs.push(prompt);
     return cmdArgs;
   },

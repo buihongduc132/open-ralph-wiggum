@@ -44,7 +44,14 @@ export interface RalphHistory {
       shortIterations: number;
    };
    stallingEvents?: StallingEvent[];
+   /** Count of iterations dropped from the ring buffer (P1 cap). */
+   droppedIterations?: number;
 }
+
+/** Ring/cap limits for unbounded history growth (P1/P2/P7). */
+export const MAX_HISTORY_ITERATIONS = 200;
+export const MAX_REPEATED_ERROR_KEYS = 50;
+export const MAX_STALLING_EVENTS = 100;
 
 export const EMPTY_HISTORY: RalphHistory = {
    iterations: [],
@@ -156,10 +163,18 @@ export function clearState(statePath: string): void {
 
 export interface FileSnapshot {
    files: Map<string, string>;
+   /**
+    * FA4: true when the batch git hash failed and files were marked with
+    * mtime/deleted fallback markers instead of git content hashes. A degraded
+    * snapshot must not be diffed against a healthy one (marker vs hash mixing
+    * would report every file as modified).
+    */
+   degraded?: boolean;
 }
 
 export async function captureFileSnapshot(): Promise<FileSnapshot> {
    const files = new Map<string, string>();
+   let degraded = false;
    const cwd = process.cwd();
    try {
       const insideWorkTree = await $`git rev-parse --is-inside-work-tree`.cwd(cwd).quiet().text().catch(() => "");
@@ -173,7 +188,14 @@ export async function captureFileSnapshot(): Promise<FileSnapshot> {
       const allFiles = new Set<string>();
       for (const line of status.split("\n")) {
          if (line.trim()) {
-            allFiles.add(line.substring(3).trim());
+            // Porcelain rename/copy lines are "R  old -> new" / "C  old -> new";
+            // track the destination path only (FA4).
+            let path = line.substring(3).trim();
+            const arrowIdx = path.indexOf(" -> ");
+            if (arrowIdx !== -1) {
+               path = path.substring(arrowIdx + 4).trim();
+            }
+            allFiles.add(path);
          }
       }
       for (const file of trackedFiles.split("\n")) {
@@ -218,6 +240,10 @@ export async function captureFileSnapshot(): Promise<FileSnapshot> {
          // batch failure (missing tracked files make git exit 128 mid-stream)
          // and individual files git could not hash.
          if (!batchOk || files.size < pathList.length) {
+            // FA4: batch hash failure means this snapshot's hashes are markers,
+            // not git content hashes — mark it degraded so cross-snapshot diffs
+            // skip it instead of reporting every file modified.
+            if (!batchOk) degraded = true;
             const statSync = require("fs").statSync as (p: string) => { mtimeMs: number };
             for (const file of pathList) {
                if (files.has(file)) continue;
@@ -232,10 +258,16 @@ export async function captureFileSnapshot(): Promise<FileSnapshot> {
    } catch {
       // Git not available or error
    }
-   return { files };
+   return { files, degraded };
 }
 
 export function getModifiedFilesSinceSnapshot(before: FileSnapshot, after: FileSnapshot): string[] {
+   // FA4: if either snapshot is degraded, its markers are not comparable to git
+   // content hashes — comparing would report every file modified. Skip the diff.
+   if (before.degraded || after.degraded) {
+      return [];
+   }
+
    const changedFiles: string[] = [];
 
    for (const [file, hash] of after.files) {
@@ -314,6 +346,12 @@ export async function appendIterationHistory(params: {
    };
 
    params.history.iterations.push(iterationRecord);
+   // P1: ring buffer — keep the newest MAX_HISTORY_ITERATIONS, count the rest.
+   if (params.history.iterations.length > MAX_HISTORY_ITERATIONS) {
+      const dropCount = params.history.iterations.length - MAX_HISTORY_ITERATIONS;
+      params.history.iterations.splice(0, dropCount);
+      params.history.droppedIterations = (params.history.droppedIterations ?? 0) + dropCount;
+   }
    params.history.totalDurationMs += iterationDuration;
 
    if (filesModified.length === 0) {
@@ -336,9 +374,30 @@ export async function appendIterationHistory(params: {
          params.history.struggleIndicators.repeatedErrors[key] =
             (params.history.struggleIndicators.repeatedErrors[key] || 0) + 1;
       }
+      // P2: prune the repeatedErrors map to the newest MAX_REPEATED_ERROR_KEYS.
+      // Object key insertion order is preserved, so oldest keys are at the front.
+      const errorKeys = Object.keys(params.history.struggleIndicators.repeatedErrors);
+      if (errorKeys.length > MAX_REPEATED_ERROR_KEYS) {
+         const dropKeys = errorKeys.slice(0, errorKeys.length - MAX_REPEATED_ERROR_KEYS);
+         for (const k of dropKeys) {
+            delete params.history.struggleIndicators.repeatedErrors[k];
+         }
+      }
    }
 
    saveHistory(params.history, params.historyPath, params.stateDir);
+}
+
+/**
+ * P7: append a stalling event, capping the list at the newest MAX_STALLING_EVENTS.
+ * Replaces unbounded inline pushes at ralph.ts stall sites.
+ */
+export function appendStallingEvent(history: RalphHistory, event: StallingEvent): void {
+   if (!history.stallingEvents) history.stallingEvents = [];
+   history.stallingEvents.push(event);
+   if (history.stallingEvents.length > MAX_STALLING_EVENTS) {
+      history.stallingEvents.splice(0, history.stallingEvents.length - MAX_STALLING_EVENTS);
+   }
 }
 
 export function getFallbackKey(agent: AgentType, modelName: string): string {
