@@ -25,7 +25,13 @@ import { BoundedHeadTailBuffer } from "./src/bounded-stream-buffer";
 import { ByteLineSplitter, isPiNoiseLineBytes } from "./src/byte-line-filter";
 
 import { stripFrontmatter } from "./template-utils";
-import { type RalphState as RalphStateBase } from "./src/loop-helpers";
+import {
+   type RalphState as RalphStateBase,
+   capHistoryIterations,
+   capRepeatedErrors,
+   appendStallingEvent,
+   stripInjectedPrompt,
+} from "./src/loop-helpers";
 import {
    generateRunHash,
    createReviewGateState,
@@ -1593,11 +1599,6 @@ Learn more: https://ghuntley.com/ralph/
       droppedIterations?: number;
    }
 
-   /** Ring/cap limits for unbounded history growth (P1/P2/P7). */
-   const MAX_HISTORY_ITERATIONS = 200;
-   const MAX_REPEATED_ERROR_KEYS = 50;
-   const MAX_STALLING_EVENTS = 100;
-
    const EMPTY_HISTORY: RalphHistory = {
       iterations: [],
       totalDurationMs: 0,
@@ -1629,18 +1630,6 @@ Learn more: https://ghuntley.com/ralph/
          try {
             require("fs").unlinkSync(historyPath);
          } catch { }
-      }
-   }
-
-   /**
-    * P1: ring buffer — keep the newest MAX_HISTORY_ITERATIONS, count the rest.
-    * Shared by both history append sites (appendIterationHistory + catch-path errorRecord).
-    */
-   function capHistoryIterations(history: RalphHistory): void {
-      if (history.iterations.length > MAX_HISTORY_ITERATIONS) {
-         const dropCount = history.iterations.length - MAX_HISTORY_ITERATIONS;
-         history.iterations.splice(0, dropCount);
-         history.droppedIterations = (history.droppedIterations ?? 0) + dropCount;
       }
    }
 
@@ -1699,15 +1688,7 @@ Learn more: https://ghuntley.com/ralph/
             const key = error.substring(0, 100);
             params.history.struggleIndicators.repeatedErrors[key] = (params.history.struggleIndicators.repeatedErrors[key] || 0) + 1;
          }
-         // P2: prune the repeatedErrors map to the newest MAX_REPEATED_ERROR_KEYS.
-         // Object key insertion order is preserved, so oldest keys are at the front.
-         const errorKeys = Object.keys(params.history.struggleIndicators.repeatedErrors);
-         if (errorKeys.length > MAX_REPEATED_ERROR_KEYS) {
-            const dropKeys = errorKeys.slice(0, errorKeys.length - MAX_REPEATED_ERROR_KEYS);
-            for (const k of dropKeys) {
-               delete params.history.struggleIndicators.repeatedErrors[k];
-            }
-         }
+         capRepeatedErrors(params.history);
       }
 
       saveHistory(params.history);
@@ -3372,7 +3353,7 @@ Unable to read ${currentTasksFileLabel()}
     * Falls back to a full-text search of the raw output for stream-json agents
     * where the promise may appear inside JSON values rather than as a standalone line.
     */
-   function checkCompletion(output: string, promise: string, rawOutput?: string, agentType?: string, extraFlags?: string[]): boolean {
+   function checkCompletion(output: string, promise: string, rawOutput?: string, agentType?: string, extraFlags?: string[], sentPrompt?: string): boolean {
       // FA1: in JSON-stream mode the raw buffer contains user-role message echoes
       // that repeat the prompt (including any promise tag). Checking the raw buffer
       // directly yields false completions. Route through ASSISTANT-only extraction
@@ -3385,8 +3366,17 @@ Unable to read ${currentTasksFileLabel()}
             .join("\n");
          return checkTerminalPromise(assistantText, promise) || containsPromiseTag(assistantText, promise);
       }
-      if (checkTerminalPromise(output, promise)) return true;
-      if (rawOutput && containsPromiseTag(rawOutput, promise)) return true;
+      // P3 raw-echo guard: in raw-stdout mode the agent can echo the injected
+      // prompt verbatim (including its `<promise>` example/instruction lines).
+      // Strip the known sent prompt before scanning so an echo can't satisfy the
+      // promise; a bare `<promise>X</promise>` line the agent genuinely emits is
+      // preserved by stripInjectedPrompt and still detected.
+      const scanOutput = sentPrompt ? stripInjectedPrompt(output, sentPrompt) : output;
+      const scanRaw = rawOutput !== undefined
+         ? (sentPrompt ? stripInjectedPrompt(rawOutput, sentPrompt) : rawOutput)
+         : undefined;
+      if (checkTerminalPromise(scanOutput, promise)) return true;
+      if (scanRaw !== undefined && containsPromiseTag(scanRaw, promise)) return true;
       return false;
    }
 
@@ -4751,14 +4741,8 @@ Unable to read ${currentTasksFileLabel()}
                      action: state.stallingAction || stallingAction,
                   };
 
-                  if (!history.stallingEvents) {
-                     history.stallingEvents = [];
-                  }
-                  history.stallingEvents.push(stallingEvent);
-                  // P7: cap the list at the newest MAX_STALLING_EVENTS.
-                  if (history.stallingEvents.length > MAX_STALLING_EVENTS) {
-                     history.stallingEvents.splice(0, history.stallingEvents.length - MAX_STALLING_EVENTS);
-                  }
+                  // P7: append + cap the stalling list (shared helper, single source).
+                  appendStallingEvent(history, stallingEvent);
 
                   // For pre-start stalling, we need to kill the process if it's still running
                   if (isPreStartStalled && currentProc) {
@@ -4868,14 +4852,8 @@ Unable to read ${currentTasksFileLabel()}
                      action: state.stallingAction || stallingAction,
                   };
 
-                  if (!history.stallingEvents) {
-                     history.stallingEvents = [];
-                  }
-                  history.stallingEvents.push(stallingEvent);
-                  // P7: cap the list at the newest MAX_STALLING_EVENTS.
-                  if (history.stallingEvents.length > MAX_STALLING_EVENTS) {
-                     history.stallingEvents.splice(0, history.stallingEvents.length - MAX_STALLING_EVENTS);
-                  }
+                  // P7: append + cap the stalling list (shared helper, single source).
+                  appendStallingEvent(history, stallingEvent);
                   const stalledExitCode = await exitCodePromise;
                   currentProc = null;
                   await appendIterationHistory({
@@ -4958,9 +4936,9 @@ Unable to read ${currentTasksFileLabel()}
             }
 
             const combinedOutput = `${result}\n${stderr}`;
-            const completionSignalDetected = checkCompletion(result, completionPromise, result, agentConfig.type, extraAgentFlags);
-            const abortDetected = abortPromise ? checkCompletion(result, abortPromise, result, agentConfig.type, extraAgentFlags) : false;
-            const taskCompletionDetected = tasksMode ? checkCompletion(result, taskPromise, result, agentConfig.type, extraAgentFlags) : false;
+            const completionSignalDetected = checkCompletion(result, completionPromise, result, agentConfig.type, extraAgentFlags, fullPrompt);
+            const abortDetected = abortPromise ? checkCompletion(result, abortPromise, result, agentConfig.type, extraAgentFlags, fullPrompt) : false;
+            const taskCompletionDetected = tasksMode ? checkCompletion(result, taskPromise, result, agentConfig.type, extraAgentFlags, fullPrompt) : false;
 
             let completionDetected = completionSignalDetected;
             if (tasksMode && completionSignalDetected) {

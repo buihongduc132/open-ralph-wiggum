@@ -36,6 +36,7 @@ import {
    existsSync,
    mkdirSync,
    mkdtempSync,
+   readFileSync,
    rmSync,
    symlinkSync,
    writeFileSync,
@@ -47,7 +48,17 @@ import { execSync } from "child_process";
 import { parseDuration, parseEarlyArgs, parseMainArgs, applyPassthroughOverrides } from "../src/parse-args";
 import { loadRuntimeTomlConfig } from "../src/runtime-config";
 import { extractJsonCompletionText, beautifyJsonLine, type BeautifierConfig } from "../src/json-beautifier";
-import { captureFileSnapshot, getModifiedFilesSinceSnapshot, appendIterationHistory, EMPTY_HISTORY } from "../src/loop-helpers";
+import {
+   captureFileSnapshot,
+   getModifiedFilesSinceSnapshot,
+   appendIterationHistory,
+   EMPTY_HISTORY,
+   stripInjectedPrompt,
+   MAX_HISTORY_ITERATIONS,
+   MAX_REPEATED_ERROR_KEYS,
+   MAX_STALLING_EVENTS,
+} from "../src/loop-helpers";
+import { containsPromiseTag, checkTerminalPromise } from "../completion";
 import { dispatchVoters, createReviewGateState } from "../src/review-gate";
 import type { RalphRuntimeConfig, ReviewConfig } from "../src/types";
 
@@ -706,5 +717,83 @@ describe("P7: stallingEvents capped at last 100", () => {
       // Cap keeps the NEWEST events: oldest retained = iteration 51, last = 150.
       expect(history.stallingEvents?.[0]?.iteration).toBe(51);
       expect(history.stallingEvents?.[history.stallingEvents.length - 1]?.iteration).toBe(150);
+   });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HOTFIX4-P3 — raw-stdout completion path must ignore an echoed prompt (HIGH)
+// The agent can echo the injected prompt verbatim, including its `<promise>`
+// example/instruction lines. Scanning that raw echo would surface a FALSE
+// completion. checkCompletion now strips the known sent prompt (buildPrompt
+// result) via the shared stripInjectedPrompt helper before the tag scan.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("HOTFIX4-P3: raw-echo of sent prompt must NOT be detected as completion", () => {
+   const promise = "RALPH_DONE";
+   // Mirrors the real buildPrompt shape: a bare `<promise>` example line plus
+   // wrapped `<promise>` instruction lines (see ralph.ts buildPrompt default mode).
+   const sentPrompt = [
+      "# Ralph Wiggum Loop - Iteration 1",
+      "## Instructions",
+      "5. When the task is GENUINELY COMPLETE, output:",
+      `   <promise>${promise}</promise>`,
+      "## Critical Rules",
+      `- ONLY output <promise>${promise}</promise> when the task is truly done`,
+      "Now, work on the task. Good luck!",
+   ].join("\n");
+
+   // Reproduces the non-JSON branch of checkCompletion: strip the sent prompt,
+   // then scan for the promise tag exactly as ralph.ts does.
+   function detectAfterStrip(raw: string): boolean {
+      const scan = stripInjectedPrompt(raw, sentPrompt);
+      return checkTerminalPromise(scan, promise) || containsPromiseTag(scan, promise);
+   }
+
+   it("verbatim echo of the whole sent prompt → completion NOT detected", () => {
+      // Sanity: the un-stripped echo WOULD false-positive (documents the bug).
+      expect(containsPromiseTag(sentPrompt, promise)).toBe(true);
+      // Fix: after stripping the known prompt, no promise tag survives.
+      expect(detectAfterStrip(sentPrompt)).toBe(false);
+   });
+
+   it("echo of only the wrapped `Output <promise>` instruction line → NOT detected", () => {
+      const raw = `- ONLY output <promise>${promise}</promise> when the task is truly done`;
+      expect(detectAfterStrip(raw)).toBe(false);
+   });
+
+   it("genuine bare `<promise>` after an echoed prompt → still detected (no over-strip)", () => {
+      const raw = `${sentPrompt}\n\nI finished and verified the work.\n<promise>${promise}</promise>`;
+      expect(detectAfterStrip(raw)).toBe(true);
+   });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HOTFIX4-CAPS — cap logic has ONE source of truth (src/loop-helpers.ts).
+// ralph.ts must import the caps, never re-declare them locally (zero hand-sync).
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("HOTFIX4-CAPS: cap constants + helpers are single-sourced in src/loop-helpers", () => {
+   const ralphSrc = readFileSync(RALPH_TS, "utf-8");
+
+   it("src/loop-helpers exports the canonical cap constants", () => {
+      expect(MAX_HISTORY_ITERATIONS).toBe(200);
+      expect(MAX_REPEATED_ERROR_KEYS).toBe(50);
+      expect(MAX_STALLING_EVENTS).toBe(100);
+   });
+
+   it("ralph.ts contains NO local re-declaration of the cap constants", () => {
+      expect(/const\s+MAX_HISTORY_ITERATIONS\s*=/.test(ralphSrc)).toBe(false);
+      expect(/const\s+MAX_REPEATED_ERROR_KEYS\s*=/.test(ralphSrc)).toBe(false);
+      expect(/const\s+MAX_STALLING_EVENTS\s*=/.test(ralphSrc)).toBe(false);
+   });
+
+   it("ralph.ts contains NO local re-implementation of capHistoryIterations", () => {
+      expect(/function\s+capHistoryIterations\s*\(/.test(ralphSrc)).toBe(false);
+   });
+
+   it("ralph.ts imports the shared cap/strip helpers from ./src/loop-helpers", () => {
+      for (const sym of ["capHistoryIterations", "capRepeatedErrors", "appendStallingEvent", "stripInjectedPrompt"]) {
+         expect(ralphSrc.includes(sym)).toBe(true);
+      }
    });
 });
