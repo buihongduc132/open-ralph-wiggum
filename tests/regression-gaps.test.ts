@@ -42,6 +42,12 @@ async function chmod(mode: string, path: string) {
   return Bun.spawn({ cmd: ["chmod", mode, path], stdin: "ignore", stdout: "pipe", stderr: "pipe" }).exited;
 }
 
+// Full-spawn integration tests: ralph.ts spawn + git init + file snapshot exceed
+// bun:test default 5s timeout (see commit 03099b2 claim — never actually landed).
+const SLOW_TEST_TIMEOUT_MS = 20000;
+const itSlow = (name: string, fn: () => Promise<void> | void) =>
+  it(name, fn, SLOW_TEST_TIMEOUT_MS);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GAP 1: git auto-commit pipeline  [TEST ONLY]
 // ─────────────────────────────────────────────────────────────────────────────
@@ -49,7 +55,7 @@ describe("GAP-1: git auto-commit pipeline", () => {
   beforeEach(() => { assignPaths(mkdtempSync(join(tmpdir(), "ralph-gap1-"))); writeFakeAgentConfig(); });
   afterEach(() => { cleanup(); });
 
-  it("auto-commit exits cleanly without --no-commit (git repo exists)", async () => {
+  itSlow("auto-commit exits cleanly without --no-commit (git repo exists)", async () => {
     await runGit(["init"]);
     await runGit(["config", "user.email", "test@test.com"]);
     await runGit(["config", "user.name", "Test"]);
@@ -68,7 +74,7 @@ describe("GAP-1: git auto-commit pipeline", () => {
     expect(err).not.toContain("unhandledRejection");
   });
 
-  it("auto-commit error-path safe: git failure caught, loop continues", async () => {
+  itSlow("auto-commit error-path safe: git failure caught, loop continues", async () => {
     writeFileSync(join(workDir, "dirty.txt"), "dirty");
     const proc = Bun.spawn({
       cmd: [bunPath, "run", ralphPath, "--state-dir", join(workDir, ".ralph"),
@@ -92,7 +98,7 @@ describe("GAP-2: --prompt-template edge cases", () => {
   beforeEach(() => { assignPaths(mkdtempSync(join(tmpdir(), "ralph-gap2-"))); writeFakeAgentConfig(); });
   afterEach(() => { cleanup(); });
 
-  it("whitespace-only template falls back to CLI prompt", async () => {
+  itSlow("whitespace-only template falls back to CLI prompt", async () => {
     const tp = join(workDir, "whitespace.md");
     writeFileSync(tp, "   \n\n  \n  ");
     const proc = Bun.spawn({
@@ -106,7 +112,7 @@ describe("GAP-2: --prompt-template edge cases", () => {
     expect((await new Response(proc.stdout).text())).toContain("MY CLI TASK IS IMPORTANT");
   });
 
-  it("static template (no {{prompt}}) uses template as-is, overriding CLI", async () => {
+  itSlow("static template (no {{prompt}}) uses template as-is, overriding CLI", async () => {
     const tp = join(workDir, "static.md");
     writeFileSync(tp, "ALWAYS USE THIS EXACT PROMPT TEXT");
     const proc = Bun.spawn({
@@ -141,7 +147,7 @@ describe("GAP-3: --abort-promise early exit", () => {
     return c;
   }
 
-  it("abort signal detected → exit 1, state files cleared", async () => {
+  itSlow("abort signal detected → exit 1, state files cleared", async () => {
     const sd = join(workDir, ".ralph");
     mkdirSync(sd, { recursive: true });
     const config = await makeAbortAgent("abort-agent");
@@ -160,7 +166,7 @@ describe("GAP-3: --abort-promise early exit", () => {
     expect(existsSync(join(sd, "ralph-history.json"))).toBe(false);
   });
 
-  it("abort early exit does not leave stale state", async () => {
+  itSlow("abort early exit does not leave stale state", async () => {
     const sd = join(workDir, ".ralph2");
     mkdirSync(sd, { recursive: true });
     const config = await makeAbortAgent("abort-agent2");
@@ -182,7 +188,7 @@ describe("GAP-4: TOML no_commit = false → autoCommit = true", () => {
   beforeEach(() => { assignPaths(mkdtempSync(join(tmpdir(), "ralph-gap4-"))); writeFakeAgentConfig(); });
   afterEach(() => { cleanup(); });
 
-  it("TOML no_commit = false → git auto-commits", async () => {
+  itSlow("TOML no_commit = false → git auto-commits", async () => {
     await runGit(["init"]);
     await runGit(["config", "user.email", "test@test.com"]);
     await runGit(["config", "user.name", "Test"]);
@@ -215,7 +221,7 @@ describe("GAP-4: TOML no_commit = false → autoCommit = true", () => {
     expect(out + err).toContain("Permissions: auto-approve all tools");
   });
 
-  it("TOML no_commit = true → no auto-commit", async () => {
+  itSlow("TOML no_commit = true → no auto-commit", async () => {
     await runGit(["init"]);
     await runGit(["config", "user.email", "test@test.com"]);
     await runGit(["config", "user.name", "Test"]);
@@ -243,7 +249,7 @@ describe("GAP-5: saveState/saveHistory failure in catch block", () => {
   beforeEach(() => { assignPaths(mkdtempSync(join(tmpdir(), "ralph-gap5-"))); writeFakeAgentConfig(); });
   afterEach(() => { cleanup(); });
 
-  it("Ralph handles save failure gracefully (no unhandled crash)", async () => {
+  itSlow("Ralph handles save failure gracefully (no unhandled crash)", async () => {
     const sd = join(workDir, ".ralph-readonly");
     mkdirSync(sd, { recursive: true });
     await chmod("444", sd);
@@ -270,7 +276,7 @@ describe("GAP-6: handleQuestions — question detection logic", () => {
   beforeEach(() => { assignPaths(mkdtempSync(join(tmpdir(), "ralph-gap6-"))); writeFakeAgentConfig(); });
   afterEach(() => { cleanup(); });
 
-  it("unit: detectQuestionTool matches opencode question output patterns", () => {
+  itSlow("unit: detectQuestionTool matches opencode question output patterns", () => {
     // Mirror Ralph's actual parseToolOutput for opencode (ralph.ts:133-136)
     const parseToolOutput = (line: string) => {
       const match = line.replace(/\u001b\[[0-9;]*m/g, "").match(/^\|\s{2}([A-Za-z0-9_-]+)/);
@@ -293,7 +299,7 @@ describe("GAP-6: handleQuestions — question detection logic", () => {
     expect(detectQuestionTool("using Read\nusing Bash")).toBe(null);
   });
 
-  it("SMOKE: Ralph handles question tool output without crashing", async () => {
+  itSlow("SMOKE: Ralph handles question tool output without crashing", async () => {
     const ap = join(workDir, "question-agent.sh");
     writeFileSync(ap, "#!/usr/bin/env bash\necho \"| question: Should I proceed?\"\necho \"waiting...\"\n");
     await chmod("+x", ap);
@@ -324,7 +330,7 @@ describe("GAP-7: --no-stream — buffered output integrity", () => {
   beforeEach(() => { assignPaths(mkdtempSync(join(tmpdir(), "ralph-gap7-"))); writeFakeAgentConfig(); });
   afterEach(() => { cleanup(); });
 
-  it("--no-stream receives complete multi-line buffered output with ANSI", async () => {
+  itSlow("--no-stream receives complete multi-line buffered output with ANSI", async () => {
     const ap = join(workDir, "ansi-agent.sh");
     writeFileSync(ap, [
       "#!/usr/bin/env bash",
@@ -370,7 +376,7 @@ describe("GAP-8: tasksMode completion gate", () => {
   beforeEach(() => { assignPaths(mkdtempSync(join(tmpdir(), "ralph-gap8-"))); writeFakeAgentConfig(); });
   afterEach(() => { cleanup(); });
 
-  it("tasksMode: completion IGNORED when tasks file has [ ] incomplete items", async () => {
+  itSlow("tasksMode: completion IGNORED when tasks file has [ ] incomplete items", async () => {
     const sd = join(workDir, ".ralph");
     mkdirSync(sd, { recursive: true });
     writeFileSync(join(sd, "ralph-tasks.md"), "# Ralph Tasks\n- [x] Completed task 1\n- [ ] Incomplete task 2\n");
@@ -391,7 +397,7 @@ describe("GAP-8: tasksMode completion gate", () => {
     expect(combined).toContain("Iteration 2");
   });
 
-  it("tasksMode: completion ACCEPTED when all tasks are marked [x] done", async () => {
+  itSlow("tasksMode: completion ACCEPTED when all tasks are marked [x] done", async () => {
     const sd = join(workDir, ".ralph2");
     mkdirSync(sd, { recursive: true });
     writeFileSync(join(sd, "ralph-tasks.md"), "# Ralph Tasks\n- [x] Task 1\n- [x] Task 2\n");
@@ -418,7 +424,7 @@ describe("GAP-9: --no-allow-all wins over TOML allow_all = true", () => {
   beforeEach(() => { assignPaths(mkdtempSync(join(tmpdir(), "ralph-gap9-"))); writeFakeAgentConfig(); });
   afterEach(() => { cleanup(); });
 
-  it("TOML allow_all = true + CLI --no-allow-all = false → permissions are NOT auto-approved", async () => {
+  itSlow("TOML allow_all = true + CLI --no-allow-all = false → permissions are NOT auto-approved", async () => {
     writeTomlConfig(`prompt = "do it"\nagent = "opencode"\nmodel = "${TEST_MODEL}"\nallow_all = true\n`);
     const sd = join(workDir, ".ralph");
     const proc = Bun.spawn({
@@ -434,7 +440,7 @@ describe("GAP-9: --no-allow-all wins over TOML allow_all = true", () => {
     expect(out).not.toContain("auto-approve all tools");
   });
 
-  it("TOML allow_all = false + CLI --allow-all = true → permissions are auto-approved", async () => {
+  itSlow("TOML allow_all = false + CLI --allow-all = true → permissions are auto-approved", async () => {
     writeTomlConfig(`prompt = "do it"\nagent = "opencode"\nmodel = "${TEST_MODEL}"\nallow_all = false\n`);
     const sd = join(workDir, ".ralph2");
     const proc = Bun.spawn({
@@ -456,7 +462,7 @@ describe("GAP-10: --no-plugins → filterPlugins env propagation", () => {
   beforeEach(() => { assignPaths(mkdtempSync(join(tmpdir(), "ralph-gap10-"))); writeFakeAgentConfig(); });
   afterEach(() => { cleanup(); });
 
-  it("--no-plugins generates OPENCODE_CONFIG env for sub-agent", async () => {
+  itSlow("--no-plugins generates OPENCODE_CONFIG env for sub-agent", async () => {
     const sd = join(workDir, ".ralph");
     mkdirSync(sd, { recursive: true });
     const envInspectorPath = join(process.cwd(), "tests/helpers/fake-env-inspector.sh");
@@ -487,7 +493,7 @@ describe("GAP-11: --reuse-state preserves CLI completionPromise when state lacks
   beforeEach(() => { assignPaths(mkdtempSync(join(tmpdir(), "ralph-gap11-"))); writeFakeAgentConfig(); });
   afterEach(() => { cleanup(); });
 
-  it("--reuse-state: CLI completionPromise NOT overwritten by empty state value", async () => {
+  itSlow("--reuse-state: CLI completionPromise NOT overwritten by empty state value", async () => {
     const sd = join(workDir, ".ralph");
     mkdirSync(sd, { recursive: true });
      writeFileSync(join(sd, "ralph-loop.state.json"), JSON.stringify({
@@ -519,7 +525,7 @@ describe("GAP-11: --reuse-state preserves CLI completionPromise when state lacks
     expect(out + err).toContain("MY_CUSTOM_COMPLETE");
   });
 
-  it("--reuse-state: state completionPromise IS used when it has a value", async () => {
+  itSlow("--reuse-state: state completionPromise IS used when it has a value", async () => {
     const sd = join(workDir, ".ralph2");
     mkdirSync(sd, { recursive: true });
      writeFileSync(join(sd, "ralph-loop.state.json"), JSON.stringify({
@@ -560,7 +566,7 @@ describe("GAP-12: --state-dir passthrough without --no-commit", () => {
   beforeEach(() => { assignPaths(mkdtempSync(join(tmpdir(), "ralph-gap12-"))); writeFakeAgentConfig(); });
   afterEach(() => { cleanup(); });
 
-  it("--state-dir in passthrough (after --) without --no-commit produces helpful error", async () => {
+  itSlow("--state-dir in passthrough (after --) without --no-commit produces helpful error", async () => {
     const sd = join(workDir, ".ralph");
     mkdirSync(sd, { recursive: true });
     // NO --no-commit in Ralph's own args, but --state-dir is in passthrough
@@ -589,7 +595,7 @@ describe("GAP-12: --state-dir passthrough without --no-commit", () => {
 // GAP 13: ralph-dev vs ralph behavioral parity  [TEST ONLY]
 // ─────────────────────────────────────────────────────────────────────────────
 describe("GAP-13: ralph-dev vs ralph behavioral parity", () => {
-  it("SMOKE: bun run ralph.ts --version works", async () => {
+  itSlow("SMOKE: bun run ralph.ts --version works", async () => {
     const proc = Bun.spawn({
       cmd: [bunPath, "run", ralphPath, "--version"],
       cwd: process.cwd(), stdin: "ignore", stdout: "pipe", stderr: "pipe",
@@ -600,7 +606,7 @@ describe("GAP-13: ralph-dev vs ralph behavioral parity", () => {
     expect(out).toMatch(/ralph\s+\d+\.\d+/);
   });
 
-  it("SMOKE: bin/ralph (if exists) --version matches bun run --version", async () => {
+  itSlow("SMOKE: bin/ralph (if exists) --version matches bun run --version", async () => {
     const binPath = join(process.cwd(), "bin", "ralph");
     if (!existsSync(binPath)) return; // not a script
     const binProc = Bun.spawn({ cmd: [binPath, "--version"], stdin: "ignore", stdout: "pipe", stderr: "pipe" });

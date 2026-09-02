@@ -83,6 +83,82 @@ export function resolveConfigRelativePath(baseFilePath: string, targetPath: stri
    return isAbsolute(targetPath) ? targetPath : resolve(dirname(baseFilePath), targetPath);
 }
 
+/** Recognized top-level Ralph TOML keys (scalars + known sections). FA5. */
+const RECOGNIZED_TOML_KEYS = new Set<string>([
+   "prompt", "agent", "agent_binary", "min_iterations", "max_iterations",
+   "completion_promise", "abort_promise", "tasks", "task_promise", "model",
+   "rotation", "stalling_timeout", "blacklist_duration", "stalling_action",
+   "heartbeat_interval", "pre_start_timeout", "no_commit", "no_plugins",
+   "allow_all", "prompt_file", "prompt_template", "stream", "verbose_tools",
+   "questions", "agent_config", "extra_agent_flags", "stall_retries",
+   "stall_retry_minutes", "json_display", "output_buffer_bytes",
+   "reuse_check", "reuse_skip_model", "reuse_skip_agent", "reuse_skip_rotation",
+   "reuse_skip_min_iterations", "reuse_skip_max_iterations",
+   "goal", "goal_dir", "goal_promise",
+   // known sections
+   "review",
+]);
+
+/**
+ * FA5 single policy (warn-wins):
+ *  - unknown top-level scalar/section key → console.warn, non-fatal (back-compat).
+ *  - config wholly inside unrecognized section(s) (zero recognized top-level keys,
+ *    at least one unknown key that is a table) → exit(1) fail-loud.
+ */
+export function enforceTomlStrictness(parsed: Record<string, unknown>): void {
+   const topLevelKeys = Object.keys(parsed);
+   if (topLevelKeys.length === 0) return;
+
+   const recognized = topLevelKeys.filter(k => RECOGNIZED_TOML_KEYS.has(k));
+   const unknown = topLevelKeys.filter(k => !RECOGNIZED_TOML_KEYS.has(k));
+
+   if (recognized.length === 0) {
+      const wrappedInSection = unknown.some(k => {
+         const v = parsed[k];
+         return v !== null && typeof v === "object" && !Array.isArray(v);
+      });
+      if (wrappedInSection) {
+         console.error(
+            `Error: Ralph TOML config has no recognized top-level keys — all settings are ` +
+            `nested inside unexpected section(s): [${unknown.join(", ")}]. Move keys to the top ` +
+            `level (Ralph does not use TOML sections for core settings).`,
+         );
+         process.exit(1);
+      }
+   }
+
+   for (const key of unknown) {
+      console.warn(`⚠️ Ralph: unknown TOML config key '${key}' — ignored.`);
+   }
+}
+
+/**
+ * FA2: pre_start_timeout accepts a number (ms), "-1"→Infinity disable sentinel,
+ * or the string "auto" (→ undefined, keep auto). Invalid values fail loud.
+ */
+export function normalizePreStartTimeout(value: unknown): number | undefined {
+   if (value === undefined) return undefined;
+   if (typeof value === "number") {
+      if (Number.isNaN(value)) {
+         console.error("Error: Ralph TOML config key 'pre_start_timeout' must be a number or \"auto\".");
+         process.exit(1);
+      }
+      return value;
+   }
+   if (typeof value === "string") {
+      if (value === "auto") return undefined;
+      if (value === "-1") return Infinity;
+      const n = Number(value);
+      if (!Number.isFinite(n)) {
+         console.error("Error: Ralph TOML config key 'pre_start_timeout' must be a number, \"-1\", or \"auto\".");
+         process.exit(1);
+      }
+      return n;
+   }
+   console.error("Error: Ralph TOML config key 'pre_start_timeout' must be a number or \"auto\".");
+   process.exit(1);
+}
+
 export function loadRuntimeTomlConfig(configPath: string, explicit: boolean): RalphRuntimeConfig | null {
    if (!existsSync(configPath)) {
       if (explicit) {
@@ -95,6 +171,12 @@ export function loadRuntimeTomlConfig(configPath: string, explicit: boolean): Ra
    try {
       const raw = readFileSync(configPath, "utf-8");
       const parsed = Bun.TOML.parse(raw) as Record<string, unknown>;
+
+      // FA5 strictness (single policy, warn-wins): unknown top-level keys warn
+      // (back-compat); a config wholly wrapped in an unrecognized section (zero
+      // recognized top-level keys) is almost certainly a mistake → exit(1).
+      enforceTomlStrictness(parsed);
+
       const config: RalphRuntimeConfig = {};
 
       config.prompt = normalizeRuntimeConfigValue("prompt", parsed.prompt, "string") as string | undefined;
@@ -112,6 +194,7 @@ export function loadRuntimeTomlConfig(configPath: string, explicit: boolean): Ra
       config.blacklist_duration = normalizeRuntimeConfigValue("blacklist_duration", parsed.blacklist_duration, "string") as string | undefined;
       config.stalling_action = normalizeRuntimeConfigValue("stalling_action", parsed.stalling_action, "string") as "stop" | "rotate" | undefined;
       config.heartbeat_interval = normalizeRuntimeConfigValue("heartbeat_interval", parsed.heartbeat_interval, "string") as string | undefined;
+      config.pre_start_timeout = normalizePreStartTimeout(parsed.pre_start_timeout);
       config.no_commit = normalizeRuntimeConfigValue("no_commit", parsed.no_commit, "boolean") as boolean | undefined;
       config.no_plugins = normalizeRuntimeConfigValue("no_plugins", parsed.no_plugins, "boolean") as boolean | undefined;
       config.allow_all = normalizeRuntimeConfigValue("allow_all", parsed.allow_all, "boolean") as boolean | undefined;

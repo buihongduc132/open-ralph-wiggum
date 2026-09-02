@@ -440,7 +440,8 @@ describe("BUILT_IN_AGENTS", () => {
     expect(args).toContain("exec");
     expect(args).toContain("test");
     expect(args).toContain("--model");
-    expect(args).toContain("--full-auto");
+    expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(args).not.toContain("--full-auto");
   });
 
   it("copilot buildArgs produces expected output", () => {

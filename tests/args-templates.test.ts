@@ -407,9 +407,10 @@ describe("ARGS_TEMPLATES", () => {
          expect(result[result.length - 1]).toBe("fix the bug");
       });
 
-      it("includes --full-auto when allowAllPermissions is set", () => {
+      it("includes the supported bypass flag when allowAllPermissions is set", () => {
          const result = codex("fix the bug", "gpt-4o", { allowAllPermissions: true });
-         expect(result).toContain("--full-auto");
+         expect(result).toContain("--dangerously-bypass-approvals-and-sandbox");
+         expect(result).not.toContain("--full-auto");
       });
 
       it("treats multi-word prompt as a single trailing argument", () => {

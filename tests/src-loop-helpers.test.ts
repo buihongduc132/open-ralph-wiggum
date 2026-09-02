@@ -355,17 +355,20 @@ describe("captureFileSnapshot", () => {
       const snapshot = await captureFileSnapshot();
       expect(snapshot).toHaveProperty("files");
       expect(snapshot.files instanceof Map).toBe(true);
-   });
+   }, 20000);
 
    it("captures tracked files in a git repo", async () => {
+      // Snapshot runs up to four git subprocesses (rev-parse, status
+      // --porcelain, ls-files, hash-object --stdin-paths); under shell wrappers
+      // (bash-guard) each costs seconds — 5s default flakes.
       const snapshot = await captureFileSnapshot();
       expect(snapshot.files.size).toBeGreaterThan(0);
-   });
+   }, 20000);
 
    it("includes known files", async () => {
       const snapshot = await captureFileSnapshot();
       expect(snapshot.files.has("ralph.ts") || snapshot.files.has("package.json")).toBe(true);
-   });
+   }, 20000);
 });
 
 describe("sleepForStallRetry", () => {

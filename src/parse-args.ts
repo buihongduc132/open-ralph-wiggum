@@ -14,6 +14,22 @@ export interface ParsedEarlyArgs {
    initConfigPath: string | undefined;
 }
 
+/**
+ * FA6 contract: `--init-config [PATH]` consumes the next token as PATH only when
+ * it is path-shaped — no spaces AND (starts with ./, /, ~ OR ends with .json).
+ * Anything else (e.g. a prompt like "Build API") is a positional and must survive.
+ */
+export function isInitConfigPathShaped(token: string): boolean {
+   if (token === undefined || token === null) return false;
+   if (token.includes(" ")) return false;
+   return (
+      token.startsWith("./") ||
+      token.startsWith("/") ||
+      token.startsWith("~") ||
+      token.endsWith(".json")
+   );
+}
+
 export function parseEarlyArgs(args: string[]): ParsedEarlyArgs {
    const earlyDoubleDashIndex = args.indexOf("--");
    const earlyArgs = earlyDoubleDashIndex === -1 ? args : args.slice(0, earlyDoubleDashIndex);
@@ -45,7 +61,15 @@ export function parseEarlyArgs(args: string[]): ParsedEarlyArgs {
          tomlConfigPath = val;
          explicitTomlConfigPath = true;
       } else if (earlyArgs[i] === "--init-config") {
-         initConfigPath = earlyArgs[++i] || "";
+         // Flag present → init runs. Consume the next token as PATH only when
+         // path-shaped; otherwise leave it for the prompt positional (FA6).
+         const next = earlyArgs[i + 1];
+         if (next !== undefined && isInitConfigPathShaped(next)) {
+            initConfigPath = next;
+            i++;
+         } else {
+            initConfigPath = "";
+         }
       }
    }
 
@@ -54,6 +78,13 @@ export function parseEarlyArgs(args: string[]): ParsedEarlyArgs {
 
 export function parseDuration(input: string): number {
    const trimmed = input.trim();
+
+   // "-1" is the documented "disable" sentinel (help + TOML promise it). It maps
+   // to Infinity; per-flag intake decides whether Infinity is meaningful (e.g.
+   // --pre-start-timeout accepts it; --blacklist-duration rejects it). FA2/FA10.
+   if (trimmed === "-1") {
+      return Infinity;
+   }
 
    if (/^\d+$/.test(trimmed)) {
       return parseInt(trimmed);
@@ -326,7 +357,14 @@ export function parseMainArgs(args: string[], validAgents: string[]): ParsedMain
          if (!val) {
             throw new Error("--blacklist-duration requires a value");
          }
-         result.blacklistDurationMs = parseDuration(val);
+         const ms = parseDuration(val);
+         // FA10: blacklist duration must be a positive finite duration. 0/negative
+         // never expire the blacklist, and the -1→Infinity "disable" sentinel is
+         // meaningless here (a blacklist that never lifts).
+         if (!Number.isFinite(ms) || ms <= 0) {
+            throw new Error(`--blacklist-duration must be a positive duration (got '${val}')`);
+         }
+         result.blacklistDurationMs = ms;
          result.blacklistDurationProvided = true;
       } else if (arg === "--stalling-action") {
          const val = args[++i];
@@ -427,7 +465,12 @@ export function parseMainArgs(args: string[], validAgents: string[]): ParsedMain
       } else if (arg === "--config") {
          i++;
       } else if (arg === "--init-config") {
-         i++;
+         // Consume the next token only when path-shaped; otherwise it survives as
+         // the prompt positional (FA6).
+         const next = args[i + 1];
+         if (next !== undefined && isInitConfigPathShaped(next)) {
+            i++;
+         }
       } else if (arg.startsWith("-")) {
          throw new Error(`Unknown option: ${arg}`);
       } else {
@@ -445,10 +488,18 @@ export function applyPassthroughOverrides(result: ParsedMainArgs, setStatePaths?
          result.model = flags[i + 1];
          i++;
       } else if (flags[i] === "--max-iterations" && flags[i + 1]) {
-         result.maxIterations = parseInt(flags[i + 1]);
+         const v = flags[i + 1];
+         if (!/^\d+$/.test(v)) {
+            throw new Error(`--max-iterations requires a number (got '${v}')`);
+         }
+         result.maxIterations = parseInt(v);
          i++;
       } else if (flags[i] === "--min-iterations" && flags[i + 1]) {
-         result.minIterations = parseInt(flags[i + 1]);
+         const v = flags[i + 1];
+         if (!/^\d+$/.test(v)) {
+            throw new Error(`--min-iterations requires a number (got '${v}')`);
+         }
+         result.minIterations = parseInt(v);
          i++;
       } else if (flags[i] === "--completion-promise" && flags[i + 1]) {
          result.completionPromise = flags[i + 1];
@@ -463,7 +514,11 @@ export function applyPassthroughOverrides(result: ParsedMainArgs, setStatePaths?
          result.blacklistDurationMs = parseDuration(flags[i + 1]);
          i++;
       } else if (flags[i] === "--stalling-action" && flags[i + 1]) {
-         result.stallingAction = flags[i + 1] as "stop" | "rotate";
+         const v = flags[i + 1];
+         if (v !== "stop" && v !== "rotate") {
+            throw new Error(`--stalling-action must be 'stop' or 'rotate' (got '${v}')`);
+         }
+         result.stallingAction = v as "stop" | "rotate";
          i++;
       } else if (flags[i] === "--stall-retries") {
          result.stallRetries = true;

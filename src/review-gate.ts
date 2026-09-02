@@ -241,6 +241,130 @@ export interface VoterDispatchResult {
    approved: boolean;
 }
 
+// ── In-flight voter PID registry (P6) ────────────────────────────────────────
+
+/**
+ * PIDs of voter subprocesses currently in flight. Populated on spawn and cleared
+ * on completion so a SIGINT handler can kill orphaned voters before exit (P6).
+ */
+const inFlightVoterPids = new Set<number>();
+
+/** Snapshot of in-flight voter PIDs (SIGINT kill-group support). */
+export function getInFlightVoterPids(): number[] {
+   return [...inFlightVoterPids];
+}
+
+export interface RunVoterOptions {
+   cwd: string;
+   reviewPrompt: string;
+   timeoutMs: number;
+   config: { voterTimeout: string };
+}
+
+export interface RunVoterResult {
+   key: string;
+   vote: ReviewVote;
+   /** Tail-capped (≤4KB) stderr for logs (P3). */
+   stderrTail: string;
+}
+
+/**
+ * Spawn a single voter and return its vote result.
+ *
+ * P3: stdout and stderr are drained concurrently (a flooding child cannot
+ * deadlock on a full OS pipe), and captured stderr is tail-capped at 4KB.
+ * P6: the voter PID is registered while in flight and cleared on completion.
+ */
+export async function runVoter(
+   voter: ReviewVoter,
+   voterIndex: number,
+   opts: RunVoterOptions,
+): Promise<RunVoterResult> {
+   const { cwd, reviewPrompt, timeoutMs, config } = opts;
+   const voterKey = `voter-${voterIndex}`;
+   let voterOutput = "";
+   let stderrTail = "";
+   let timedOut = false;
+   let registeredPid: number | undefined;
+
+   try {
+      const promptFlag = voter.promptFlag || "-p";
+      const spawnArgs = [voter.agent, promptFlag, reviewPrompt];
+
+      if (voter.model && voter.model !== "default" && voter.model !== "") {
+         spawnArgs.push("--model", voter.model);
+      }
+
+      const proc = Bun.spawn(spawnArgs, {
+         stdout: "pipe",
+         stderr: "pipe",
+         cwd,
+      });
+
+      if (typeof proc.pid === "number") {
+         registeredPid = proc.pid;
+         inFlightVoterPids.add(registeredPid);
+      }
+
+      // Drain both streams concurrently so a child flooding stdout/stderr can't
+      // deadlock on a full pipe while we wait for exit.
+      const stdoutText = new Response(proc.stdout).text().catch(() => "");
+      const stderrText = new Response(proc.stderr).text().catch(() => "");
+
+      // Wait with timeout — clear timer on normal exit to prevent hanging
+      let timerId: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<void>((resolve) => {
+         timerId = setTimeout(() => {
+            timedOut = true;
+            try { proc.kill("SIGKILL"); } catch {}
+            resolve();
+         }, timeoutMs);
+      });
+
+      const exitPromise = proc.exited.then(() => {});
+      await Promise.race([exitPromise, timeoutPromise]);
+      if (timerId !== undefined) clearTimeout(timerId);
+
+      // On timeout the SIGKILL only reaps the direct child; an orphaned
+      // grandchild (e.g. a `sleep` in a wrapper script) can keep the stdout/
+      // stderr pipe write-end open, so the drain promises may never settle.
+      // A timed-out voter's output is discarded anyway, so don't block on the
+      // drain — only await it when the voter exited on its own.
+      if (!timedOut) {
+         const [outStr, errStr] = await Promise.all([stdoutText, stderrText]);
+         voterOutput = outStr;
+         // Tail-cap captured stderr at the last 4KB for logs.
+         stderrTail = errStr.length > 4096 ? errStr.slice(errStr.length - 4096) : errStr;
+      }
+   } catch (err) {
+      console.warn(`⚠️ Voter ${voterKey} failed: ${err}`);
+      voterOutput = "";
+   } finally {
+      if (registeredPid !== undefined) inFlightVoterPids.delete(registeredPid);
+   }
+
+   // Parse voter output
+   const now = new Date().toISOString();
+   if (timedOut) {
+      console.warn(`⚠️ Voter ${voterKey} timed out after ${config.voterTimeout}`);
+      return { key: voterKey, vote: { status: "timeout", at: now, reason: "voter timeout" }, stderrTail };
+   }
+
+   const isApprove = checkTerminalPromise(voterOutput, "APPROVE");
+   const isReject = checkTerminalPromise(voterOutput, "REJECT");
+
+   if (isApprove) {
+      return { key: voterKey, vote: { status: "approved", at: now, reason: "" }, stderrTail };
+   } else if (isReject) {
+      const reasonMatch = voterOutput.match(/REASON:\s*([\s\S]{1,500}?)(?=\n<promise>|$)/i);
+      const reason = reasonMatch ? reasonMatch[1].trim() : "No reason provided";
+      return { key: voterKey, vote: { status: "rejected", at: now, reason }, stderrTail };
+   } else {
+      console.warn(`⚠️ Voter ${voterKey} output unrecognized (no <promise> tag found)`);
+      return { key: voterKey, vote: { status: "rejected", at: now, reason: "voter output unrecognized" }, stderrTail };
+   }
+}
+
 /**
  * Dispatch voters in parallel batches and check quorum after each batch.
  * Batch size is configurable (default: 3). If ANY voter in a batch rejects,
@@ -277,67 +401,12 @@ export async function dispatchVoters(params: {
    const batchSize = config.batchSize;
    let currentState = { ...state, phase: "waiting_review" as ReviewGatePhase };
 
-   /** Spawn a single voter and return its vote result. */
-   async function runVoter(voter: ReviewVoter, voterIndex: number): Promise<{ key: string; vote: ReviewVote }> {
-      const voterKey = `voter-${voterIndex}`;
-      let voterOutput = "";
-      let timedOut = false;
-
-      try {
-         const promptFlag = voter.promptFlag || "-p";
-         const spawnArgs = [voter.agent, promptFlag, reviewPrompt];
-
-         if (voter.model && voter.model !== "default" && voter.model !== "") {
-            spawnArgs.push("--model", voter.model);
-         }
-
-         const proc = Bun.spawn(spawnArgs, {
-            stdout: "pipe",
-            stderr: "pipe",
-            cwd,
-         });
-
-         // Wait with timeout — clear timer on normal exit to prevent hanging
-         let timerId: ReturnType<typeof setTimeout> | undefined;
-         const timeoutPromise = new Promise<void>((resolve) => {
-            timerId = setTimeout(() => {
-               timedOut = true;
-               try { proc.kill("SIGKILL"); } catch {}
-               resolve();
-            }, timeoutMs);
-         });
-
-         const exitPromise = proc.exited.then(() => {});
-         await Promise.race([exitPromise, timeoutPromise]);
-         if (timerId !== undefined) clearTimeout(timerId);
-
-         voterOutput = timedOut ? "" : await new Response(proc.stdout).text();
-      } catch (err) {
-         console.warn(`⚠️ Voter ${voterKey} failed: ${err}`);
-         voterOutput = "";
-      }
-
-      // Parse voter output
-      const now = new Date().toISOString();
-      if (timedOut) {
-         console.warn(`⚠️ Voter ${voterKey} timed out after ${config.voterTimeout}`);
-         return { key: voterKey, vote: { status: "timeout", at: now, reason: "voter timeout" } };
-      }
-
-      const isApprove = checkTerminalPromise(voterOutput, "APPROVE");
-      const isReject = checkTerminalPromise(voterOutput, "REJECT");
-
-      if (isApprove) {
-         return { key: voterKey, vote: { status: "approved", at: now, reason: "" } };
-      } else if (isReject) {
-         const reasonMatch = voterOutput.match(/REASON:\s*([\s\S]{1,500}?)(?=\n<promise>|$)/i);
-         const reason = reasonMatch ? reasonMatch[1].trim() : "No reason provided";
-         return { key: voterKey, vote: { status: "rejected", at: now, reason } };
-      } else {
-         console.warn(`⚠️ Voter ${voterKey} output unrecognized (no <promise> tag found)`);
-         return { key: voterKey, vote: { status: "rejected", at: now, reason: "voter output unrecognized" } };
-      }
-   }
+   const runVoterOpts: RunVoterOptions = {
+      cwd,
+      reviewPrompt,
+      timeoutMs,
+      config: { voterTimeout: config.voterTimeout },
+   };
 
    // Dispatch voters in batches
    for (let batchStart = 0; batchStart < config.voters.length; batchStart += batchSize) {
@@ -351,7 +420,7 @@ export async function dispatchVoters(params: {
       console.log(`📋 ${batchLabel}`);
 
       // Spawn all voters in this batch in parallel
-      const batchPromises = batchIndices.map(i => runVoter(config.voters[i], i));
+      const batchPromises = batchIndices.map(i => runVoter(config.voters[i], i, runVoterOpts));
       const batchResults = await Promise.all(batchPromises);
 
       // Process results
