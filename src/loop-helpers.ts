@@ -53,6 +53,63 @@ export const MAX_HISTORY_ITERATIONS = 200;
 export const MAX_REPEATED_ERROR_KEYS = 50;
 export const MAX_STALLING_EVENTS = 100;
 
+/**
+ * P1: ring buffer — keep the newest MAX_HISTORY_ITERATIONS iterations, count
+ * the rest into droppedIterations. Single source of truth for both history
+ * append sites (appendIterationHistory + ralph.ts catch-path errorRecord).
+ */
+export function capHistoryIterations(history: RalphHistory): void {
+   if (history.iterations.length > MAX_HISTORY_ITERATIONS) {
+      const dropCount = history.iterations.length - MAX_HISTORY_ITERATIONS;
+      history.iterations.splice(0, dropCount);
+      history.droppedIterations = (history.droppedIterations ?? 0) + dropCount;
+   }
+}
+
+/**
+ * P2: prune the repeatedErrors map to the newest MAX_REPEATED_ERROR_KEYS.
+ * Object key insertion order is preserved, so oldest keys are at the front.
+ */
+export function capRepeatedErrors(history: RalphHistory): void {
+   const errorKeys = Object.keys(history.struggleIndicators.repeatedErrors);
+   if (errorKeys.length > MAX_REPEATED_ERROR_KEYS) {
+      const dropKeys = errorKeys.slice(0, errorKeys.length - MAX_REPEATED_ERROR_KEYS);
+      for (const k of dropKeys) {
+         delete history.struggleIndicators.repeatedErrors[k];
+      }
+   }
+}
+
+/**
+ * P3 raw-echo guard: an agent's raw stdout can echo the injected prompt back
+ * verbatim, including its `<promise>X</promise>` example/instruction lines.
+ * Scanning that raw text for the promise tag yields a FALSE completion. Strip
+ * the known sent prompt (buildPrompt result) — plus any residual injected
+ * INSTRUCTION line that mentions a promise tag inside surrounding text — before
+ * the tag scan. A bare `<promise>X</promise>` line is deliberately left intact:
+ * it may be the agent's genuine completion signal and must stay detectable.
+ */
+export function stripInjectedPrompt(rawText: string, sentPrompt: string): string {
+   if (!rawText || !sentPrompt) return rawText;
+   // 1. Remove verbatim echoes of the whole injected prompt.
+   let stripped = rawText.split(sentPrompt).join("\n");
+   // 2. Remove residual injected instruction lines that wrap a promise tag in
+   //    surrounding text (e.g. "- ONLY output <promise>X</promise> when...").
+   const instructionLines = new Set(
+      sentPrompt
+         .split(/\r?\n/)
+         .map(l => l.trim())
+         .filter(l => l.includes("<promise>") && !/^<promise>[^<]*<\/promise>$/.test(l))
+   );
+   if (instructionLines.size > 0) {
+      stripped = stripped
+         .split(/\r?\n/)
+         .filter(line => !instructionLines.has(line.trim()))
+         .join("\n");
+   }
+   return stripped;
+}
+
 export const EMPTY_HISTORY: RalphHistory = {
    iterations: [],
    totalDurationMs: 0,
@@ -346,12 +403,7 @@ export async function appendIterationHistory(params: {
    };
 
    params.history.iterations.push(iterationRecord);
-   // P1: ring buffer — keep the newest MAX_HISTORY_ITERATIONS, count the rest.
-   if (params.history.iterations.length > MAX_HISTORY_ITERATIONS) {
-      const dropCount = params.history.iterations.length - MAX_HISTORY_ITERATIONS;
-      params.history.iterations.splice(0, dropCount);
-      params.history.droppedIterations = (params.history.droppedIterations ?? 0) + dropCount;
-   }
+   capHistoryIterations(params.history);
    params.history.totalDurationMs += iterationDuration;
 
    if (filesModified.length === 0) {
@@ -374,15 +426,7 @@ export async function appendIterationHistory(params: {
          params.history.struggleIndicators.repeatedErrors[key] =
             (params.history.struggleIndicators.repeatedErrors[key] || 0) + 1;
       }
-      // P2: prune the repeatedErrors map to the newest MAX_REPEATED_ERROR_KEYS.
-      // Object key insertion order is preserved, so oldest keys are at the front.
-      const errorKeys = Object.keys(params.history.struggleIndicators.repeatedErrors);
-      if (errorKeys.length > MAX_REPEATED_ERROR_KEYS) {
-         const dropKeys = errorKeys.slice(0, errorKeys.length - MAX_REPEATED_ERROR_KEYS);
-         for (const k of dropKeys) {
-            delete params.history.struggleIndicators.repeatedErrors[k];
-         }
-      }
+      capRepeatedErrors(params.history);
    }
 
    saveHistory(params.history, params.historyPath, params.stateDir);
