@@ -1589,7 +1589,14 @@ Learn more: https://ghuntley.com/ralph/
          shortIterations: number;
       };
       stallingEvents?: StallingEvent[];
+      /** Count of iterations dropped from the ring buffer (P1 cap). */
+      droppedIterations?: number;
    }
+
+   /** Ring/cap limits for unbounded history growth (P1/P2/P7). */
+   const MAX_HISTORY_ITERATIONS = 200;
+   const MAX_REPEATED_ERROR_KEYS = 50;
+   const MAX_STALLING_EVENTS = 100;
 
    const EMPTY_HISTORY: RalphHistory = {
       iterations: [],
@@ -1622,6 +1629,18 @@ Learn more: https://ghuntley.com/ralph/
          try {
             require("fs").unlinkSync(historyPath);
          } catch { }
+      }
+   }
+
+   /**
+    * P1: ring buffer — keep the newest MAX_HISTORY_ITERATIONS, count the rest.
+    * Shared by both history append sites (appendIterationHistory + catch-path errorRecord).
+    */
+   function capHistoryIterations(history: RalphHistory): void {
+      if (history.iterations.length > MAX_HISTORY_ITERATIONS) {
+         const dropCount = history.iterations.length - MAX_HISTORY_ITERATIONS;
+         history.iterations.splice(0, dropCount);
+         history.droppedIterations = (history.droppedIterations ?? 0) + dropCount;
       }
    }
 
@@ -1658,6 +1677,7 @@ Learn more: https://ghuntley.com/ralph/
       };
 
       params.history.iterations.push(iterationRecord);
+      capHistoryIterations(params.history);
       params.history.totalDurationMs += iterationDuration;
 
       if (filesModified.length === 0) {
@@ -1678,6 +1698,15 @@ Learn more: https://ghuntley.com/ralph/
          for (const error of errors) {
             const key = error.substring(0, 100);
             params.history.struggleIndicators.repeatedErrors[key] = (params.history.struggleIndicators.repeatedErrors[key] || 0) + 1;
+         }
+         // P2: prune the repeatedErrors map to the newest MAX_REPEATED_ERROR_KEYS.
+         // Object key insertion order is preserved, so oldest keys are at the front.
+         const errorKeys = Object.keys(params.history.struggleIndicators.repeatedErrors);
+         if (errorKeys.length > MAX_REPEATED_ERROR_KEYS) {
+            const dropKeys = errorKeys.slice(0, errorKeys.length - MAX_REPEATED_ERROR_KEYS);
+            for (const k of dropKeys) {
+               delete params.history.struggleIndicators.repeatedErrors[k];
+            }
          }
       }
 
@@ -4726,6 +4755,10 @@ Unable to read ${currentTasksFileLabel()}
                      history.stallingEvents = [];
                   }
                   history.stallingEvents.push(stallingEvent);
+                  // P7: cap the list at the newest MAX_STALLING_EVENTS.
+                  if (history.stallingEvents.length > MAX_STALLING_EVENTS) {
+                     history.stallingEvents.splice(0, history.stallingEvents.length - MAX_STALLING_EVENTS);
+                  }
 
                   // For pre-start stalling, we need to kill the process if it's still running
                   if (isPreStartStalled && currentProc) {
@@ -4839,6 +4872,10 @@ Unable to read ${currentTasksFileLabel()}
                      history.stallingEvents = [];
                   }
                   history.stallingEvents.push(stallingEvent);
+                  // P7: cap the list at the newest MAX_STALLING_EVENTS.
+                  if (history.stallingEvents.length > MAX_STALLING_EVENTS) {
+                     history.stallingEvents.splice(0, history.stallingEvents.length - MAX_STALLING_EVENTS);
+                  }
                   const stalledExitCode = await exitCodePromise;
                   currentProc = null;
                   await appendIterationHistory({
@@ -5344,6 +5381,7 @@ Unable to read ${currentTasksFileLabel()}
                errors: [String(error).substring(0, 200)],
             };
             history.iterations.push(errorRecord);
+            capHistoryIterations(history);
             history.totalDurationMs += iterationDuration;
             try { saveHistory(history); } catch { /* best-effort */ }
 
