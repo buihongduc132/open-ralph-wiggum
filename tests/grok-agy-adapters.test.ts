@@ -115,7 +115,7 @@ describe("grok argv (shipped ARGS_TEMPLATES)", () => {
 describe("agy argv (shipped ARGS_TEMPLATES)", () => {
   const agy = ARGS_TEMPLATES.agy;
 
-  it("uses -p <prompt>, --model when set, skip-permissions only for allow-all, stream-json when streaming", () => {
+  it("uses -p <prompt>, --model when set, skip-permissions only for allow-all, pins json output", () => {
     const full = agy("dummy agy run", "gemini-3.1-pro-high", {
       allowAllPermissions: true,
       streamOutput: true,
@@ -123,13 +123,13 @@ describe("agy argv (shipped ARGS_TEMPLATES)", () => {
     expect(flagValue(full, "-p")).toBe("dummy agy run");
     expect(flagValue(full, "--model")).toBe("gemini-3.1-pro-high");
     expect(full).toContain("--dangerously-skip-permissions");
-    expect(flagValue(full, "--output-format")).toBe("stream-json");
+    expect(flagValue(full, "--output-format")).toBe("json");
     expect(full[full.length - 2]).toBe("-p");
 
     const locked = agy("dummy agy run", "", { allowAllPermissions: false, streamOutput: false });
     expect(locked).not.toContain("--dangerously-skip-permissions");
     expect(locked).not.toContain("--model");
-    expect(locked).not.toContain("stream-json");
+    expect(flagValue(locked, "--output-format")).toBe("json");
   });
 
   it("skips --model when skipModelFlag or extraFlags already pass a model", () => {

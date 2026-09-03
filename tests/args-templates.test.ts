@@ -276,12 +276,12 @@ describe("ARGS_TEMPLATES", () => {
          expect(agy("p", "", {})).not.toContain("--dangerously-skip-permissions");
       });
 
-      it("includes --output-format stream-json only when streaming", () => {
+      it("always pins --output-format json (agy stream-json and text modes time out)", () => {
          const streaming = agy("p", "", { streamOutput: true });
-         expect(flagValue(streaming, "--output-format")).toBe("stream-json");
+         expect(flagValue(streaming, "--output-format")).toBe("json");
+         expect(streaming).not.toContain("stream-json");
          const buffered = agy("p", "", { streamOutput: false });
-         expect(buffered).not.toContain("stream-json");
-         expect(buffered).not.toContain("--output-format");
+         expect(flagValue(buffered, "--output-format")).toBe("json");
       });
    });
 

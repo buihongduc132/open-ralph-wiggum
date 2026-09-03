@@ -190,7 +190,7 @@ describe("D4 unit: argsTemplate grok", () => {
 describe("D4 unit: argsTemplate agy", () => {
    it("flags first, -p prompt last (agy -p swallows the rest of argv)", () => {
       const cfg = named({ type: "agy", argsTemplate: "agy", configName: "AGY" });
-      expect(cfg.buildArgs(PROMPT, MODEL)).toEqual(["--model", MODEL, "-p", PROMPT]);
+      expect(cfg.buildArgs(PROMPT, MODEL)).toEqual(["--model", MODEL, "--output-format", "json", "-p", PROMPT]);
       const full = cfg.buildArgs(PROMPT, MODEL, {
          allowAllPermissions: true,
          streamOutput: true,
@@ -199,15 +199,15 @@ describe("D4 unit: argsTemplate agy", () => {
       expect(full).toEqual([
          "--model", MODEL,
          "--dangerously-skip-permissions",
-         "--output-format", "stream-json",
+         "--output-format", "json",
          "--sandbox",
          "-p", PROMPT,
       ]);
       expect(cfg.buildArgs(PROMPT, "", { extraFlags: ["--model", "override"] }))
-         .toEqual(["--model", "override", "-p", PROMPT]);
-      expect(cfg.buildArgs(PROMPT, MODEL, { skipModelFlag: true })).toEqual(["-p", PROMPT]);
+         .toEqual(["--output-format", "json", "--model", "override", "-p", PROMPT]);
+      expect(cfg.buildArgs(PROMPT, MODEL, { skipModelFlag: true })).toEqual(["--output-format", "json", "-p", PROMPT]);
       expect(cfg.buildArgs(PROMPT, "", { allowAllPermissions: false, streamOutput: false }))
-         .toEqual(["-p", PROMPT]);
+         .toEqual(["--output-format", "json", "-p", PROMPT]);
    });
 });
 

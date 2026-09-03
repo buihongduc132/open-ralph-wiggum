@@ -964,8 +964,7 @@ var agyBuilder = (prompt, model, options) => {
     cmdArgs.push("--model", model);
   if (options?.allowAllPermissions)
     cmdArgs.push("--dangerously-skip-permissions");
-  if (options?.streamOutput)
-    cmdArgs.push("--output-format", "stream-json");
+  cmdArgs.push("--output-format", "json");
   if (options?.extraFlags?.length)
     cmdArgs.push(...options.extraFlags);
   cmdArgs.push("-p", prompt);

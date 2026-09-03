@@ -49,7 +49,12 @@ const agyBuilder = (prompt: string, model: string, options?: AgentBuildArgsOptio
   const hasPassthroughModel = options?.extraFlags?.includes("--model") || options?.skipModelFlag;
   if (model?.trim() && !hasPassthroughModel) cmdArgs.push("--model", model);
   if (options?.allowAllPermissions) cmdArgs.push("--dangerously-skip-permissions");
-  if (options?.streamOutput) cmdArgs.push("--output-format", "stream-json");
+  // agy 1.1.24 print modes: `json` works; `stream-json` AND default `text` both
+  // end in `Error: timeout waiting for response` (~5m print-timeout, zero tokens).
+  // Verified 2026-09-03: json=SUCCESS 80s; stream-json/text=timeout exit 1.
+  // So always pin `--output-format json` (single-line buffered result); the
+  // stream flag choice is irrelevant to correctness for a buffered agent.
+  cmdArgs.push("--output-format", "json");
   if (options?.extraFlags?.length) cmdArgs.push(...options.extraFlags);
   cmdArgs.push("-p", prompt);
   return cmdArgs;
