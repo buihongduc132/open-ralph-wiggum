@@ -1,5 +1,5 @@
 # Bug ledger — extracted from no-op documentation tests (audit-bf5 F3)
-13 always-green tests removed from suite; bugs remain OPEN, documented here.
+12 always-green tests addressed (11 removed, 1 converted in place); bugs remain OPEN, documented here.
 
 ## "BUG: normalizeRuntimeConfigValue calls process.exit(1) on invalid config — no recovery [HIGH]"
 _source: tests/bugs-error-handling.test.ts_
@@ -156,7 +156,7 @@ const dirName = "win-style";
     rmSync(testDir, { recursive: true, force: true });
 ```
 
-## "resolves duplicate {{inject:name}} occurrences"
+## "context: resolves duplicate {{inject:name}} occurrences"
 _source: tests/deterministic-injection.test.ts_
 
 ```
@@ -6332,7 +6332,7 @@ describe("resolveInjectPlaceholders — state injection file read error", () => 
 });
 ```
 
-## "calls process.exit(1) for corrupt TOML file"
+## "context: calls process.exit(1) for corrupt TOML file"
 _source: tests/deterministic-injection.test.ts_
 
 ```
@@ -13644,7 +13644,7 @@ describe("resolveInjectPlaceholders — state injection file read error", () => 
 });
 ```
 
-## "resolves multiple inject placeholders"
+## "context: resolves multiple inject placeholders"
 _source: tests/deterministic-injection.test.ts_
 
 ```

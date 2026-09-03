@@ -93,7 +93,7 @@ Source: delegated audits (perf delivered; func delivered; badfaith pending) + wo
 ## 2026-09-03 — audit-bf5 findings + fixes (all callouts)
 - [F1 HIGH] bin/ stale vs restructure → bun build + sync commit queued after D5 lanes settle.
 - [F2 HIGH] 7 agent-config twins remain (loadAgentConfig/createAgentConfig/getDefaultConfig/getDefaultTomlConfig/getAgentBinaryEnvName/resolveAgentBinary/resolveCommand) → next debt lane.
-- [F3 MED] 13 always-green no-op tests (bugs-error-handling x11, deterministic-injection:2551, review-gate:534; from 8ef7399 June, pre-existing) → converting/deleting now.
+[F3 MED] 12 always-green no-op tests (final: 11 removed + 1 converted; initial 13-count was off-by-one) (bugs-error-handling x11, deterministic-injection:2551, review-gate:534; from 8ef7399 June, pre-existing) → converting/deleting now.
 - [F4 MED] 84.27% < 90% gate — mid-flight, D5 lanes running.
 - [F5 MED] loop-helpers formatting mangled + citation doubted → reformatted; citations VERIFIED real (bun#26580 hang + PR#40035 EPIPE-relay both read via websearch earlier this session).
 - [F6 LOW] expected-files drift → this entry records actual names (cov-blocks-d3/cov-loop-inprocess/cov-loop-integration/cov-d4-*/cov-d5*).
