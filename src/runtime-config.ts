@@ -207,6 +207,12 @@ export function loadRuntimeTomlConfig(configPath: string, explicit: boolean): Ra
       config.extra_agent_flags = normalizeRuntimeConfigValue("extra_agent_flags", parsed.extra_agent_flags, "string[]") as string[] | undefined;
       config.stall_retries = normalizeRuntimeConfigValue("stall_retries", parsed.stall_retries, "boolean") as boolean | undefined;
       config.stall_retry_minutes = normalizeRuntimeConfigValue("stall_retry_minutes", parsed.stall_retry_minutes, "number") as number | undefined;
+      config.reuse_check = normalizeRuntimeConfigValue("reuse_check", parsed.reuse_check, "string") as "strict" | "relaxed" | "off" | undefined;
+      config.reuse_skip_model = normalizeRuntimeConfigValue("reuse_skip_model", parsed.reuse_skip_model, "boolean") as boolean | undefined;
+      config.reuse_skip_agent = normalizeRuntimeConfigValue("reuse_skip_agent", parsed.reuse_skip_agent, "boolean") as boolean | undefined;
+      config.reuse_skip_rotation = normalizeRuntimeConfigValue("reuse_skip_rotation", parsed.reuse_skip_rotation, "boolean") as boolean | undefined;
+      config.reuse_skip_min_iterations = normalizeRuntimeConfigValue("reuse_skip_min_iterations", parsed.reuse_skip_min_iterations, "boolean") as boolean | undefined;
+      config.reuse_skip_max_iterations = normalizeRuntimeConfigValue("reuse_skip_max_iterations", parsed.reuse_skip_max_iterations, "boolean") as boolean | undefined;
       config.json_display = normalizeRuntimeConfigValue("json_display", parsed.json_display, "string") as "beautify" | "raw" | "text" | undefined;
       config.output_buffer_bytes = normalizeRuntimeConfigValue("output_buffer_bytes", parsed.output_buffer_bytes, "number") as number | undefined;
 
@@ -219,6 +225,11 @@ export function loadRuntimeTomlConfig(configPath: string, explicit: boolean): Ra
          console.error("Error: output_buffer_bytes must be non-negative.");
          process.exit(1);
       }
+
+      // Goal mode (opt-in)
+      config.goal = normalizeRuntimeConfigValue("goal", parsed.goal, "string") as string | undefined;
+      config.goal_dir = normalizeRuntimeConfigValue("goal_dir", parsed.goal_dir, "string") as string | undefined;
+      config.goal_promise = normalizeRuntimeConfigValue("goal_promise", parsed.goal_promise, "string") as string | undefined;
 
       if (config.prompt_file) {
          config.prompt_file = resolveConfigRelativePath(configPath, config.prompt_file);

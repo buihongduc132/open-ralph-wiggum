@@ -233,15 +233,27 @@ export async function captureFileSnapshot(): Promise<FileSnapshot> {
    const files = new Map<string, string>();
    let degraded = false;
    const cwd = process.cwd();
+   // Bun.spawn (array-form) instead of Bun.$ — Bun.$ shell promises can
+   // deadlock when the host process's stdout relay is detached (e.g. the
+   // in-process test harness replaces process.stdout.write); the spawned
+   // git child then never settles (oven-sh/bun#26580, PR#40035 class).
+   const gitText = async (args: string[]): Promise<string> => {
+      try {
+         const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+         const out = await new Response(proc.stdout).text();
+         await proc.exited;
+         return out;
+      } catch {
+         return "";
+      }
+   };
    try {
-      const insideWorkTree = await $`git rev-parse --is-inside-work-tree`.cwd(cwd).quiet().text().catch(() => "");
+      const insideWorkTree = await gitText(["rev-parse", "--is-inside-work-tree"]);
       if (insideWorkTree.trim() !== "true") {
          return { files };
       }
-
-      const status = await $`git -c status.showUntrackedFiles=no status --porcelain`.cwd(cwd).text();
-      const trackedFiles = await $`git ls-files`.cwd(cwd).text();
-
+      const status = await gitText(["-c", "status.showUntrackedFiles=no", "status", "--porcelain"]);
+      const trackedFiles = await gitText(["ls-files"]);
       const allFiles = new Set<string>();
       for (const line of status.split("\n")) {
          if (line.trim()) {

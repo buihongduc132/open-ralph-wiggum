@@ -75,3 +75,27 @@ Source: delegated audits (perf delivered; func delivered; badfaith pending) + wo
 - P5 snapshot 4-spawn ×2/iter (batch path already landed; deeper = cache diff vs HEAD — separate change).
 - P8 template/TOML re-parse per iter; P9 abort listeners; P10 multi-scan CPU (bounded, minor).
 - audit2 findings #7→ covered by P1 cap; #8 pipeline-context unbounded hook values → cap size at merge (lifecycle-hooks.ts:239-243) — include in GREEN if cheap, else defer with note.
+
+## 2026-09-02 verifier2-final REJECT → weighted-coverage fix plan (binding)
+- R1 [CRITICAL]: reported 94.78% = unweighted per-file mean; WEIGHTED line coverage = 50.39%. "Coverage 90%" must mean weighted.
+- R2 [HIGH]: ralph.ts (10.65%, THE shipped entry per package.json build) mischaracterized as "legacy glue".
+- FIX LANES (delegated, sequential same-file): A) arg-parse/TOML/state-paths → consume src twins; B) captureFileSnapshot + appendIterationHistory remaining inline twins → src/loop-helpers consumption; C) display/checkCompletion inline → extract to src + tests; D) loop/main glue integration tests (dummy-agent harness).
+- GATE per lane: full suite 1989 baseline, RED 32/0, typecheck 0, build OK. After lanes: weighted lcov ≥90% + fresh verifier pair (blind).
+
+## 2026-09-03 — pi -p stall RCA (resolved)
+- Symptom: every fresh `pi -p` lane agent froze ~10s CPU, 30min, zero output (D4 x3 attempts).
+- Chain: pi boot → mcp.json `http://localhost:8765/mcp` (mcp-hub) → hub `tools/list` infinite hang.
+- Hub wedged internally (all 11 backends healthy by direct curl; mem0 already enabled:false in manifest).
+- Fix: `systemctl --user restart mcp-hub.service` → tools/list 200/5.5s. Lanes resume.
+- Workaround lane launches: `PI_CODING_AGENT_DIR=/tmp/pi-lane-agent` (config without mcp.json).
+- Coverage state: weighted 79.74% (5342/6699), ralph.ts 59.1% (1774/3001) after D3b; gap=687 lines; D4 targets 915-1361 / 1742-1931 / 3196-3411 / 2753-2818.
+
+## 2026-09-03 — audit-bf5 findings + fixes (all callouts)
+- [F1 HIGH] bin/ stale vs restructure → bun build + sync commit queued after D5 lanes settle.
+- [F2 HIGH] 7 agent-config twins remain (loadAgentConfig/createAgentConfig/getDefaultConfig/getDefaultTomlConfig/getAgentBinaryEnvName/resolveAgentBinary/resolveCommand) → next debt lane.
+- [F3 MED] 13 always-green no-op tests (bugs-error-handling x11, deterministic-injection:2551, review-gate:534; from 8ef7399 June, pre-existing) → converting/deleting now.
+- [F4 MED] 84.27% < 90% gate — mid-flight, D5 lanes running.
+- [F5 MED] loop-helpers formatting mangled + citation doubted → reformatted; citations VERIFIED real (bun#26580 hang + PR#40035 EPIPE-relay both read via websearch earlier this session).
+- [F6 LOW] expected-files drift → this entry records actual names (cov-blocks-d3/cov-loop-inprocess/cov-loop-integration/cov-d4-*/cov-d5*).
+- [F7 LOW] coverage/ + tmp-test-modulo/ unignored → .gitignore updated.
+- [F8 LOW] tracked root scratch (_response.md/progress.md/ralph-output.log/screenshot.webp) → hygiene commit with F1.

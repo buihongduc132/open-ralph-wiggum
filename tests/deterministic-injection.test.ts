@@ -2543,12 +2543,10 @@ describe("loadRulesToml — stateDir with backslash (Windows-like path)", () => 
 
     // Simulate backslash path
     const backslashPath = testDir.replace(/\//g, "\\");
-    // loadRulesToml should handle it
+    // loadRulesToml handles a backslash path without throwing (Linux: backslash
+    // is part of the dirname → returns null; Windows: resolves normally)
     const result = loadRulesToml(backslashPath);
-    // May or may not find depending on OS, but should not throw
-    // On Linux, backslash is part of the dirname, so it won't find
-    // Just verify no crash
-    expect(true).toBe(true);
+    expect(result === null || typeof result === "object").toBe(true);
 
     rmSync(testDir, { recursive: true, force: true });
   });

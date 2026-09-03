@@ -162,6 +162,17 @@ export interface ParsedMainArgs {
    passthroughAgentFlags: string[];
    agentBinary: string;
    promptParts: string[];
+   // Hooks (ralph flags — single-sourced here, no dual logic in ralph.ts)
+   disableHooks: boolean;
+   verboseHooks: boolean;
+   hookTimeoutMsFlag: string | undefined;
+   // Reuse-state policy (TOML/env-driven; no CLI flags)
+   reuseCheck: "strict" | "relaxed" | "off";
+   reuseSkipModel: boolean;
+   reuseSkipAgent: boolean;
+   reuseSkipRotation: boolean;
+   reuseSkipMinIterations: boolean;
+   reuseSkipMaxIterations: boolean;
    maxIterationsProvided: boolean;
    minIterationsProvided: boolean;
    stallingTimeoutProvided: boolean;
@@ -209,6 +220,15 @@ export function getDefaultMainArgs(): ParsedMainArgs {
       passthroughAgentFlags: [],
       agentBinary: "",
       promptParts: [],
+      disableHooks: false,
+      verboseHooks: false,
+      hookTimeoutMsFlag: undefined,
+      reuseCheck: "strict",
+      reuseSkipModel: false,
+      reuseSkipAgent: false,
+      reuseSkipRotation: false,
+      reuseSkipMinIterations: false,
+      reuseSkipMaxIterations: false,
       maxIterationsProvided: false,
       minIterationsProvided: false,
       stallingTimeoutProvided: false,
@@ -272,6 +292,19 @@ export function applyTomlConfig(result: ParsedMainArgs, config: RalphRuntimeConf
       result.stallRetryMinutes = config.stall_retry_minutes;
       result.stallRetryMinutesProvided = true;
    }
+   // Reuse-state policy from TOML
+   if (config.reuse_check) {
+      const validModes = ["strict", "relaxed", "off"];
+      if (!validModes.includes(config.reuse_check)) {
+         throw new Error(`Invalid reuse_check '${config.reuse_check}'. Must be one of: ${validModes.join(", ")}`);
+      }
+      result.reuseCheck = config.reuse_check;
+   }
+   if (config.reuse_skip_model !== undefined) result.reuseSkipModel = config.reuse_skip_model;
+   if (config.reuse_skip_agent !== undefined) result.reuseSkipAgent = config.reuse_skip_agent;
+   if (config.reuse_skip_rotation !== undefined) result.reuseSkipRotation = config.reuse_skip_rotation;
+   if (config.reuse_skip_min_iterations !== undefined) result.reuseSkipMinIterations = config.reuse_skip_min_iterations;
+   if (config.reuse_skip_max_iterations !== undefined) result.reuseSkipMaxIterations = config.reuse_skip_max_iterations;
    // Goal mode (opt-in)
    if (config.goal) result.goalPath = config.goal;
    if (config.goal_dir) result.goalDir = config.goal_dir;
@@ -281,8 +314,15 @@ export function applyTomlConfig(result: ParsedMainArgs, config: RalphRuntimeConf
    }
 }
 
-export function parseMainArgs(args: string[], validAgents: string[]): ParsedMainArgs {
-   const result = getDefaultMainArgs();
+/**
+ * Parse ralph CLI args onto a ParsedMainArgs result.
+ *
+ * `base` (optional) lets the caller apply TOML config to a defaults-filled
+ * result FIRST so CLI flags override TOML (precedence: defaults → TOML → CLI
+ * → -- passthrough), matching ralph.ts's historical application order.
+ */
+export function parseMainArgs(args: string[], validAgents: string[], base?: ParsedMainArgs): ParsedMainArgs {
+   const result = base ?? getDefaultMainArgs();
    const doubleDashIndex = args.indexOf("--");
 
    if (doubleDashIndex !== -1) {
@@ -413,6 +453,16 @@ export function parseMainArgs(args: string[], validAgents: string[]): ParsedMain
          result.autoCommit = false;
       } else if (arg === "--no-plugins") {
          result.disablePlugins = true;
+      } else if (arg === "--no-hooks") {
+         result.disableHooks = true;
+      } else if (arg === "--verbose-hooks") {
+         result.verboseHooks = true;
+      } else if (arg === "--hook-timeout") {
+         const val = args[++i];
+         if (val === undefined) {
+            throw new Error("--hook-timeout requires a number");
+         }
+         result.hookTimeoutMsFlag = val;
       } else if (arg === "--allow-all") {
          result.allowAllPermissions = true;
       } else if (arg === "--no-allow-all") {
@@ -490,14 +540,14 @@ export function applyPassthroughOverrides(result: ParsedMainArgs, setStatePaths?
       } else if (flags[i] === "--max-iterations" && flags[i + 1]) {
          const v = flags[i + 1];
          if (!/^\d+$/.test(v)) {
-            throw new Error(`--max-iterations requires a number (got '${v}')`);
+            throw new Error(`--max-iterations requires a non-negative integer, got '${v}'`);
          }
          result.maxIterations = parseInt(v);
          i++;
       } else if (flags[i] === "--min-iterations" && flags[i + 1]) {
          const v = flags[i + 1];
          if (!/^\d+$/.test(v)) {
-            throw new Error(`--min-iterations requires a number (got '${v}')`);
+            throw new Error(`--min-iterations requires a non-negative integer, got '${v}'`);
          }
          result.minIterations = parseInt(v);
          i++;
@@ -511,12 +561,19 @@ export function applyPassthroughOverrides(result: ParsedMainArgs, setStatePaths?
          result.stallingTimeoutMs = parseDuration(flags[i + 1]);
          i++;
       } else if (flags[i] === "--blacklist-duration" && flags[i + 1]) {
-         result.blacklistDurationMs = parseDuration(flags[i + 1]);
+         const v = flags[i + 1];
+         const ms = parseDuration(v);
+         // FA10: blacklist duration must be a positive finite duration on the
+         // passthrough path too (a blacklist that never lifts is meaningless).
+         if (!Number.isFinite(ms) || ms <= 0) {
+            throw new Error(`--blacklist-duration must be a positive duration, got '${v}'`);
+         }
+         result.blacklistDurationMs = ms;
          i++;
       } else if (flags[i] === "--stalling-action" && flags[i + 1]) {
          const v = flags[i + 1];
          if (v !== "stop" && v !== "rotate") {
-            throw new Error(`--stalling-action must be 'stop' or 'rotate' (got '${v}')`);
+            throw new Error(`--stalling-action requires 'stop' or 'rotate', got '${v}'`);
          }
          result.stallingAction = v as "stop" | "rotate";
          i++;

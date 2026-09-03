@@ -63,6 +63,12 @@ export interface RalphRuntimeConfig {
    extra_agent_flags?: string[];
    stall_retries?: boolean;
    stall_retry_minutes?: number;
+   reuse_check?: "strict" | "relaxed" | "off";
+   reuse_skip_model?: boolean;
+   reuse_skip_agent?: boolean;
+   reuse_skip_rotation?: boolean;
+   reuse_skip_min_iterations?: boolean;
+   reuse_skip_max_iterations?: boolean;
    json_display?: "beautify" | "raw" | "text";
    output_buffer_bytes?: number;
    // Goal mode (opt-in)

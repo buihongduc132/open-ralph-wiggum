@@ -8,7 +8,7 @@
 
 import { $ } from "bun";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, lstatSync, renameSync } from "fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "path";
 import { checkTerminalPromise, containsPromiseTag, escapeRegex, stripAnsi, tasksMarkdownAllComplete } from "./completion";
 import {
    decideLoopOwnership,
@@ -27,9 +27,11 @@ import { ByteLineSplitter, isPiNoiseLineBytes } from "./src/byte-line-filter";
 import { stripFrontmatter } from "./template-utils";
 import {
    type RalphState as RalphStateBase,
-   capHistoryIterations,
-   capRepeatedErrors,
+   appendIterationHistory,
    appendStallingEvent,
+   capHistoryIterations,
+   capRepeatedErrors, // kept imported: single-source guarantee asserted by HOTFIX4-CAPS test
+   captureFileSnapshot,
    stripInjectedPrompt,
 } from "./src/loop-helpers";
 import {
@@ -41,9 +43,10 @@ import {
    injectRejectionFeedback,
    validateReviewConfig,
 } from "./src/review-gate";
-import { parseReviewConfig, resolveHookTimeoutMs, enforceTomlStrictness, normalizePreStartTimeout } from "./src/runtime-config";
-import { isInitConfigPathShaped } from "./src/parse-args";
-import type { ReviewConfig, ReviewGateState, ReviewVote } from "./src/types";
+import { parseReviewConfig, resolveHookTimeoutMs, loadRuntimeTomlConfig, resolveConfigRelativePath } from "./src/runtime-config";
+import { isInitConfigPathShaped, parseMainArgs, applyTomlConfig, applyPassthroughOverrides, getDefaultMainArgs, parseRotationInput, type ParsedMainArgs } from "./src/parse-args";
+import { setStatePaths, getStateDir, getStatePath, getContextPath, getHistoryPath, getTasksPath, getQuestionsPath, currentTasksFileLabel } from "./src/state-paths";
+import type { RalphRuntimeConfig, ReviewConfig, ReviewGateState, ReviewVote } from "./src/types";
 import { parseGoalMd } from "./src/goal-parser";
 import { executeHooks, listAllHooks, formatHooksTable, loadPipelineContext, savePipelineContext, showPipelineContext, clearPipelineContext, filterPipelineContextFromOutput, type HookEnv, type LifecycleEvent, type PipelineContext, LIFECYCLE_EVENTS } from "./src/lifecycle-hooks";
 import { createInitialState as createGoalState, loadGoalState, saveGoalState, syncGoalStateAfterIteration } from "./src/goal-state";
@@ -55,62 +58,35 @@ export const VERSION = "1.3.0";
 // Detect Windows platform for command resolution
 const IS_WINDOWS = process.platform === "win32";
 
-// Context file path for mid-loop injection
-let stateDir = join(process.cwd(), ".ralph");
-let statePath = join(stateDir, "ralph-loop.state.json");
-let contextPath = join(stateDir, "ralph-context.md");
-let historyPath = join(stateDir, "ralph-history.json");
-let tasksPath = join(stateDir, "ralph-tasks.md");
-let questionsPath = join(stateDir, "ralph-questions.json");
-
-export function setStatePaths(nextStateDir: string): void {
-   stateDir = resolve(nextStateDir);
-   statePath = join(stateDir, "ralph-loop.state.json");
-   contextPath = join(stateDir, "ralph-context.md");
-   historyPath = join(stateDir, "ralph-history.json");
-   tasksPath = join(stateDir, "ralph-tasks.md");
-   questionsPath = join(stateDir, "ralph-questions.json");
-}
+// State paths — single source: ./src/state-paths (module vars live there;
+// ralph.ts reads them via getters, no inline twin to hand-sync).
+export { setStatePaths, formatStatePath, currentStateDirLabel, currentTasksFileLabel } from "./src/state-paths";
 
 /**
- * Validate that stateDir is a directory (not a file or symlink-to-file).
+ * Validate that the state dir is a directory (not a file or symlink-to-file).
  * Must be called after setStatePaths(). Exits with clear error if invalid.
  */
 function ensureStateDir(): void {
-   if (existsSync(stateDir)) {
+   const stateDir = getStateDir();
+   if (existsSync(getStateDir())) {
       try {
-         const stats = statSync(stateDir);
+         const stats = statSync(getStateDir());
          if (!stats.isDirectory()) {
             // Use lstatSync only for the error message to detect symlink-to-file
-            const linkStats = lstatSync(stateDir);
+            const linkStats = lstatSync(getStateDir());
             console.error(`\n❌ Ralph Initialization Failed`);
-            console.error(`   ${stateDir} exists but is not a directory!`);
+            console.error(`   ${getStateDir()} exists but is not a directory!`);
             console.error(`   Type: ${linkStats?.isSymbolicLink() ? "symlink" : "file"}`);
-            console.error(`\nFix: rm ${stateDir}  # remove the file/symlink`);
-            console.error(`     mkdir ${stateDir}  # then recreate as a directory`);
+            console.error(`\nFix: rm ${getStateDir()}  # remove the file/symlink`);
+            console.error(`     mkdir ${getStateDir()}  # then recreate as a directory`);
             process.exit(1);
          }
       } catch (err) {
          console.error(`\n❌ Ralph Initialization Failed`);
-         console.error(`   Cannot access ${stateDir}: ${err}`);
+         console.error(`   Cannot access ${getStateDir()}: ${err}`);
          process.exit(1);
       }
    }
-}
-
-export function formatStatePath(path: string): string {
-   const rel = relative(process.cwd(), path);
-   if (!rel || rel === "") return ".";
-   if (!rel.startsWith("..")) return rel;
-   return path;
-}
-
-export function currentStateDirLabel(): string {
-   return formatStatePath(stateDir);
-}
-
-export function currentTasksFileLabel(): string {
-   return formatStatePath(tasksPath);
 }
 
 // Agent configuration from file or built-in
@@ -155,48 +131,8 @@ export interface RalphConfig {
 export const DEFAULT_CONFIG_PATH = join(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
 let stateDirInput = join(process.cwd(), ".ralph");
 
-export interface RalphRuntimeConfig {
-   prompt?: string;
-   agent?: AgentType;
-   agent_binary?: string;
-   min_iterations?: number;
-   max_iterations?: number;
-   completion_promise?: string;
-   abort_promise?: string;
-   tasks?: boolean;
-   task_promise?: string;
-   model?: string;
-   rotation?: string[];
-   stalling_timeout?: string;
-   blacklist_duration?: string;
-   stalling_action?: "stop" | "rotate";
-   heartbeat_interval?: string;
-   pre_start_timeout?: number;
-   no_commit?: boolean;
-   no_plugins?: boolean;
-   allow_all?: boolean;
-   prompt_file?: string;
-   prompt_template?: string;
-   stream?: boolean;
-   verbose_tools?: boolean;
-   questions?: boolean;
-   agent_config?: string;
-   extra_agent_flags?: string[];
-   stall_retries?: boolean;
-   stall_retry_minutes?: number;
-   reuse_check?: "strict" | "relaxed" | "off";
-   reuse_skip_model?: boolean;
-   reuse_skip_agent?: boolean;
-   reuse_skip_rotation?: boolean;
-   reuse_skip_min_iterations?: boolean;
-   reuse_skip_max_iterations?: boolean;
-   json_display?: "beautify" | "raw" | "text";
-   output_buffer_bytes?: number;
-   // Goal mode (opt-in)
-   goal?: string;
-   goal_dir?: string;
-   goal_promise?: string;
-}
+// RalphRuntimeConfig — single source: ./src/types (no inline twin).
+export type { RalphRuntimeConfig };
 
 // ─────────────────────────────────────────────────────────────────────
 // Deterministic Modulo Injection — TOML schema types
@@ -239,11 +175,11 @@ export { PARSE_PATTERNS, defaultParseToolOutput };
 
 
 // Single source of truth: ./src/ralph-agent-config (shared by builtin +
-// custom-agent paths). ralph.ts keeps a thin wrapper binding module stateDir —
+// custom-agent paths). ralph.ts keeps a thin wrapper binding module state dir —
 // the duplicated bodies here had already drifted (GitNexus flagged the pair).
 export { loadPluginsFromConfig } from "./src/ralph-agent-config";
 export function ensureRalphConfig(options: { filterPlugins?: boolean; allowAllPermissions?: boolean }): string {
-   return ensureRalphConfigImpl(options, stateDir);
+   return ensureRalphConfigImpl(options, getStateDir());
 }
 
 export const ENV_TEMPLATES: Record<string, (options: AgentEnvOptions) => Record<string, string>> = {
@@ -595,135 +531,9 @@ reminder = "These are recent state entries for context."
 `;
 }
 
-export function normalizeRuntimeConfigValue(path: string, value: unknown, expected: "string" | "number" | "boolean" | "string[]"): string | number | boolean | string[] | undefined {
-   if (value === undefined) return undefined;
-
-   if (expected === "string") {
-      if (typeof value !== "string") {
-         console.error(`Error: Ralph TOML config key '${path}' must be a string.`);
-         process.exit(1);
-      }
-      return value;
-   }
-
-   if (expected === "number") {
-      if (typeof value !== "number" || Number.isNaN(value)) {
-         console.error(`Error: Ralph TOML config key '${path}' must be a number.`);
-         process.exit(1);
-      }
-      return value;
-   }
-
-   if (expected === "boolean") {
-      if (typeof value !== "boolean") {
-         console.error(`Error: Ralph TOML config key '${path}' must be a boolean.`);
-         process.exit(1);
-      }
-      return value;
-   }
-
-   if (!Array.isArray(value) || value.some(item => typeof item !== "string")) {
-      console.error(`Error: Ralph TOML config key '${path}' must be an array of strings.`);
-      process.exit(1);
-   }
-
-   return value as string[];
-}
-
-export function resolveConfigRelativePath(baseFilePath: string, targetPath: string): string {
-   if (!targetPath) return targetPath;
-   return isAbsolute(targetPath) ? targetPath : resolve(dirname(baseFilePath), targetPath);
-}
-
-export function loadRuntimeTomlConfig(configPath: string, explicit: boolean): RalphRuntimeConfig | null {
-   if (!existsSync(configPath)) {
-      if (explicit) {
-         console.error(`Error: Ralph TOML config not found: ${configPath}`);
-         process.exit(1);
-      }
-      return null;
-   }
-
-   try {
-      const raw = readFileSync(configPath, "utf-8");
-      const parsed = Bun.TOML.parse(raw) as Record<string, unknown>;
-
-      // FA5 strictness (single policy, warn-wins): unknown top-level keys warn
-      // (back-compat); a config wholly wrapped in an unrecognized section (zero
-      // recognized top-level keys) is almost certainly a mistake → exit(1).
-      enforceTomlStrictness(parsed);
-
-      const config: RalphRuntimeConfig = {};
-
-      config.prompt = normalizeRuntimeConfigValue("prompt", parsed.prompt, "string") as string | undefined;
-      config.agent = normalizeRuntimeConfigValue("agent", parsed.agent, "string") as AgentType | undefined;
-      config.agent_binary = normalizeRuntimeConfigValue("agent_binary", parsed.agent_binary, "string") as string | undefined;
-      config.min_iterations = normalizeRuntimeConfigValue("min_iterations", parsed.min_iterations, "number") as number | undefined;
-      config.max_iterations = normalizeRuntimeConfigValue("max_iterations", parsed.max_iterations, "number") as number | undefined;
-      config.completion_promise = normalizeRuntimeConfigValue("completion_promise", parsed.completion_promise, "string") as string | undefined;
-      config.abort_promise = normalizeRuntimeConfigValue("abort_promise", parsed.abort_promise, "string") as string | undefined;
-      config.tasks = normalizeRuntimeConfigValue("tasks", parsed.tasks, "boolean") as boolean | undefined;
-      config.task_promise = normalizeRuntimeConfigValue("task_promise", parsed.task_promise, "string") as string | undefined;
-      config.model = normalizeRuntimeConfigValue("model", parsed.model, "string") as string | undefined;
-      config.rotation = normalizeRuntimeConfigValue("rotation", parsed.rotation, "string[]") as string[] | undefined;
-      config.stalling_timeout = normalizeRuntimeConfigValue("stalling_timeout", parsed.stalling_timeout, "string") as string | undefined;
-      config.blacklist_duration = normalizeRuntimeConfigValue("blacklist_duration", parsed.blacklist_duration, "string") as string | undefined;
-      config.stalling_action = normalizeRuntimeConfigValue("stalling_action", parsed.stalling_action, "string") as "stop" | "rotate" | undefined;
-      config.heartbeat_interval = normalizeRuntimeConfigValue("heartbeat_interval", parsed.heartbeat_interval, "string") as string | undefined;
-      config.pre_start_timeout = normalizePreStartTimeout(parsed.pre_start_timeout);
-      config.no_commit = normalizeRuntimeConfigValue("no_commit", parsed.no_commit, "boolean") as boolean | undefined;
-      config.no_plugins = normalizeRuntimeConfigValue("no_plugins", parsed.no_plugins, "boolean") as boolean | undefined;
-      config.allow_all = normalizeRuntimeConfigValue("allow_all", parsed.allow_all, "boolean") as boolean | undefined;
-      config.prompt_file = normalizeRuntimeConfigValue("prompt_file", parsed.prompt_file, "string") as string | undefined;
-      config.prompt_template = normalizeRuntimeConfigValue("prompt_template", parsed.prompt_template, "string") as string | undefined;
-      config.stream = normalizeRuntimeConfigValue("stream", parsed.stream, "boolean") as boolean | undefined;
-      config.verbose_tools = normalizeRuntimeConfigValue("verbose_tools", parsed.verbose_tools, "boolean") as boolean | undefined;
-      config.questions = normalizeRuntimeConfigValue("questions", parsed.questions, "boolean") as boolean | undefined;
-      config.agent_config = normalizeRuntimeConfigValue("agent_config", parsed.agent_config, "string") as string | undefined;
-      config.extra_agent_flags = normalizeRuntimeConfigValue("extra_agent_flags", parsed.extra_agent_flags, "string[]") as string[] | undefined;
-      config.stall_retries = normalizeRuntimeConfigValue("stall_retries", parsed.stall_retries, "boolean") as boolean | undefined;
-      config.stall_retry_minutes = normalizeRuntimeConfigValue("stall_retry_minutes", parsed.stall_retry_minutes, "number") as number | undefined;
-      config.reuse_check = normalizeRuntimeConfigValue("reuse_check", parsed.reuse_check, "string") as "strict" | "relaxed" | "off" | undefined;
-      config.reuse_skip_model = normalizeRuntimeConfigValue("reuse_skip_model", parsed.reuse_skip_model, "boolean") as boolean | undefined;
-      config.reuse_skip_agent = normalizeRuntimeConfigValue("reuse_skip_agent", parsed.reuse_skip_agent, "boolean") as boolean | undefined;
-      config.reuse_skip_rotation = normalizeRuntimeConfigValue("reuse_skip_rotation", parsed.reuse_skip_rotation, "boolean") as boolean | undefined;
-      config.reuse_skip_min_iterations = normalizeRuntimeConfigValue("reuse_skip_min_iterations", parsed.reuse_skip_min_iterations, "boolean") as boolean | undefined;
-      config.reuse_skip_max_iterations = normalizeRuntimeConfigValue("reuse_skip_max_iterations", parsed.reuse_skip_max_iterations, "boolean") as boolean | undefined;
-      config.json_display = normalizeRuntimeConfigValue("json_display", parsed.json_display, "string") as "beautify" | "raw" | "text" | undefined;
-      config.output_buffer_bytes = normalizeRuntimeConfigValue("output_buffer_bytes", parsed.output_buffer_bytes, "number") as number | undefined;
-
-      if (config.json_display !== undefined && !["beautify", "raw", "text"].includes(config.json_display)) {
-         console.error(`Error: Invalid json_display value '${config.json_display}'. Must be 'beautify', 'raw', or 'text'.`);
-         process.exit(1);
-      }
-
-      if (config.output_buffer_bytes !== undefined && config.output_buffer_bytes < 0) {
-         console.error("Error: output_buffer_bytes must be non-negative.");
-         process.exit(1);
-      }
-
-      // Goal mode (opt-in)
-      config.goal = normalizeRuntimeConfigValue("goal", parsed.goal, "string") as string | undefined;
-      config.goal_dir = normalizeRuntimeConfigValue("goal_dir", parsed.goal_dir, "string") as string | undefined;
-      config.goal_promise = normalizeRuntimeConfigValue("goal_promise", parsed.goal_promise, "string") as string | undefined;
-
-      if (config.prompt_file) {
-         config.prompt_file = resolveConfigRelativePath(configPath, config.prompt_file);
-      }
-      if (config.prompt_template) {
-         config.prompt_template = resolveConfigRelativePath(configPath, config.prompt_template);
-      }
-      if (config.agent_config) {
-         config.agent_config = resolveConfigRelativePath(configPath, config.agent_config);
-      }
-
-      return config;
-   } catch (error) {
-      console.error(`Error: Failed to parse Ralph TOML config at ${configPath}`);
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
-   }
-}
+// Runtime TOML loading — single source: ./src/runtime-config (FA5 strictness,
+// FA2 pre-start timeout, reuse_* + goal_* normalization all live there).
+export { loadRuntimeTomlConfig, normalizeRuntimeConfigValue, resolveConfigRelativePath } from "./src/runtime-config";
 
 // ─────────────────────────────────────────────────────────────────────
 // Deterministic Modulo Injection — rules TOML loader
@@ -731,7 +541,7 @@ export function loadRuntimeTomlConfig(configPath: string, explicit: boolean): Ra
 
 /**
  * Load the rules TOML for the current state directory.
- * Searches for `.ralph-<name>.toml` in stateDir, then cwd.
+ * Searches for `.ralph-<name>.toml` in the state dir, then cwd.
  * Returns null if not found (opt-in — no file = no injection).
  * No caching — reads fresh every iteration.
  */
@@ -776,7 +586,7 @@ export function loadRulesToml(currentStateDir: string): RalphRulesToml | null {
 
 /**
  * Resolve the actual TOML file path (for scaffolding).
- * Returns the path in stateDir if stateDir is set, else cwd.
+ * Returns the path in the state dir if one is set, else cwd.
  */
 export function resolveRulesTomlPath(currentStateDir: string): string {
    const stateDirName = extractStateDirBasename(currentStateDir);
@@ -1085,8 +895,9 @@ import { BUILT_IN_AGENTS } from "./src/ralph-agent-config";
 export { BUILT_IN_AGENTS };
 
 
-// Main CLI entry point - only runs when executed directly, not when imported
-if (import.meta.main) {
+// Main CLI entry body — extracted so in-process tests can drive the real
+// loop under coverage (spawn-based runs are invisible to bun's instrumenter).
+export async function ralphMain(): Promise<void> {
    // Parse arguments early for config handling
    const args = process.argv.slice(2);
    let explicitTomlConfigPath = false;
@@ -1137,17 +948,17 @@ if (import.meta.main) {
 
    setStatePaths(stateDirInput);
 
-   // Early validation: catch non-directory stateDir before any file operations
+   // Early validation: catch non-directory state dir before any file operations
    ensureStateDir();
 
    if (!tomlConfigPath) {
-      tomlConfigPath = join(stateDir, "config.toml");
+      tomlConfigPath = join(getStateDir(), "config.toml");
    }
 
    // Handle --init-config: write default agent config AND runtime TOML config
    if (initConfigPath !== undefined) {
       const agentConfigPath = initConfigPath || DEFAULT_CONFIG_PATH;
-      const tomlConfigPathOutput = join(stateDir, "config.toml");
+      const tomlConfigPathOutput = join(getStateDir(), "config.toml");
 
       // Create agent config (JSON)
       const agentConfigDir = join(agentConfigPath, "..");
@@ -1174,18 +985,18 @@ if (import.meta.main) {
    // Deterministic Modulo Injection — `--init-rules` subcommand
    // Scaffolds .ralph-<name>.toml with commented sections and PLACEHOLDER prompts.
    // No-op if file already exists.
-   // Always writes to stateDir (not cwd).
+   // Always writes to the state dir (not cwd).
    // ────────────────────────────────────────────────────────────────────
    if (args.includes("--init-rules")) {
-      const stateDirName = extractStateDirBasename(stateDir);
+      const stateDirName = extractStateDirBasename(getStateDir());
       const tomlName = `.ralph-${stateDirName}.toml`;
-      const tomlPath = join(stateDir, tomlName);
+      const tomlPath = join(getStateDir(), tomlName);
       if (existsSync(tomlPath)) {
          console.log(`Rules TOML already exists: ${tomlPath}`);
          console.log("Remove it first if you want to re-scaffold.");
          process.exit(0);
       }
-      if (!existsSync(stateDir)) mkdirSync(stateDir, { recursive: true });
+      if (!existsSync(getStateDir())) mkdirSync(getStateDir(), { recursive: true });
       writeFileSync(tomlPath, getDefaultRulesToml());
       console.log(`Created rules TOML at: ${tomlPath}`);
       console.log("Edit this file to configure deterministic rule injections.");
@@ -1336,14 +1147,14 @@ Learn more: https://ghuntley.com/ralph/
       }
 
       // Load state file
-      if (!existsSync(statePath)) {
+      if (!existsSync(getStatePath())) {
          console.error("Error: No active Ralph state file found. Is Ralph running in this directory?");
          process.exit(1);
       }
 
       const reviewState = (() => {
          try {
-            return JSON.parse(readFileSync(statePath, "utf-8"));
+            return JSON.parse(readFileSync(getStatePath(), "utf-8"));
          } catch {
             return null;
          }
@@ -1407,9 +1218,9 @@ Learn more: https://ghuntley.com/ralph/
       }
 
       // Write state back using atomic write
-      const tmpPath = `${statePath}.tmp-${process.pid}-${Date.now()}`;
+      const tmpPath = `${getStatePath()}.tmp-${process.pid}-${Date.now()}`;
       writeFileSync(tmpPath, JSON.stringify(reviewState, null, 2));
-      renameSync(tmpPath, statePath);
+      renameSync(tmpPath, getStatePath());
 
       console.log(JSON.stringify({
          action,
@@ -1608,91 +1419,34 @@ Learn more: https://ghuntley.com/ralph/
 
    // Load history
    function loadHistory(): RalphHistory {
-      if (!existsSync(historyPath)) {
+      if (!existsSync(getHistoryPath())) {
          return EMPTY_HISTORY;
       }
       try {
-         return JSON.parse(readFileSync(historyPath, "utf-8"));
+         return JSON.parse(readFileSync(getHistoryPath(), "utf-8"));
       } catch {
          return EMPTY_HISTORY;
       }
    }
 
    function saveHistory(history: RalphHistory): void {
-      if (!existsSync(stateDir)) {
-         mkdirSync(stateDir, { recursive: true });
+      if (!existsSync(getStateDir())) {
+         mkdirSync(getStateDir(), { recursive: true });
       }
-      writeFileSync(historyPath, JSON.stringify(history, null, 2));
+      writeFileSync(getHistoryPath(), JSON.stringify(history, null, 2));
    }
 
    function clearHistory(): void {
-      if (existsSync(historyPath)) {
+      if (existsSync(getHistoryPath())) {
          try {
-            require("fs").unlinkSync(historyPath);
+            require("fs").unlinkSync(getHistoryPath());
          } catch { }
       }
    }
 
-   async function appendIterationHistory(params: {
-      history: RalphHistory;
-      iteration: number;
-      iterationStart: number;
-      currentAgent: AgentType;
-      currentModel: string;
-      toolCounts: Map<string, number>;
-      result: string;
-      stderr: string;
-      exitCode: number;
-      completionDetected: boolean;
-      snapshotBefore: Awaited<ReturnType<typeof captureFileSnapshot>>;
-   }): Promise<void> {
-      const iterationDuration = Date.now() - params.iterationStart;
-      const snapshotAfter = await captureFileSnapshot();
-      const filesModified = getModifiedFilesSinceSnapshot(params.snapshotBefore, snapshotAfter);
-      const errors = extractErrors(`${params.result}\n${params.stderr}`);
-
-      const iterationRecord: IterationHistory = {
-         iteration: params.iteration,
-         startedAt: new Date(params.iterationStart).toISOString(),
-         endedAt: new Date().toISOString(),
-         durationMs: iterationDuration,
-         agent: params.currentAgent,
-         model: params.currentModel,
-         toolsUsed: Object.fromEntries(params.toolCounts),
-         filesModified,
-         exitCode: params.exitCode,
-         completionDetected: params.completionDetected,
-         errors,
-      };
-
-      params.history.iterations.push(iterationRecord);
-      capHistoryIterations(params.history);
-      params.history.totalDurationMs += iterationDuration;
-
-      if (filesModified.length === 0) {
-         params.history.struggleIndicators.noProgressIterations++;
-      } else {
-         params.history.struggleIndicators.noProgressIterations = 0;
-      }
-
-      if (iterationDuration < 30000) {
-         params.history.struggleIndicators.shortIterations++;
-      } else {
-         params.history.struggleIndicators.shortIterations = 0;
-      }
-
-      if (errors.length === 0) {
-         params.history.struggleIndicators.repeatedErrors = {};
-      } else {
-         for (const error of errors) {
-            const key = error.substring(0, 100);
-            params.history.struggleIndicators.repeatedErrors[key] = (params.history.struggleIndicators.repeatedErrors[key] || 0) + 1;
-         }
-         capRepeatedErrors(params.history);
-      }
-
-      saveHistory(params.history);
-   }
+   // appendIterationHistory: consumed from src/loop-helpers.ts (single source).
+   // Snapshot twins (captureFileSnapshot / getModifiedFilesSinceSnapshot /
+   // extractErrors / FileSnapshot) likewise live in src/loop-helpers.ts.
 
    // Doctor command - diagnose and fix issues
    if (args.includes("--doctor")) {
@@ -1708,17 +1462,17 @@ Learn more: https://ghuntley.com/ralph/
 
       // Check 1: Validate state directory
       console.log("\n📁 Checking state directory...");
-      if (!existsSync(stateDir)) {
+      if (!existsSync(getStateDir())) {
          console.log("  ⚠️  State directory does not exist. Creating...");
-         mkdirSync(stateDir, { recursive: true });
-         console.log(`  ✅ Created: ${stateDir}/`);
+         mkdirSync(getStateDir(), { recursive: true });
+         console.log(`  ✅ Created: ${getStateDir()}/`);
          fixesApplied++;
       } else {
          try {
-            const stats = lstatSync(stateDir);
+            const stats = lstatSync(getStateDir());
             if (!stats.isDirectory()) {
-               console.log(`  ❌ ERROR: ${stateDir} exists but is not a directory!`);
-               console.log(`     Path: ${stateDir}`);
+               console.log(`  ❌ ERROR: ${getStateDir()} exists but is not a directory!`);
+               console.log(`     Path: ${getStateDir()}`);
                console.log(`     Type: ${stats.isSymbolicLink() ? "symlink" : "file"}`);
                issuesFound++;
             } else {
@@ -1749,7 +1503,7 @@ Learn more: https://ghuntley.com/ralph/
       }
 
       // Check runtime TOML config
-      const runtimeConfigPath = join(stateDir, "config.toml");
+      const runtimeConfigPath = join(getStateDir(), "config.toml");
       if (existsSync(runtimeConfigPath)) {
          try {
             const content = readFileSync(runtimeConfigPath, "utf-8");
@@ -1779,9 +1533,9 @@ Learn more: https://ghuntley.com/ralph/
       console.log("\n🔍 Checking for common issues...");
 
       // Check if there are stale state files
-      if (existsSync(statePath)) {
+      if (existsSync(getStatePath())) {
          try {
-            const state = JSON.parse(readFileSync(statePath, "utf-8"));
+            const state = JSON.parse(readFileSync(getStatePath(), "utf-8"));
             if (state.active) {
                console.log("  ⚠️  Active loop detected. Use 'ralph --status' for details.");
             } else {
@@ -1796,9 +1550,9 @@ Learn more: https://ghuntley.com/ralph/
       }
 
       // Check for corrupted history
-      if (existsSync(historyPath)) {
+      if (existsSync(getHistoryPath())) {
          try {
-            const history = JSON.parse(readFileSync(historyPath, "utf-8"));
+            const history = JSON.parse(readFileSync(getHistoryPath(), "utf-8"));
             console.log(`  ✅ History file valid (${history.iterations?.length || 0} iterations)`);
          } catch {
             console.log("  ⚠️  History file is corrupted");
@@ -1829,7 +1583,7 @@ Learn more: https://ghuntley.com/ralph/
    if (args.includes("--status")) {
       const state = loadState();
       const history = loadHistory();
-      const context = existsSync(contextPath) ? readFileSync(contextPath, "utf-8").trim() : null;
+      const context = existsSync(getContextPath()) ? readFileSync(getContextPath(), "utf-8").trim() : null;
       // Show tasks if explicitly requested OR if active loop has tasks mode enabled
       const showTasks = args.includes("--tasks") || args.includes("-t") || state?.tasksMode;
 
@@ -1879,9 +1633,9 @@ Learn more: https://ghuntley.com/ralph/
 
       // Show tasks if requested
       if (showTasks) {
-         if (existsSync(tasksPath)) {
+         if (existsSync(getTasksPath())) {
             try {
-               const tasksContent = readFileSync(tasksPath, "utf-8");
+               const tasksContent = readFileSync(getTasksPath(), "utf-8");
                const tasks = parseTasks(tasksContent);
                if (tasks.length > 0) {
                   console.log(`\n📋 CURRENT TASKS:`);
@@ -2002,10 +1756,10 @@ Learn more: https://ghuntley.com/ralph/
    if (args[0] === "pipeline") {
       const subCmd = args[1];
       if (subCmd === "show") {
-         console.log(showPipelineContext(stateDir));
+         console.log(showPipelineContext(getStateDir()));
          process.exit(0);
       } else if (subCmd === "clear") {
-         clearPipelineContext(stateDir);
+         clearPipelineContext(getStateDir());
          console.log("Pipeline context cleared");
          process.exit(0);
       } else {
@@ -2028,23 +1782,23 @@ Learn more: https://ghuntley.com/ralph/
          process.exit(1);
       }
 
-      if (!existsSync(stateDir)) {
-         mkdirSync(stateDir, { recursive: true });
+      if (!existsSync(getStateDir())) {
+         mkdirSync(getStateDir(), { recursive: true });
       }
 
       // Append to existing context or create new
       const timestamp = new Date().toISOString();
       const newEntry = `\n## Context added at ${timestamp}\n${contextText}\n`;
 
-      if (existsSync(contextPath)) {
-         const existing = readFileSync(contextPath, "utf-8");
-         writeFileSync(contextPath, existing + newEntry);
+      if (existsSync(getContextPath())) {
+         const existing = readFileSync(getContextPath(), "utf-8");
+         writeFileSync(getContextPath(), existing + newEntry);
       } else {
-         writeFileSync(contextPath, `# Ralph Loop Context\n${newEntry}`);
+         writeFileSync(getContextPath(), `# Ralph Loop Context\n${newEntry}`);
       }
 
       console.log(`✅ Context added for next iteration`);
-      console.log(`   File: ${contextPath}`);
+      console.log(`   File: ${getContextPath()}`);
 
       const state = loadState();
       if (state?.active) {
@@ -2057,8 +1811,8 @@ Learn more: https://ghuntley.com/ralph/
 
    // Clear context command
    if (args.includes("--clear-context")) {
-      if (existsSync(contextPath)) {
-         require("fs").unlinkSync(contextPath);
+      if (existsSync(getContextPath())) {
+         require("fs").unlinkSync(getContextPath());
          console.log(`✅ Context cleared`);
       } else {
          console.log(`ℹ️  No pending context to clear`);
@@ -2068,13 +1822,13 @@ Learn more: https://ghuntley.com/ralph/
 
    // List tasks command
    if (args.includes("--list-tasks")) {
-      if (!existsSync(tasksPath)) {
+      if (!existsSync(getTasksPath())) {
          console.log("No tasks file found. Use --add-task to create your first task.");
          process.exit(0);
       }
 
       try {
-         const tasksContent = readFileSync(tasksPath, "utf-8");
+         const tasksContent = readFileSync(getTasksPath(), "utf-8");
          const tasks = parseTasks(tasksContent);
          displayTasksWithIndices(tasks);
       } catch (error) {
@@ -2094,20 +1848,20 @@ Learn more: https://ghuntley.com/ralph/
          process.exit(1);
       }
 
-      if (!existsSync(stateDir)) {
-         mkdirSync(stateDir, { recursive: true });
+      if (!existsSync(getStateDir())) {
+         mkdirSync(getStateDir(), { recursive: true });
       }
 
       try {
          let tasksContent = "";
-         if (existsSync(tasksPath)) {
-            tasksContent = readFileSync(tasksPath, "utf-8");
+         if (existsSync(getTasksPath())) {
+            tasksContent = readFileSync(getTasksPath(), "utf-8");
          } else {
             tasksContent = "# Ralph Tasks\n\n";
          }
 
          const newTaskContent = tasksContent.trimEnd() + "\n" + `- [ ] ${taskDescription}\n`;
-         writeFileSync(tasksPath, newTaskContent);
+         writeFileSync(getTasksPath(), newTaskContent);
          console.log(`✅ Task added: "${taskDescription}"`);
       } catch (error) {
          console.error("Error adding task:", error);
@@ -2128,13 +1882,13 @@ Learn more: https://ghuntley.com/ralph/
 
       const taskIndex = parseInt(taskIndexStr);
 
-      if (!existsSync(tasksPath)) {
+      if (!existsSync(getTasksPath())) {
          console.error("Error: No tasks file found");
          process.exit(1);
       }
 
       try {
-         const tasksContent = readFileSync(tasksPath, "utf-8");
+         const tasksContent = readFileSync(getTasksPath(), "utf-8");
          const tasks = parseTasks(tasksContent);
 
          if (taskIndex < 1 || taskIndex > tasks.length) {
@@ -2168,7 +1922,7 @@ Learn more: https://ghuntley.com/ralph/
             newLines.push(line);
          }
 
-         writeFileSync(tasksPath, newLines.join("\n"));
+         writeFileSync(getTasksPath(), newLines.join("\n"));
          console.log(`✅ Removed task ${taskIndex} and its subtasks`);
       } catch (error) {
          console.error("Error removing task:", error);
@@ -2285,505 +2039,99 @@ Learn more: https://ghuntley.com/ralph/
       return tasks.length > 0 && tasks.every(t => t.status === "complete" && t.subtasks.every(st => st.status === "complete"));
    }
 
-   // Parse options
-   let prompt = "";
-   let minIterations = 1; // default: 1 iteration minimum
-   let maxIterations = 0; // 0 = unlimited
-   let completionPromise = "COMPLETE";
-   let abortPromise = ""; // Optional abort promise for early exit on precondition failure
-   let tasksMode = false;
-   let taskPromise = "READY_FOR_NEXT_TASK";
-   let model = "";
-   let agentType: AgentType = "opencode";
-   let agentBinary = "";
-   let rotationInput = "";
-   let rotation: string[] | null = null;
-   let autoCommit = true;
-   let disablePlugins = false;
-   let disableHooks = false;
-   let verboseHooks = false;
-   let hookTimeoutMsFlag: string | undefined = undefined;
-   let allowAllPermissions = true;
-   let promptFile = "";
-   let promptTemplatePath = ""; // Custom prompt template file
-   let streamOutput = true;
-   let verboseTools = false;
-   let promptSource = "";
-   let handleQuestions = true;
-   let stallingTimeoutMs = 2 * 60 * 60 * 1000; // Default: 2 hours
-   let blacklistDurationMs = 8 * 60 * 60 * 1000; // Default: 8 hours
-   let stallingAction: "stop" | "rotate" = "stop"; // Default: stop
-   let heartbeatIntervalMs = process.env.NODE_ENV === 'test' ? 1000 : 10000; // Default: 10 seconds
-   let preStartTimeoutMs = -1; // -1 = auto (1/10 of stallingTimeoutMs), 0 = disabled, >0 = custom ms
-   let stallingTimeoutProvided = false;
-   let blacklistDurationProvided = false;
-   let stallingActionProvided = false;
-   let stallRetries = false;
-   let stallRetryMinutes = 15;
+   // Parse options — single source: ./src/parse-args (GREEN FA3 alignment).
+   // Precedence (last wins): defaults → TOML → CLI flags → -- passthrough.
+   // src/parse-args throws on bad input; caught here to preserve the CLI's
+   // "Error: <msg>" + exit(1) surface (incl. the --help hint on unknown flags).
+   let parsed: ParsedMainArgs;
+   try {
+      parsed = getDefaultMainArgs();
+      if (runtimeTomlConfig) applyTomlConfig(parsed, runtimeTomlConfig);
 
-   // Goal mode (opt-in)
-   let goalPath = "";
-   let goalDir = "";
-   let stallRetriesProvided = false;
-   let stallRetryMinutesProvided = false;
-   let maxIterationsProvided = false;
-   let minIterationsProvided = false;
-    let reuseState = false;
-
-    let reuseCheck: "strict" | "relaxed" | "off" = "strict";
-    let reuseSkipModel = false;
-    let reuseSkipAgent = false;
-    let reuseSkipRotation = false;
-    let reuseSkipMinIterations = false;
-    let reuseSkipMaxIterations = false;
-
-    const promptParts: string[] = [];
-   let extraAgentFlags: string[] = [];
-   let passthroughAgentFlags: string[] = []; // flags from -- passthrough only (TOP priority)
-   const doubleDashIndex = args.indexOf("--");
-
-   // Extract extra flags after --. They are stored separately and applied LAST
-   // so they always win over inline args and TOML.
-   if (doubleDashIndex !== -1) {
-      passthroughAgentFlags = args.slice(doubleDashIndex + 1);
-      // Remove -- and everything after it from args processing
-      args.splice(doubleDashIndex);
-   }
-
-   function parseRotationInput(raw: string): string[] {
-      const entries = raw.split(",").map(entry => entry.trim());
-      const parsed: string[] = [];
-      for (const entry of entries) {
-         const parts = entry.split(":");
-         if (parts.length !== 2) {
-            console.error(`Error: Invalid rotation entry '${entry}'. Expected format: agent:model`);
-            process.exit(1);
-         }
-         const agent = parts[0].trim();
-         const modelName = parts[1].trim();
-         if (!agent || !modelName) {
-            console.error(`Error: Invalid rotation entry '${entry}'. Both agent and model are required.`);
-            process.exit(1);
-         }
-         if (!AGENTS[agent]) {
-            console.error(
-               `Error: Invalid agent '${agent}' in rotation entry '${entry}'. Valid agents: ${Object.keys(AGENTS).join(", ")}`,
-            );
-            process.exit(1);
-         }
-         parsed.push(`${agent}:${modelName}`);
-      }
-      return parsed;
-   }
-
-   // Parse duration string to milliseconds
-   // Supports: ms, s, m, h (e.g., 5000, 30s, 5m, 2h)
-   function parseDuration(input: string): number {
-      const trimmed = input.trim();
-
-      // FA2: "-1" is the sentinel for "disabled / no timeout" → Infinity.
-      if (trimmed === "-1") {
-         return Infinity;
-      }
-
-      // If it's just a number, treat as milliseconds
-      if (/^\d+$/.test(trimmed)) {
-         return parseInt(trimmed);
-      }
-
-      // Parse with unit suffix
-      const match = trimmed.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h)$/i);
-      if (!match) {
-         console.error(`Error: Invalid duration format '${input}'. Use number or number+unit (e.g., 5000, 30s, 5m, 2h)`);
-         process.exit(1);
-      }
-
-      const value = parseFloat(match[1]);
-      const unit = match[2].toLowerCase();
-
-      switch (unit) {
-         case 'ms': return value;
-         case 's': return value * 1000;
-         case 'm': return value * 60 * 1000;
-         case 'h': return value * 60 * 60 * 1000;
-         default:
-            console.error(`Error: Unknown duration unit '${unit}'`);
-            process.exit(1);
-      }
-   }
-
-   if (runtimeTomlConfig) {
-      if (runtimeTomlConfig.prompt) prompt = runtimeTomlConfig.prompt;
-      if (runtimeTomlConfig.agent) agentType = runtimeTomlConfig.agent;
-      if (runtimeTomlConfig.agent_binary) agentBinary = runtimeTomlConfig.agent_binary;
-      if (runtimeTomlConfig.min_iterations !== undefined) minIterations = runtimeTomlConfig.min_iterations;
-      if (runtimeTomlConfig.max_iterations !== undefined) maxIterations = runtimeTomlConfig.max_iterations;
-      if (runtimeTomlConfig.completion_promise) completionPromise = runtimeTomlConfig.completion_promise;
-      if (runtimeTomlConfig.abort_promise) abortPromise = runtimeTomlConfig.abort_promise;
-      if (runtimeTomlConfig.tasks !== undefined) tasksMode = runtimeTomlConfig.tasks;
-      if (runtimeTomlConfig.task_promise) taskPromise = runtimeTomlConfig.task_promise;
-      if (runtimeTomlConfig.model) model = runtimeTomlConfig.model;
-      if (runtimeTomlConfig.rotation?.length) rotationInput = runtimeTomlConfig.rotation.join(",");
-      if (runtimeTomlConfig.stalling_timeout) {
-         stallingTimeoutMs = parseDuration(runtimeTomlConfig.stalling_timeout);
-         stallingTimeoutProvided = true;
-      }
-      if (runtimeTomlConfig.blacklist_duration) {
-         blacklistDurationMs = parseDuration(runtimeTomlConfig.blacklist_duration);
-         blacklistDurationProvided = true;
-      }
-      if (runtimeTomlConfig.stalling_action) {
-         if (runtimeTomlConfig.stalling_action !== "stop" && runtimeTomlConfig.stalling_action !== "rotate") {
-            console.error(`Error: Invalid stalling_action '${runtimeTomlConfig.stalling_action}'. Must be 'stop' or 'rotate'.`);
-            process.exit(1);
-         }
-         stallingAction = runtimeTomlConfig.stalling_action;
-         stallingActionProvided = true;
-      }
-      if (runtimeTomlConfig.heartbeat_interval) heartbeatIntervalMs = parseDuration(runtimeTomlConfig.heartbeat_interval);
-      if (runtimeTomlConfig.no_commit !== undefined) autoCommit = !runtimeTomlConfig.no_commit;
-      if (runtimeTomlConfig.no_plugins !== undefined) disablePlugins = runtimeTomlConfig.no_plugins;
-      if (runtimeTomlConfig.allow_all !== undefined) allowAllPermissions = runtimeTomlConfig.allow_all;
-      if (runtimeTomlConfig.prompt_file) promptFile = runtimeTomlConfig.prompt_file;
-      if (runtimeTomlConfig.prompt_template) promptTemplatePath = runtimeTomlConfig.prompt_template;
-      if (runtimeTomlConfig.stream !== undefined) streamOutput = runtimeTomlConfig.stream;
-      if (runtimeTomlConfig.verbose_tools !== undefined) verboseTools = runtimeTomlConfig.verbose_tools;
-      if (runtimeTomlConfig.questions !== undefined) handleQuestions = runtimeTomlConfig.questions;
-      // Prepend TOML extra_agent_flags; -- passthrough flags are added last so they win
-      if (runtimeTomlConfig.extra_agent_flags?.length) {
-         extraAgentFlags = [...runtimeTomlConfig.extra_agent_flags, ...extraAgentFlags];
-      }
-
-      if (runtimeTomlConfig.stall_retries !== undefined) {
-         stallRetries = runtimeTomlConfig.stall_retries;
-         stallRetriesProvided = true;
-      }
-      if (runtimeTomlConfig.stall_retry_minutes !== undefined) {
-         stallRetryMinutes = runtimeTomlConfig.stall_retry_minutes;
-         stallRetryMinutesProvided = true;
-      }
-
-      // Apply reuse config from TOML
-      if (runtimeTomlConfig.reuse_check) {
+      // Env var fallback for reuse_check (if TOML didn't set it)
+      if (!runtimeTomlConfig?.reuse_check && process.env.RALPH_REUSE_CHECK) {
+         const envVal = process.env.RALPH_REUSE_CHECK;
          const validModes = ["strict", "relaxed", "off"];
-         if (!validModes.includes(runtimeTomlConfig.reuse_check)) {
-            console.error(`Error: Invalid reuse_check '${runtimeTomlConfig.reuse_check}'. Must be one of: ${validModes.join(", ")}`);
-            process.exit(1);
+         if (validModes.includes(envVal)) {
+            parsed.reuseCheck = envVal as "strict" | "relaxed" | "off";
+         } else {
+            throw new Error(`Invalid RALPH_REUSE_CHECK '${envVal}'. Must be one of: ${validModes.join(", ")}`);
          }
-         reuseCheck = runtimeTomlConfig.reuse_check;
       }
-      if (runtimeTomlConfig.reuse_skip_model !== undefined) reuseSkipModel = runtimeTomlConfig.reuse_skip_model;
-      if (runtimeTomlConfig.reuse_skip_agent !== undefined) reuseSkipAgent = runtimeTomlConfig.reuse_skip_agent;
-      if (runtimeTomlConfig.reuse_skip_rotation !== undefined) reuseSkipRotation = runtimeTomlConfig.reuse_skip_rotation;
-      if (runtimeTomlConfig.reuse_skip_min_iterations !== undefined) reuseSkipMinIterations = runtimeTomlConfig.reuse_skip_min_iterations;
-      if (runtimeTomlConfig.reuse_skip_max_iterations !== undefined) reuseSkipMaxIterations = runtimeTomlConfig.reuse_skip_max_iterations;
-      // Goal mode (opt-in)
-      if (runtimeTomlConfig.goal) goalPath = runtimeTomlConfig.goal;
-      if (runtimeTomlConfig.goal_dir) goalDir = runtimeTomlConfig.goal_dir;
-      // goal_promise only applies when goal mode is active (opt-in)
-      if (runtimeTomlConfig.goal_promise && (runtimeTomlConfig.goal || runtimeTomlConfig.goal_dir)) {
-         completionPromise = runtimeTomlConfig.goal_promise;
-      }
-   }
 
-   // Env var fallback for reuse_check (if TOML didn't set it)
-   if (!runtimeTomlConfig?.reuse_check && process.env.RALPH_REUSE_CHECK) {
-      const envVal = process.env.RALPH_REUSE_CHECK;
-      const validModes = ["strict", "relaxed", "off"];
-      if (validModes.includes(envVal)) {
-         reuseCheck = envVal as "strict" | "relaxed" | "off";
-      } else {
-         console.error(`Error: Invalid RALPH_REUSE_CHECK '${envVal}'. Must be one of: ${validModes.join(", ")}`);
-         process.exit(1);
-      }
-   }
-
-   for (let i = 0; i < args.length; i++) {
-      const arg = args[i];
-
-      if (arg === "--agent") {
-         const val = args[++i];
-         if (!val || !AGENTS[val]) {
-            console.error(`Error: --agent requires one of: ${Object.keys(AGENTS).join(", ")}`);
-            process.exit(1);
-         }
-         agentType = val as AgentType;
-      } else if (arg === "--agent-binary") {
-         const val = args[++i];
-         if (!val) {
-            console.error("Error: --agent-binary requires a path or binary name");
-            process.exit(1);
-         }
-         agentBinary = val;
-      } else if (arg === "--min-iterations") {
-         const val = args[++i];
-         if (!val || isNaN(parseInt(val))) {
-            console.error("Error: --min-iterations requires a number");
-            process.exit(1);
-         }
-         minIterations = parseInt(val);
-         minIterationsProvided = true;
-      } else if (arg === "--max-iterations") {
-         const val = args[++i];
-         if (!val || isNaN(parseInt(val))) {
-            console.error("Error: --max-iterations requires a number");
-            process.exit(1);
-         }
-         maxIterations = parseInt(val);
-         maxIterationsProvided = true;
-      } else if (arg === "--completion-promise") {
-         const val = args[++i];
-         if (!val) {
-            console.error("Error: --completion-promise requires a value");
-            process.exit(1);
-         }
-         completionPromise = val;
-      } else if (arg === "--abort-promise") {
-         const val = args[++i];
-         if (!val) {
-            console.error("Error: --abort-promise requires a value");
-            process.exit(1);
-         }
-         abortPromise = val;
-      } else if (arg === "--tasks" || arg === "-t") {
-         tasksMode = true;
-      } else if (arg === "--task-promise") {
-         const val = args[++i];
-         if (!val) {
-            console.error("Error: --task-promise requires a value");
-            process.exit(1);
-         }
-         taskPromise = val;
-      } else if (arg === "--goal") {
-         const val = args[++i];
-         if (!val) {
-            console.error("Error: --goal requires a path to goal.md");
-            process.exit(1);
-         }
-         goalPath = val;
-      } else if (arg === "--goal-dir") {
-         const val = args[++i];
-         if (!val) {
-            console.error("Error: --goal-dir requires a directory path");
-            process.exit(1);
-         }
-         goalDir = val;
-      } else if (arg === "--init-goal") {
-         const val = args[++i];
-         if (!val) {
-            console.error("Error: --init-goal requires a title");
-            process.exit(1);
-         }
-         // --init-goal is handled by early-exit above; skip here
-      } else if (arg === "--list-goals") {
-         // --list-goals is handled by early-exit above; skip here
-      } else if (arg === "--goal-status") {
-         // --goal-status is handled by early-exit above; skip here
-      } else if (arg === "--rotation") {
-         const val = args[++i];
-         if (!val) {
-            console.error("Error: --rotation requires a value");
-            process.exit(1);
-         }
-         rotationInput = val;
-      } else if (arg === "--stalling-timeout") {
-         const val = args[++i];
-         if (!val) {
-            console.error("Error: --stalling-timeout requires a value");
-            process.exit(1);
-         }
-         stallingTimeoutMs = parseDuration(val);
-         stallingTimeoutProvided = true;
-      } else if (arg === "--blacklist-duration") {
-         const val = args[++i];
-         if (!val) {
-            console.error("Error: --blacklist-duration requires a value");
-            process.exit(1);
-         }
-         // FA10: a blacklist window must be a finite positive duration. 0, negative,
-         // and the "-1"/Infinity disable-sentinel are meaningless here — reject them
-         // at flag intake rather than silently blacklisting forever / never.
-         const ms = parseDuration(val);
-         if (!Number.isFinite(ms) || ms <= 0) {
-            console.error(`Error: --blacklist-duration must be a positive duration, got '${val}'`);
-            process.exit(1);
-         }
-         blacklistDurationMs = ms;
-         blacklistDurationProvided = true;
-      } else if (arg === "--stalling-action") {
-         const val = args[++i];
-         if (!val || (val !== "stop" && val !== "rotate")) {
-            console.error("Error: --stalling-action requires 'stop' or 'rotate'");
-            process.exit(1);
-         }
-         stallingAction = val as "stop" | "rotate";
-         stallingActionProvided = true;
-      } else if (arg === "--heartbeat-interval") {
-         const val = args[++i];
-         if (!val) {
-            console.error("Error: --heartbeat-interval requires a value");
-            process.exit(1);
-         }
-         heartbeatIntervalMs = parseDuration(val);
-      } else if (arg === "--pre-start-timeout") {
-         const val = args[++i];
-         if (!val) {
-            console.error("Error: --pre-start-timeout requires a value (ms, or -1 to disable)");
-            process.exit(1);
-         }
-         preStartTimeoutMs = parseDuration(val);
-      } else if (arg === "--model") {
-         const val = args[++i];
-         if (!val) {
-            console.error("Error: --model requires a value");
-            process.exit(1);
-         }
-         model = val;
-      } else if (arg === "--prompt-file" || arg === "--file" || arg === "-f") {
-         const val = args[++i];
-         if (!val) {
-            console.error("Error: --prompt-file requires a file path");
-            process.exit(1);
-         }
-         promptFile = val;
-      } else if (arg === "--prompt-template") {
-         const val = args[++i];
-         if (!val) {
-            console.error("Error: --prompt-template requires a file path");
-            process.exit(1);
-         }
-         promptTemplatePath = val;
-      } else if (arg === "--no-stream") {
-         streamOutput = false;
-      } else if (arg === "--stream") {
-         streamOutput = true;
-      } else if (arg === "--verbose-tools") {
-         verboseTools = true;
-      } else if (arg === "--no-commit") {
-         autoCommit = false;
-      } else if (arg === "--no-plugins") {
-         disablePlugins = true;
-      } else if (arg === "--no-hooks") {
-         disableHooks = true;
-      } else if (arg === "--verbose-hooks") {
-         verboseHooks = true;
-      } else if (arg === "--hook-timeout") {
-         const val = args[++i];
-         if (val === undefined) {
-            console.error("Error: --hook-timeout requires a number");
-            process.exit(1);
-         }
-         hookTimeoutMsFlag = val;
-      } else if (arg === "--allow-all") {
-         allowAllPermissions = true;
-      } else if (arg === "--no-allow-all") {
-         allowAllPermissions = false;
-      } else if (arg === "--reuse-state") {
-         reuseState = true;
-      } else if (arg === "--questions") {
-         handleQuestions = true;
-      } else if (arg === "--no-questions") {
-         handleQuestions = false;
-      } else if (arg === "--stall-retries") {
-         stallRetries = true;
-         stallRetriesProvided = true;
-      } else if (arg === "--no-stall-retries") {
-         stallRetries = false;
-         stallRetriesProvided = true;
-      } else if (arg === "--stall-retry-minutes") {
-         const val = args[++i];
-         if (!val || Number.isNaN(Number(val))) {
-            console.error("Error: --stall-retry-minutes requires a number");
-            process.exit(1);
-         }
-         stallRetryMinutes = Number(val);
-         stallRetryMinutesProvided = true;
-       } else if (arg === "--state-dir") {
-          i++; // value already captured in early args parsing
-       } else if (arg === "--toml-config") {
-          i++; // value already captured in early args parsing
-      } else if (arg === "--config") {
-         i++;
-      } else if (arg === "--init-config") {
-         // FA6: consume the next token only when path-shaped; otherwise it is a
-         // valueless flag and the token falls through to the prompt positional.
-         const next = args[i + 1];
-         if (next !== undefined && isInitConfigPathShaped(next)) i++;
-      } else if (arg.startsWith("-")) {
-         console.error(`Error: Unknown option: ${arg}`);
+      parsed = parseMainArgs(args, Object.keys(AGENTS), parsed);
+      // -- passthrough overrides (TOP priority); --state-dir in passthrough
+      // re-points the module state paths (and stateDirInput for later checks).
+      applyPassthroughOverrides(parsed, (dir) => {
+         stateDirInput = dir;
+         setStatePaths(dir);
+      });
+   } catch (err) {
+      console.error(`Error: ${(err as Error).message}`);
+      if ((err as Error).message.startsWith("Unknown option")) {
          console.error("Run 'ralph --help' for available options");
-         process.exit(1);
-      } else {
-         promptParts.push(arg);
       }
+      process.exit(1);
    }
 
-   // Apply -- passthrough overrides AFTER TOML and inline args (TOP priority).
-   // This runs after inline args parsing so passthrough always wins.
-   for (let i = 0; i < passthroughAgentFlags.length; i++) {
-      if (passthroughAgentFlags[i] === "--model" && passthroughAgentFlags[i + 1]) {
-         model = passthroughAgentFlags[i + 1];
-         i++;
-      } else if (passthroughAgentFlags[i] === "--max-iterations" && passthroughAgentFlags[i + 1]) {
-         const v = passthroughAgentFlags[i + 1];
-         if (!/^\d+$/.test(v)) {
-            console.error(`Error: --max-iterations requires a non-negative integer, got '${v}'`);
-            process.exit(1);
-         }
-         maxIterations = parseInt(v);
-         i++;
-      } else if (passthroughAgentFlags[i] === "--min-iterations" && passthroughAgentFlags[i + 1]) {
-         const v = passthroughAgentFlags[i + 1];
-         if (!/^\d+$/.test(v)) {
-            console.error(`Error: --min-iterations requires a non-negative integer, got '${v}'`);
-            process.exit(1);
-         }
-         minIterations = parseInt(v);
-         i++;
-      } else if (passthroughAgentFlags[i] === "--completion-promise" && passthroughAgentFlags[i + 1]) {
-         completionPromise = passthroughAgentFlags[i + 1];
-         i++;
-      } else if (passthroughAgentFlags[i] === "--abort-promise" && passthroughAgentFlags[i + 1]) {
-         abortPromise = passthroughAgentFlags[i + 1];
-         i++;
-      } else if (passthroughAgentFlags[i] === "--stalling-timeout" && passthroughAgentFlags[i + 1]) {
-         stallingTimeoutMs = parseDuration(passthroughAgentFlags[i + 1]);
-         i++;
-      } else if (passthroughAgentFlags[i] === "--blacklist-duration" && passthroughAgentFlags[i + 1]) {
-         const v = passthroughAgentFlags[i + 1];
-         const ms = parseDuration(v);
-         if (!Number.isFinite(ms) || ms <= 0) {
-            console.error(`Error: --blacklist-duration must be a positive duration, got '${v}'`);
-            process.exit(1);
-         }
-         blacklistDurationMs = ms;
-         i++;
-      } else if (passthroughAgentFlags[i] === "--stalling-action" && passthroughAgentFlags[i + 1]) {
-         const v = passthroughAgentFlags[i + 1];
-         if (v !== "stop" && v !== "rotate") {
-            console.error(`Error: --stalling-action requires 'stop' or 'rotate', got '${v}'`);
-            process.exit(1);
-         }
-         stallingAction = v as "stop" | "rotate";
-         i++;
-      } else if (passthroughAgentFlags[i] === "--stall-retries") {
-         stallRetries = true;
-      } else if (passthroughAgentFlags[i] === "--no-stall-retries") {
-         stallRetries = false;
-       } else if (passthroughAgentFlags[i] === "--stall-retry-minutes" && passthroughAgentFlags[i + 1]) {
-          stallRetryMinutes = parseInt(passthroughAgentFlags[i + 1]);
-          i++;
-       } else if (passthroughAgentFlags[i] === "--state-dir" && passthroughAgentFlags[i + 1]) {
-          stateDirInput = resolve(passthroughAgentFlags[i + 1]);
-          setStatePaths(stateDirInput);
-          i++;
-       }
-    }
+   let {
+      prompt,
+      minIterations,
+      maxIterations,
+      minIterationsProvided,
+      maxIterationsProvided,
+      completionPromise,
+      abortPromise,
+      tasksMode,
+      taskPromise,
+      model,
+      agentType,
+      agentBinary,
+      rotationInput,
+      autoCommit,
+      disablePlugins,
+      disableHooks,
+      verboseHooks,
+      hookTimeoutMsFlag,
+      allowAllPermissions,
+      promptFile,
+      promptTemplatePath,
+      streamOutput,
+      verboseTools,
+      handleQuestions,
+      stallingTimeoutMs,
+      stallingTimeoutProvided,
+      blacklistDurationMs,
+      blacklistDurationProvided,
+      stallingAction,
+      stallingActionProvided,
+      heartbeatIntervalMs,
+      preStartTimeoutMs,
+      stallRetries,
+      stallRetriesProvided,
+      stallRetryMinutes,
+      stallRetryMinutesProvided,
+      goalPath,
+      goalDir,
+      reuseState,
+      reuseCheck,
+      reuseSkipModel,
+      reuseSkipAgent,
+      reuseSkipRotation,
+      reuseSkipMinIterations,
+      reuseSkipMaxIterations,
+      extraAgentFlags,
+      passthroughAgentFlags,
+      promptParts,
+   } = parsed;
 
-    // Re-validate state dir after passthrough may have changed it
+   let promptSource = "";
+   let rotation: string[] | null = null;
+
+   // Re-validate state dir after passthrough may have changed it
     ensureStateDir();
 
-    const usingCustomStateDir = stateDir !== resolve(process.cwd(), ".ralph");
+    const usingCustomStateDir = getStateDir() !== resolve(process.cwd(), ".ralph");
     if (usingCustomStateDir && autoCommit) {
        console.error("Error: --state-dir currently requires --no-commit.");
        console.error("Shared git/worktree side effects are not isolated for custom state directories yet.");
@@ -2802,7 +2150,12 @@ Learn more: https://ghuntley.com/ralph/
     }
 
    if (rotationInput) {
-      rotation = parseRotationInput(rotationInput);
+      try {
+         rotation = parseRotationInput(rotationInput, Object.keys(AGENTS));
+      } catch (err) {
+         console.error(`Error: ${(err as Error).message}`);
+         process.exit(1);
+      }
    } else if (!AGENTS[agentType]) {
       console.error(`Error: --agent requires one of: ${Object.keys(AGENTS).join(", ")}`);
       process.exit(1);
@@ -2925,46 +2278,46 @@ Learn more: https://ghuntley.com/ralph/
    function saveState(state: RalphState): void {
       // Guard: if .ralph exists as a file/symlink-to-file instead of a directory,
       // give a clear fatal error instead of crashing with ENOTDIR.
-      if (existsSync(stateDir)) {
+      if (existsSync(getStateDir())) {
          try {
-            const stats = lstatSync(stateDir);
+            const stats = lstatSync(getStateDir());
             if (!stats.isDirectory()) {
                console.error(`\n❌ Ralph Initialization Failed`);
-               console.error(`   ${stateDir} exists but is not a directory!`);
+               console.error(`   ${getStateDir()} exists but is not a directory!`);
                console.error(`   Type: ${stats.isSymbolicLink() ? "symlink" : "file"}`);
-               console.error(`\nFix: rm ${stateDir}  # remove the file/symlink`);
-               console.error(`     mkdir ${stateDir}  # then recreate as a directory`);
+               console.error(`\nFix: rm ${getStateDir()}  # remove the file/symlink`);
+               console.error(`     mkdir ${getStateDir()}  # then recreate as a directory`);
                process.exit(1);
             }
          } catch (err) {
             console.error(`\n❌ Ralph Initialization Failed`);
-            console.error(`   Cannot access ${stateDir}: ${err}`);
+            console.error(`   Cannot access ${getStateDir()}: ${err}`);
             process.exit(1);
          }
       } else {
-         mkdirSync(stateDir, { recursive: true });
+         mkdirSync(getStateDir(), { recursive: true });
       }
       // Atomic write: temp file + renameSync (POSIX guarantees atomicity)
-      const tmpPath = `${statePath}.tmp-${process.pid}-${Date.now()}`;
+      const tmpPath = `${getStatePath()}.tmp-${process.pid}-${Date.now()}`;
       writeFileSync(tmpPath, JSON.stringify(state, null, 2));
-      renameSync(tmpPath, statePath);
+      renameSync(tmpPath, getStatePath());
    }
 
    function loadState(): RalphState | null {
-      if (!existsSync(statePath)) {
+      if (!existsSync(getStatePath())) {
          return null;
       }
       try {
-         return JSON.parse(readFileSync(statePath, "utf-8"));
+         return JSON.parse(readFileSync(getStatePath(), "utf-8"));
       } catch {
          return null;
       }
    }
 
    function clearState(): void {
-      if (existsSync(statePath)) {
+      if (existsSync(getStatePath())) {
          try {
-            require("fs").unlinkSync(statePath);
+            require("fs").unlinkSync(getStatePath());
          } catch { }
       }
    }
@@ -2981,11 +2334,11 @@ Learn more: https://ghuntley.com/ralph/
 
    // Build the full prompt with iteration context
    function loadContext(): string | null {
-      if (!existsSync(contextPath)) {
+      if (!existsSync(getContextPath())) {
          return null;
       }
       try {
-         const content = readFileSync(contextPath, "utf-8").trim();
+         const content = readFileSync(getContextPath(), "utf-8").trim();
          return content || null;
       } catch {
          return null;
@@ -2993,9 +2346,9 @@ Learn more: https://ghuntley.com/ralph/
    }
 
    function clearContext(): void {
-      if (existsSync(contextPath)) {
+      if (existsSync(getContextPath())) {
          try {
-            require("fs").unlinkSync(contextPath);
+            require("fs").unlinkSync(getContextPath());
          } catch { }
       }
    }
@@ -3006,29 +2359,29 @@ Learn more: https://ghuntley.com/ralph/
    }
 
    function savePendingQuestion(question: string): void {
-      if (!existsSync(stateDir)) {
-         mkdirSync(stateDir, { recursive: true });
+      if (!existsSync(getStateDir())) {
+         mkdirSync(getStateDir(), { recursive: true });
       }
       const questions: PendingQuestion[] = loadPendingQuestions();
       questions.push({ question, timestamp: new Date().toISOString() });
-      writeFileSync(questionsPath, JSON.stringify(questions, null, 2));
+      writeFileSync(getQuestionsPath(), JSON.stringify(questions, null, 2));
    }
 
    function loadPendingQuestions(): PendingQuestion[] {
-      if (!existsSync(questionsPath)) {
+      if (!existsSync(getQuestionsPath())) {
          return [];
       }
       try {
-         return JSON.parse(readFileSync(questionsPath, "utf-8"));
+         return JSON.parse(readFileSync(getQuestionsPath(), "utf-8"));
       } catch {
          return [];
       }
    }
 
    function clearPendingQuestions(): void {
-      if (existsSync(questionsPath)) {
+      if (existsSync(getQuestionsPath())) {
          try {
-            require("fs").unlinkSync(questionsPath);
+            require("fs").unlinkSync(getQuestionsPath());
          } catch { }
       }
    }
@@ -3042,7 +2395,7 @@ Learn more: https://ghuntley.com/ralph/
       // Remove only the first question and save the rest
       const remaining = questions.slice(1);
       if (remaining.length > 0) {
-         writeFileSync(questionsPath, JSON.stringify(remaining, null, 2));
+         writeFileSync(getQuestionsPath(), JSON.stringify(remaining, null, 2));
       } else {
          clearPendingQuestions();
       }
@@ -3114,13 +2467,13 @@ Learn more: https://ghuntley.com/ralph/
          // standard variable replacement so injected content can still
          // use {{iteration}}, {{prompt}}, etc.
          // ────────────────────────────────────────────────────────────
-         const rulesToml = loadRulesToml(stateDir);
-         template = resolveInjectPlaceholders(template, { iteration: state.iteration }, stateDir, rulesToml);
+         const rulesToml = loadRulesToml(getStateDir());
+         template = resolveInjectPlaceholders(template, { iteration: state.iteration }, getStateDir(), rulesToml);
 
          // PLACEHOLDER gate: abort if any rule entry still has PLACEHOLDER
          // Re-load TOML after injection — resolveInjectPlaceholders may have scaffolded
          // new sections to disk that weren't in the original in-memory TOML (F9 fix).
-         const rulesTomlUpdated = loadRulesToml(stateDir);
+         const rulesTomlUpdated = loadRulesToml(getStateDir());
          const placeholderSections = findPlaceholderRules(rulesTomlUpdated);
          if (placeholderSections.length > 0) {
             console.error(`\n❌ Ralph PLACEHOLDER Gate — Iteration ${state.iteration}`);
@@ -3136,8 +2489,8 @@ Learn more: https://ghuntley.com/ralph/
 
          // Load tasks if in tasks mode
          let tasksContent = "";
-         if (state.tasksMode && existsSync(tasksPath)) {
-            tasksContent = readFileSync(tasksPath, "utf-8");
+         if (state.tasksMode && existsSync(getTasksPath())) {
+            tasksContent = readFileSync(getTasksPath(), "utf-8");
          }
 
          // Replace variables
@@ -3285,7 +2638,7 @@ Now, work on the task. Good luck!
 
    // Generate the tasks mode section for the prompt
    function getTasksModeSection(state: RalphState): string {
-      if (!existsSync(tasksPath)) {
+      if (!existsSync(getTasksPath())) {
          return `
 ## TASKS MODE: Enabled (no tasks file found)
 
@@ -3294,7 +2647,7 @@ Create ${currentTasksFileLabel()} with your task list, or use \`ralph --add-task
       }
 
       try {
-         const tasksContent = readFileSync(tasksPath, "utf-8");
+         const tasksContent = readFileSync(getTasksPath(), "utf-8");
          const tasks = parseTasks(tasksContent);
          const currentTask = findCurrentTask(tasks);
          const nextTask = findNextTask(tasks);
@@ -3891,141 +3244,9 @@ Unable to read ${currentTasksFileLabel()}
       return { stdoutText: stdoutBuffer.toString(), stderrText: stderrBuffer.toString(), toolCounts, stalled, stalledForMs, preStartStalled: stalled && !firstOutputReceived, terminatedAfterPromise };
    }
    // Main loop
-   // Helper to detect per-iteration file changes using content hashes
-   // Works correctly with --no-commit by comparing file content hashes
-
-   interface FileSnapshot {
-      files: Map<string, string>; // filename -> hash/mtime
-   }
-
-   async function captureFileSnapshot(): Promise<FileSnapshot> {
-      const files = new Map<string, string>();
-      const cwd = process.cwd();
-      try {
-         const insideWorkTree = await $`git rev-parse --is-inside-work-tree`.cwd(cwd).quiet().text().catch(() => "");
-         if (insideWorkTree.trim() !== "true") {
-            return { files };
-         }
-
-         // Get list of all tracked and modified files
-         const status = await $`git -c status.showUntrackedFiles=no status --porcelain`.cwd(cwd).text();
-         const trackedFiles = await $`git ls-files`.cwd(cwd).text();
-
-         // Combine modified and tracked files
-         const allFiles = new Set<string>();
-         for (const line of status.split("\n")) {
-            if (line.trim()) {
-               allFiles.add(line.substring(3).trim());
-            }
-         }
-         for (const file of trackedFiles.split("\n")) {
-            if (file.trim()) {
-               allFiles.add(file.trim());
-            }
-         }
-
-         // Get hash for each file (using git hash-object for content comparison)
-         // Batch hash: ONE git spawn for all files (git hash-object --stdin-paths).
-         // Was: per-file spawn — 287 tracked files x ~100ms under the git
-         // guard wrapper = ~30s+ per snapshot (2x per iteration) — timed out
-         // every loop start (tests + real runs). One spawn: <200ms total.
-         const pathList = [...allFiles].filter(Boolean);
-         if (pathList.length > 0) {
-            let batchOk = false;
-            try {
-               const hashProc = Bun.spawn(["git", "hash-object", "--stdin-paths"], {
-                  cwd,
-                  stdout: "pipe",
-                  stderr: "pipe",
-                  stdin: "pipe",
-               });
-               // Swallow EPIPE: git exits early on unhashable/missing paths
-               // and Bun turns a late stdin.write into an unhandled rejection.
-               await Promise.allSettled([
-                  hashProc.stdin.write(pathList.join("\n") + "\n"),
-                  hashProc.stdin.end(),
-               ]);
-               const hashOut = await new Response(hashProc.stdout).text();
-               const hashExit = await hashProc.exited;
-               if (hashExit === 0) {
-                  batchOk = true;
-                  const hashLines = hashOut.split("\n");
-                  for (let i = 0; i < pathList.length; i++) {
-                     const h = (hashLines[i] ?? "").trim();
-                     if (h) files.set(pathList[i], h);
-                  }
-               }
-            } catch {
-               batchOk = false;
-            }
-            // In-process mtime fallback (zero subprocesses). Covers:
-            // batch failure (missing tracked files make git exit 128 mid-stream)
-            // and individual files git could not hash.
-            if (!batchOk || files.size < pathList.length) {
-               const statSync = require("fs").statSync as (p: string) => { mtimeMs: number };
-               for (const file of pathList) {
-                  if (files.has(file)) continue;
-                  try {
-                     files.set(file, `m:${statSync(file).mtimeMs}`);
-                  } catch {
-                     files.set(file, "deleted");
-                  }
-               }
-            }
-         }
-      } catch {
-         // Git not available or error
-      }
-      return { files };
-   }
-
-   function getModifiedFilesSinceSnapshot(before: FileSnapshot, after: FileSnapshot): string[] {
-      const changedFiles: string[] = [];
-
-      // Check for new or modified files
-      for (const [file, hash] of after.files) {
-         const prevHash = before.files.get(file);
-         if (prevHash !== hash) {
-            changedFiles.push(file);
-         }
-      }
-
-      // Check for deleted files
-      for (const [file] of before.files) {
-         if (!after.files.has(file)) {
-            changedFiles.push(file);
-         }
-      }
-
-      return changedFiles;
-   }
-
-   // Helper to extract error patterns from output
-   function extractErrors(output: string): string[] {
-      const errors: string[] = [];
-      const lines = output.split("\n");
-
-      for (const line of lines) {
-         const lower = line.toLowerCase();
-         // Match common error patterns
-         if (
-            lower.includes("error:") ||
-            lower.includes("failed:") ||
-            lower.includes("exception:") ||
-            lower.includes("typeerror") ||
-            lower.includes("syntaxerror") ||
-            lower.includes("referenceerror") ||
-            (lower.includes("test") && lower.includes("fail"))
-         ) {
-            const cleaned = line.trim().substring(0, 200);
-            if (cleaned && !errors.includes(cleaned)) {
-               errors.push(cleaned);
-            }
-         }
-      }
-
-      return errors.slice(0, 10); // Cap at 10 errors per iteration
-   }
+   // captureFileSnapshot / getModifiedFilesSinceSnapshot / extractErrors /
+   // FileSnapshot: consumed from src/loop-helpers.ts (single source; FA4
+   // degraded-flag semantics live there).
 
    async function runRalphLoop(): Promise<void> {
       // Ensure agentType is set before loadState() uses it.
@@ -4043,7 +3264,7 @@ Unable to read ${currentTasksFileLabel()}
       const ownership = decideLoopOwnership(existingState, process.pid);
       if (ownership.status === "already-running") {
          console.error(`Error: Ralph loop is already running with PID ${ownership.ownerPid}.`);
-         console.error(`Stop the existing process or clear ${statePath} if it is stale.`);
+         console.error(`Stop the existing process or clear ${getStatePath()} if it is stale.`);
          process.exit(1);
       }
 
@@ -4053,9 +3274,9 @@ Unable to read ${currentTasksFileLabel()}
        // start, clear any stale file left by a crashed previous run so it
        // cannot leak into this unrelated run.
        if (resuming) {
-          pipelineContext = loadPipelineContext(stateDir);
+          pipelineContext = loadPipelineContext(getStateDir());
        } else {
-          clearPipelineContext(stateDir);
+          clearPipelineContext(getStateDir());
        }
 
         // ── Config mismatch check: run BEFORE decideLoopOwnership exit path.
@@ -4147,7 +3368,7 @@ Unable to read ${currentTasksFileLabel()}
               console.error(`\nTo reuse the existing state, pass --reuse-state:`);
               console.error(`   ralph --reuse-state [your args...]`);
               console.error(`\nTo start fresh, clear the state file:`);
-              console.error(`   rm ${statePath}`);
+              console.error(`   rm ${getStatePath()}`);
               process.exit(1);
            }
 
@@ -4187,7 +3408,7 @@ Unable to read ${currentTasksFileLabel()}
           if (ownership.ownerPid && ownership.ownerPid !== process.pid) {
              console.log(`⚠️  Recovered stale active state from PID ${ownership.ownerPid}`);
           }
-          console.log(`🔄 Resuming Ralph loop from ${statePath}`);
+          console.log(`🔄 Resuming Ralph loop from ${getStatePath()}`);
        }
 
       if (tasksMode && completionPromise.trim() === taskPromise.trim()) {
@@ -4372,12 +3593,12 @@ Unable to read ${currentTasksFileLabel()}
       try { saveState(state); } catch { /* best-effort */ }
 
       // Create tasks file if tasks mode is enabled and file doesn't exist
-      if (tasksMode && !existsSync(tasksPath)) {
-         if (!existsSync(stateDir)) {
-            mkdirSync(stateDir, { recursive: true });
+      if (tasksMode && !existsSync(getTasksPath())) {
+         if (!existsSync(getStateDir())) {
+            mkdirSync(getStateDir(), { recursive: true });
          }
-         writeFileSync(tasksPath, "# Ralph Tasks\n\nAdd your tasks below using: `ralph --add-task \"description\"`\n");
-         console.log(`📋 Created tasks file: ${tasksPath}`);
+         writeFileSync(getTasksPath(), "# Ralph Tasks\n\nAdd your tasks below using: `ralph --add-task \"description\"`\n");
+         console.log(`📋 Created tasks file: ${getTasksPath()}`);
       }
 
       // Initialize history tracking
@@ -4397,7 +3618,7 @@ Unable to read ${currentTasksFileLabel()}
             RALPH_ITERATION: String(state.iteration),
             RALPH_AGENT: state.agent || agentType,
             RALPH_MODEL: state.model || model,
-            RALPH_STATE_DIR: stateDir,
+            RALPH_STATE_DIR: getStateDir(),
             RALPH_CWD: process.cwd(),
             RALPH_PIPELINE_CONTEXT: JSON.stringify(pipelineContext),
             ...extra,
@@ -4437,10 +3658,10 @@ Unable to read ${currentTasksFileLabel()}
          pipelineContext = executeHooks({ event: "loop-resume", env: buildHookEnv("loop-resume"), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
          // D4 (Option A): persist after every continuing reassign so hook
          // mutations survive even if the process crashes before the next save.
-         savePipelineContext(stateDir, pipelineContext);
+         savePipelineContext(getStateDir(), pipelineContext);
       } else {
          pipelineContext = executeHooks({ event: "loop-start", env: buildHookEnv("loop-start"), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-         savePipelineContext(stateDir, pipelineContext);
+         savePipelineContext(getStateDir(), pipelineContext);
       }
 
       // Track current subprocess for cleanup on SIGINT
@@ -4459,7 +3680,7 @@ Unable to read ${currentTasksFileLabel()}
          if (stopping) {
             console.log("\nForce stopping...");
             // S4: clear persisted pipeline context on the forced-exit path too.
-            try { clearPipelineContext(stateDir); } catch { /* best-effort */ }
+            try { clearPipelineContext(getStateDir()); } catch { /* best-effort */ }
             process.exit(1);
          }
          stopping = true;
@@ -4524,7 +3745,7 @@ Unable to read ${currentTasksFileLabel()}
          //     continues), so it never fires loop-end.
          executeHooks({ event: "loop-cancel", env: buildHookEnv("loop-cancel"), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
          executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "cancel" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-         clearPipelineContext(stateDir);
+         clearPipelineContext(getStateDir());
 
          // Use setImmediate to allow the abort event to propagate
          // then force exit. This is more reliable than process.exit()
@@ -4540,7 +3761,7 @@ Unable to read ${currentTasksFileLabel()}
       // behavior, so each MUST call process.exit() explicitly.
       // (clearPipelineContext is a no-op when the file is already absent.)
       const cleanupPipelineContext = (): void => {
-         try { clearPipelineContext(stateDir); } catch { /* best-effort */ }
+         try { clearPipelineContext(getStateDir()); } catch { /* best-effort */ }
       };
       const killInFlightChild = (): void => {
          if (currentProc) {
@@ -4583,7 +3804,7 @@ Unable to read ${currentTasksFileLabel()}
             console.log(`╚══════════════════════════════════════════════════════════════════╝`);
             // Fire loop-end hook
             executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "max-iterations" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-            clearPipelineContext(stateDir);
+            clearPipelineContext(getStateDir());
             clearState();
             clearPendingQuestions();
             // Keep history for analysis via --status
@@ -4599,7 +3820,7 @@ Unable to read ${currentTasksFileLabel()}
          // flow into the agent spawn env via RALPH_PIPELINE_CONTEXT).
             pipelineContext = executeHooks({ event: "iteration-start", env: buildHookEnv("iteration-start"), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
          // D4 (Option A): persist after iteration-start reassign.
-         savePipelineContext(stateDir, pipelineContext);
+         savePipelineContext(getStateDir(), pipelineContext);
 
          // Capture context at start of iteration (to only clear what was consumed)
          const contextAtStart = loadContext();
@@ -4671,7 +3892,7 @@ Unable to read ${currentTasksFileLabel()}
             const env = agentConfig.buildEnv({
                filterPlugins: disablePlugins,
                allowAllPermissions: allowAllPermissions,
-            }, stateDir);
+            }, getStateDir());
             // G1: thread the current pipeline context into the agent's environment
             // so spawned agents can read/extend it. Placed after the iteration-start
             // hook fires (which may have mutated pipelineContext).
@@ -4759,7 +3980,7 @@ Unable to read ${currentTasksFileLabel()}
 
                   const stalledExitCode = await exitCodePromise;
                   currentProc = null;
-                  await appendIterationHistory({
+            await appendIterationHistory({
                      history,
                      iteration: state.iteration,
                      iterationStart,
@@ -4771,6 +3992,8 @@ Unable to read ${currentTasksFileLabel()}
                      exitCode: stalledExitCode,
                      completionDetected: false,
                      snapshotBefore,
+                     historyPath: getHistoryPath(),
+                     stateDir: getStateDir(),
                   });
 
                   // Handle based on action
@@ -4808,7 +4031,7 @@ Unable to read ${currentTasksFileLabel()}
                       executeHooks({ event: "loop-stall", env: buildHookEnv("loop-stall"), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
                       // Fire loop-end hook
                       executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "stall" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-                      clearPipelineContext(stateDir);
+                      clearPipelineContext(getStateDir());
                       state.active = false;
                       try { saveState(state); } catch { /* best-effort */ }
                       break;
@@ -4856,7 +4079,7 @@ Unable to read ${currentTasksFileLabel()}
                   appendStallingEvent(history, stallingEvent);
                   const stalledExitCode = await exitCodePromise;
                   currentProc = null;
-                  await appendIterationHistory({
+            await appendIterationHistory({
                      history,
                      iteration: state.iteration,
                      iterationStart,
@@ -4868,6 +4091,8 @@ Unable to read ${currentTasksFileLabel()}
                      exitCode: stalledExitCode,
                      completionDetected: false,
                      snapshotBefore,
+                     historyPath: getHistoryPath(),
+                     stateDir: getStateDir(),
                   });
 
                   // Handle based on action
@@ -4902,7 +4127,7 @@ Unable to read ${currentTasksFileLabel()}
                       executeHooks({ event: "loop-stall", env: buildHookEnv("loop-stall"), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
                       // Fire loop-end hook
                       executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "stall" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-                      clearPipelineContext(stateDir);
+                      clearPipelineContext(getStateDir());
                       state.active = false;
                       try { saveState(state); } catch { /* best-effort */ }
                       break;
@@ -4944,8 +4169,8 @@ Unable to read ${currentTasksFileLabel()}
             if (tasksMode && completionSignalDetected) {
                let tasksGatePassed = false;
                try {
-                  if (existsSync(tasksPath)) {
-                     const tasksContent = readFileSync(tasksPath, "utf-8");
+                  if (existsSync(getTasksPath())) {
+                     const tasksContent = readFileSync(getTasksPath(), "utf-8");
                      tasksGatePassed = tasksMarkdownAllComplete(tasksContent);
                   }
                } catch {
@@ -4979,6 +4204,8 @@ Unable to read ${currentTasksFileLabel()}
                exitCode,
                completionDetected,
                snapshotBefore,
+               historyPath: getHistoryPath(),
+               stateDir: getStateDir(),
             });
 
             // Fire iteration-end hook
@@ -4997,7 +4224,7 @@ Unable to read ${currentTasksFileLabel()}
             });
 
             // Save pipeline context after iteration
-            savePipelineContext(stateDir, pipelineContext);
+            savePipelineContext(getStateDir(), pipelineContext);
 
             // Goal mode: sync goal state after each iteration
             let goalCompleted = false;
@@ -5091,7 +4318,7 @@ Unable to read ${currentTasksFileLabel()}
                executeHooks({ event: "loop-abort", env: buildHookEnv("loop-abort", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs) }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
                // Fire loop-end hook
                executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "abort" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-               clearPipelineContext(stateDir);
+               clearPipelineContext(getStateDir());
                clearState();
                clearHistory();
                clearContext();
@@ -5108,15 +4335,15 @@ Unable to read ${currentTasksFileLabel()}
                   if (answer.trim()) {
                      savePendingQuestion(answer);
                      // Immediately inject answer into context for this iteration
-                     if (!existsSync(stateDir)) {
-                        mkdirSync(stateDir, { recursive: true });
+                     if (!existsSync(getStateDir())) {
+                        mkdirSync(getStateDir(), { recursive: true });
                      }
                      const existingContext = loadContext() || "";
                      const answerContext = `\n## Previous Answer\nYour previous answer was: ${answer}\n`;
                      if (existingContext) {
-                        writeFileSync(contextPath, existingContext + answerContext);
+                        writeFileSync(getContextPath(), existingContext + answerContext);
                      } else {
-                        writeFileSync(contextPath, `# Ralph Loop Context\n${answerContext}`);
+                        writeFileSync(getContextPath(), `# Ralph Loop Context\n${answerContext}`);
                      }
                      console.log(`✅ Answer saved and injected into context`);
                   } else {
@@ -5125,15 +4352,15 @@ Unable to read ${currentTasksFileLabel()}
                } else {
                   const pendingAnswer = getAndClearPendingQuestion();
                   if (pendingAnswer) {
-                     if (!existsSync(stateDir)) {
-                        mkdirSync(stateDir, { recursive: true });
+                     if (!existsSync(getStateDir())) {
+                        mkdirSync(getStateDir(), { recursive: true });
                      }
                      const existingContext = loadContext() || "";
                      const answerContext = `\n## Previous Answer\nYour previous answer was: ${pendingAnswer}\n`;
                      if (existingContext) {
-                        writeFileSync(contextPath, existingContext + answerContext);
+                        writeFileSync(getContextPath(), existingContext + answerContext);
                      } else {
-                        writeFileSync(contextPath, `# Ralph Loop Context\n${answerContext}`);
+                        writeFileSync(getContextPath(), `# Ralph Loop Context\n${answerContext}`);
                      }
                   }
                }
@@ -5173,9 +4400,9 @@ Unable to read ${currentTasksFileLabel()}
                          cwd: process.cwd(),
                          prompt: state.prompt,
                          iterationCount: state.iteration,
-                         contextPath,
-                         statePath,
-                         stateDir,
+                         contextPath: getContextPath(),
+                         statePath: getStatePath(),
+                         stateDir: getStateDir(),
                          runHash: state.runHash || "",
                          saveStateFn: (rgState: ReviewGateState) => {
                             state.reviewGate = rgState;
@@ -5194,7 +4421,7 @@ Unable to read ${currentTasksFileLabel()}
                          console.log(`╚══════════════════════════════════════════════════════════════════╝`);
                          // Fire loop-end hook
                          executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "completion" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-                         clearPipelineContext(stateDir);
+                         clearPipelineContext(getStateDir());
                          const defaultStateDir = join(process.cwd(), ".ralph");
                          if (stateDirInput === defaultStateDir) {
                             clearState();
@@ -5226,7 +4453,7 @@ Unable to read ${currentTasksFileLabel()}
                       console.log(`╚══════════════════════════════════════════════════════════════════╝`);
                       // Fire loop-end hook
                       executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "completion" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-                      clearPipelineContext(stateDir);
+                      clearPipelineContext(getStateDir());
                       const defaultStateDir = join(process.cwd(), ".ralph");
                       if (stateDirInput === defaultStateDir) {
                          clearState();
@@ -5248,7 +4475,7 @@ Unable to read ${currentTasksFileLabel()}
                   // Goal complete — clean up and exit
                   // Fire loop-end hook
                   executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "completion" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-                  clearPipelineContext(stateDir);
+                  clearPipelineContext(getStateDir());
                   const defaultStateDir = join(process.cwd(), ".ralph");
                   if (stateDirInput === defaultStateDir) {
                      clearState();
@@ -5340,7 +4567,7 @@ Unable to read ${currentTasksFileLabel()}
             pipelineContext = executeHooks({ event: "loop-error", env: buildHookEnv("loop-error", { RALPH_ERROR_MESSAGE: String(error).substring(0, 500) }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
             // D4 (Option A): persist after loop-error reassign so the mutated
             // context reaches the next iteration's agent env deterministically.
-            savePipelineContext(stateDir, pipelineContext);
+            savePipelineContext(getStateDir(), pipelineContext);
             console.log("Continuing to next iteration...");
 
             // Track failed iteration in history to keep state/history in sync
@@ -5376,12 +4603,17 @@ Unable to read ${currentTasksFileLabel()}
    // Run the loop
    // Merge passthrough flags
    extraAgentFlags = [...extraAgentFlags, ...passthroughAgentFlags];
-   runRalphLoop().catch(error => {
+   runRalphLoop().catch(async (error: unknown) => {
       console.error("Fatal error:", error);
       // D9: clear persisted pipeline context on the fatal-error path so a
       // crashed run does not leak context into the next unrelated run.
-      try { clearPipelineContext(stateDir); } catch { /* best-effort */ }
+      try { clearPipelineContext(getStateDir()); } catch { /* best-effort */ }
       clearState();
       process.exit(1);
    });
+}
+
+// CLI entry point - only runs when executed directly, not when imported
+if (import.meta.main) {
+   await ralphMain();
 }

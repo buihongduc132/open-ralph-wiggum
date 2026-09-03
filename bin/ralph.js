@@ -4,8 +4,8 @@ var __require = import.meta.require;
 
 // ralph.ts
 var {$ } = globalThis.Bun;
-import { existsSync as existsSync6, readFileSync as readFileSync7, writeFileSync as writeFileSync6, mkdirSync as mkdirSync2, statSync as statSync3, lstatSync, renameSync as renameSync2 } from "fs";
-import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve2, sep } from "path";
+import { existsSync as existsSync8, readFileSync as readFileSync9, writeFileSync as writeFileSync7, mkdirSync as mkdirSync3, statSync as statSync3, lstatSync as lstatSync2, renameSync as renameSync3 } from "fs";
+import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute3, join as join5, resolve as resolve4, sep } from "path";
 
 // src/strip-ansi.ts
 var ANSI_PATTERN = /\x1b\[[0-9;]*[A-Za-z]/g;
@@ -1514,6 +1514,7 @@ function isYamlFrontmatter(body) {
 }
 
 // src/loop-helpers.ts
+import { existsSync as existsSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2, mkdirSync as mkdirSync2, lstatSync, renameSync } from "fs";
 var MAX_HISTORY_ITERATIONS = 200;
 var MAX_REPEATED_ERROR_KEYS = 50;
 var MAX_STALLING_EVENTS = 100;
@@ -1545,6 +1546,176 @@ function stripInjectedPrompt(rawText, sentPrompt) {
   }
   return stripped;
 }
+function saveHistory(history, historyPath, stateDir) {
+  if (!existsSync2(stateDir)) {
+    mkdirSync2(stateDir, { recursive: true });
+  }
+  writeFileSync2(historyPath, JSON.stringify(history, null, 2));
+}
+async function captureFileSnapshot() {
+  const files = new Map;
+  let degraded = false;
+  const cwd = process.cwd();
+  const gitText = async (args) => {
+    try {
+      const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+      const out = await new Response(proc.stdout).text();
+      await proc.exited;
+      return out;
+    } catch {
+      return "";
+    }
+  };
+  try {
+    const insideWorkTree = await gitText(["rev-parse", "--is-inside-work-tree"]);
+    if (insideWorkTree.trim() !== "true") {
+      return { files };
+    }
+    const status = await gitText(["-c", "status.showUntrackedFiles=no", "status", "--porcelain"]);
+    const trackedFiles = await gitText(["ls-files"]);
+    const allFiles = new Set;
+    for (const line of status.split(`
+`)) {
+      if (line.trim()) {
+        let path = line.substring(3).trim();
+        const arrowIdx = path.indexOf(" -> ");
+        if (arrowIdx !== -1) {
+          path = path.substring(arrowIdx + 4).trim();
+        }
+        allFiles.add(path);
+      }
+    }
+    for (const file of trackedFiles.split(`
+`)) {
+      if (file.trim()) {
+        allFiles.add(file.trim());
+      }
+    }
+    const pathList = [...allFiles].filter(Boolean);
+    if (pathList.length > 0) {
+      let batchOk = false;
+      try {
+        const hashProc = Bun.spawn(["git", "hash-object", "--stdin-paths"], {
+          cwd,
+          stdout: "pipe",
+          stderr: "pipe",
+          stdin: "pipe"
+        });
+        await Promise.allSettled([
+          hashProc.stdin.write(pathList.join(`
+`) + `
+`),
+          hashProc.stdin.end()
+        ]);
+        const hashOut = await new Response(hashProc.stdout).text();
+        const hashExit = await hashProc.exited;
+        if (hashExit === 0) {
+          batchOk = true;
+          const hashLines = hashOut.split(`
+`);
+          for (let i = 0;i < pathList.length; i++) {
+            const h = (hashLines[i] ?? "").trim();
+            if (h)
+              files.set(pathList[i], h);
+          }
+        }
+      } catch {
+        batchOk = false;
+      }
+      if (!batchOk || files.size < pathList.length) {
+        if (!batchOk)
+          degraded = true;
+        const statSync = __require("fs").statSync;
+        for (const file of pathList) {
+          if (files.has(file))
+            continue;
+          try {
+            files.set(file, `m:${statSync(file).mtimeMs}`);
+          } catch {
+            files.set(file, "deleted");
+          }
+        }
+      }
+    }
+  } catch {}
+  return { files, degraded };
+}
+function getModifiedFilesSinceSnapshot(before, after) {
+  if (before.degraded || after.degraded) {
+    return [];
+  }
+  const changedFiles = [];
+  for (const [file, hash] of after.files) {
+    const prevHash = before.files.get(file);
+    if (prevHash !== hash) {
+      changedFiles.push(file);
+    }
+  }
+  for (const [file] of before.files) {
+    if (!after.files.has(file)) {
+      changedFiles.push(file);
+    }
+  }
+  return changedFiles;
+}
+function extractErrors(output) {
+  const errors = [];
+  const lines = output.split(`
+`);
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+    if (lower.includes("error:") || lower.includes("failed:") || lower.includes("exception:") || lower.includes("typeerror") || lower.includes("syntaxerror") || lower.includes("referenceerror") || lower.includes("test") && lower.includes("fail")) {
+      const cleaned = line.trim().substring(0, 200);
+      if (cleaned && !errors.includes(cleaned)) {
+        errors.push(cleaned);
+      }
+    }
+  }
+  return errors.slice(0, 10);
+}
+async function appendIterationHistory(params) {
+  const iterationDuration = Date.now() - params.iterationStart;
+  const snapshotAfter = await captureFileSnapshot();
+  const filesModified = getModifiedFilesSinceSnapshot(params.snapshotBefore, snapshotAfter);
+  const errors = extractErrors(`${params.result}
+${params.stderr}`);
+  const iterationRecord = {
+    iteration: params.iteration,
+    startedAt: new Date(params.iterationStart).toISOString(),
+    endedAt: new Date().toISOString(),
+    durationMs: iterationDuration,
+    agent: params.currentAgent,
+    model: params.currentModel,
+    toolsUsed: Object.fromEntries(params.toolCounts),
+    filesModified,
+    exitCode: params.exitCode,
+    completionDetected: params.completionDetected,
+    errors
+  };
+  params.history.iterations.push(iterationRecord);
+  capHistoryIterations(params.history);
+  params.history.totalDurationMs += iterationDuration;
+  if (filesModified.length === 0) {
+    params.history.struggleIndicators.noProgressIterations++;
+  } else {
+    params.history.struggleIndicators.noProgressIterations = 0;
+  }
+  if (iterationDuration < 30000) {
+    params.history.struggleIndicators.shortIterations++;
+  } else {
+    params.history.struggleIndicators.shortIterations = 0;
+  }
+  if (errors.length === 0) {
+    params.history.struggleIndicators.repeatedErrors = {};
+  } else {
+    for (const error of errors) {
+      const key = error.substring(0, 100);
+      params.history.struggleIndicators.repeatedErrors[key] = (params.history.struggleIndicators.repeatedErrors[key] || 0) + 1;
+    }
+    capRepeatedErrors(params.history);
+  }
+  saveHistory(params.history, params.historyPath, params.stateDir);
+}
 function appendStallingEvent(history, event) {
   if (!history.stallingEvents)
     history.stallingEvents = [];
@@ -1556,7 +1727,7 @@ function appendStallingEvent(history, event) {
 
 // src/review-gate.ts
 import { randomBytes, createHash } from "crypto";
-import { existsSync as existsSync2, readFileSync as readFileSync3, appendFileSync } from "fs";
+import { existsSync as existsSync3, readFileSync as readFileSync4, appendFileSync } from "fs";
 function generateRunHash(cwd, stateDir) {
   const raw = `${cwd}:${stateDir}:${process.pid}:${Date.now()}:${randomBytes(8).toString("hex")}`;
   return createHash("sha256").update(raw).digest("hex").slice(0, 16);
@@ -1599,8 +1770,8 @@ If APPROVE: no additional explanation needed.`;
 function buildReviewPrompt(params) {
   let template = DEFAULT_REVIEW_PROMPT;
   if (params.customPromptTemplate) {
-    if (existsSync2(params.customPromptTemplate)) {
-      template = readFileSync3(params.customPromptTemplate, "utf-8");
+    if (existsSync3(params.customPromptTemplate)) {
+      template = readFileSync4(params.customPromptTemplate, "utf-8");
     } else {
       console.warn(`\u26A0\uFE0F Custom review prompt file not found: ${params.customPromptTemplate}. Using built-in prompt.`);
     }
@@ -1841,8 +2012,12 @@ function validateReviewConfig(config) {
   }
 }
 
+// src/runtime-config.ts
+import { existsSync as existsSync5, readFileSync as readFileSync6 } from "fs";
+import { dirname as dirname2, isAbsolute as isAbsolute2, resolve as resolve2 } from "path";
+
 // src/lifecycle-hooks.ts
-import { existsSync as existsSync3, readdirSync, statSync, readFileSync as readFileSync4, writeFileSync as writeFileSync3, unlinkSync } from "fs";
+import { existsSync as existsSync4, readdirSync, statSync, readFileSync as readFileSync5, writeFileSync as writeFileSync4, unlinkSync } from "fs";
 import { join as join2 } from "path";
 import { spawnSync } from "child_process";
 var TIMEOUT_BIN_AVAILABLE = (() => {
@@ -1883,11 +2058,11 @@ var PIPELINE_CONTEXT_END = "---END_PIPELINE_CONTEXT---";
 var PIPELINE_CONTEXT_FILE = "pipeline-context.json";
 function loadPipelineContext(stateDir) {
   const contextPath = join2(stateDir, PIPELINE_CONTEXT_FILE);
-  if (!existsSync3(contextPath)) {
+  if (!existsSync4(contextPath)) {
     return {};
   }
   try {
-    const content = readFileSync4(contextPath, "utf-8");
+    const content = readFileSync5(contextPath, "utf-8");
     return JSON.parse(content);
   } catch (err) {
     console.warn(`[hooks] Failed to load pipeline context: ${err}`);
@@ -1897,7 +2072,7 @@ function loadPipelineContext(stateDir) {
 function savePipelineContext(stateDir, context) {
   const contextPath = join2(stateDir, PIPELINE_CONTEXT_FILE);
   try {
-    writeFileSync3(contextPath, JSON.stringify(context, null, 2));
+    writeFileSync4(contextPath, JSON.stringify(context, null, 2));
   } catch (err) {
     console.warn(`[hooks] Failed to save pipeline context: ${err}`);
   }
@@ -1966,7 +2141,7 @@ function discoverHooks(options) {
   return sortHooks([...globalHooks, ...localHooks]);
 }
 function scanDirectory(dir, event, scope) {
-  if (!existsSync3(dir))
+  if (!existsSync4(dir))
     return [];
   const stat = statSync(dir);
   if (!stat.isDirectory())
@@ -2174,7 +2349,7 @@ function showPipelineContext(stateDir) {
 }
 function clearPipelineContext(stateDir) {
   const contextPath = join2(stateDir, PIPELINE_CONTEXT_FILE);
-  if (existsSync3(contextPath)) {
+  if (existsSync4(contextPath)) {
     try {
       unlinkSync(contextPath);
     } catch (err) {
@@ -2232,6 +2407,11 @@ function normalizeRuntimeConfigValue(path, value, expected) {
     process.exit(1);
   }
   return value;
+}
+function resolveConfigRelativePath2(baseFilePath, targetPath) {
+  if (!targetPath)
+    return targetPath;
+  return isAbsolute2(targetPath) ? targetPath : resolve2(dirname2(baseFilePath), targetPath);
 }
 var RECOGNIZED_TOML_KEYS = new Set([
   "prompt",
@@ -2320,6 +2500,82 @@ function normalizePreStartTimeout(value) {
   console.error(`Error: Ralph TOML config key 'pre_start_timeout' must be a number or "auto".`);
   process.exit(1);
 }
+function loadRuntimeTomlConfig(configPath, explicit) {
+  if (!existsSync5(configPath)) {
+    if (explicit) {
+      console.error(`Error: Ralph TOML config not found: ${configPath}`);
+      process.exit(1);
+    }
+    return null;
+  }
+  try {
+    const raw = readFileSync6(configPath, "utf-8");
+    const parsed = Bun.TOML.parse(raw);
+    enforceTomlStrictness(parsed);
+    const config = {};
+    config.prompt = normalizeRuntimeConfigValue("prompt", parsed.prompt, "string");
+    config.agent = normalizeRuntimeConfigValue("agent", parsed.agent, "string");
+    config.agent_binary = normalizeRuntimeConfigValue("agent_binary", parsed.agent_binary, "string");
+    config.min_iterations = normalizeRuntimeConfigValue("min_iterations", parsed.min_iterations, "number");
+    config.max_iterations = normalizeRuntimeConfigValue("max_iterations", parsed.max_iterations, "number");
+    config.completion_promise = normalizeRuntimeConfigValue("completion_promise", parsed.completion_promise, "string");
+    config.abort_promise = normalizeRuntimeConfigValue("abort_promise", parsed.abort_promise, "string");
+    config.tasks = normalizeRuntimeConfigValue("tasks", parsed.tasks, "boolean");
+    config.task_promise = normalizeRuntimeConfigValue("task_promise", parsed.task_promise, "string");
+    config.model = normalizeRuntimeConfigValue("model", parsed.model, "string");
+    config.rotation = normalizeRuntimeConfigValue("rotation", parsed.rotation, "string[]");
+    config.stalling_timeout = normalizeRuntimeConfigValue("stalling_timeout", parsed.stalling_timeout, "string");
+    config.blacklist_duration = normalizeRuntimeConfigValue("blacklist_duration", parsed.blacklist_duration, "string");
+    config.stalling_action = normalizeRuntimeConfigValue("stalling_action", parsed.stalling_action, "string");
+    config.heartbeat_interval = normalizeRuntimeConfigValue("heartbeat_interval", parsed.heartbeat_interval, "string");
+    config.pre_start_timeout = normalizePreStartTimeout(parsed.pre_start_timeout);
+    config.no_commit = normalizeRuntimeConfigValue("no_commit", parsed.no_commit, "boolean");
+    config.no_plugins = normalizeRuntimeConfigValue("no_plugins", parsed.no_plugins, "boolean");
+    config.allow_all = normalizeRuntimeConfigValue("allow_all", parsed.allow_all, "boolean");
+    config.prompt_file = normalizeRuntimeConfigValue("prompt_file", parsed.prompt_file, "string");
+    config.prompt_template = normalizeRuntimeConfigValue("prompt_template", parsed.prompt_template, "string");
+    config.stream = normalizeRuntimeConfigValue("stream", parsed.stream, "boolean");
+    config.verbose_tools = normalizeRuntimeConfigValue("verbose_tools", parsed.verbose_tools, "boolean");
+    config.questions = normalizeRuntimeConfigValue("questions", parsed.questions, "boolean");
+    config.agent_config = normalizeRuntimeConfigValue("agent_config", parsed.agent_config, "string");
+    config.extra_agent_flags = normalizeRuntimeConfigValue("extra_agent_flags", parsed.extra_agent_flags, "string[]");
+    config.stall_retries = normalizeRuntimeConfigValue("stall_retries", parsed.stall_retries, "boolean");
+    config.stall_retry_minutes = normalizeRuntimeConfigValue("stall_retry_minutes", parsed.stall_retry_minutes, "number");
+    config.reuse_check = normalizeRuntimeConfigValue("reuse_check", parsed.reuse_check, "string");
+    config.reuse_skip_model = normalizeRuntimeConfigValue("reuse_skip_model", parsed.reuse_skip_model, "boolean");
+    config.reuse_skip_agent = normalizeRuntimeConfigValue("reuse_skip_agent", parsed.reuse_skip_agent, "boolean");
+    config.reuse_skip_rotation = normalizeRuntimeConfigValue("reuse_skip_rotation", parsed.reuse_skip_rotation, "boolean");
+    config.reuse_skip_min_iterations = normalizeRuntimeConfigValue("reuse_skip_min_iterations", parsed.reuse_skip_min_iterations, "boolean");
+    config.reuse_skip_max_iterations = normalizeRuntimeConfigValue("reuse_skip_max_iterations", parsed.reuse_skip_max_iterations, "boolean");
+    config.json_display = normalizeRuntimeConfigValue("json_display", parsed.json_display, "string");
+    config.output_buffer_bytes = normalizeRuntimeConfigValue("output_buffer_bytes", parsed.output_buffer_bytes, "number");
+    if (config.json_display !== undefined && !["beautify", "raw", "text"].includes(config.json_display)) {
+      console.error(`Error: Invalid json_display value '${config.json_display}'. Must be 'beautify', 'raw', or 'text'.`);
+      process.exit(1);
+    }
+    if (config.output_buffer_bytes !== undefined && config.output_buffer_bytes < 0) {
+      console.error("Error: output_buffer_bytes must be non-negative.");
+      process.exit(1);
+    }
+    config.goal = normalizeRuntimeConfigValue("goal", parsed.goal, "string");
+    config.goal_dir = normalizeRuntimeConfigValue("goal_dir", parsed.goal_dir, "string");
+    config.goal_promise = normalizeRuntimeConfigValue("goal_promise", parsed.goal_promise, "string");
+    if (config.prompt_file) {
+      config.prompt_file = resolveConfigRelativePath2(configPath, config.prompt_file);
+    }
+    if (config.prompt_template) {
+      config.prompt_template = resolveConfigRelativePath2(configPath, config.prompt_template);
+    }
+    if (config.agent_config) {
+      config.agent_config = resolveConfigRelativePath2(configPath, config.agent_config);
+    }
+    return config;
+  } catch (error) {
+    console.error(`Error: Failed to parse Ralph TOML config at ${configPath}`);
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
 function parseReviewConfig(parsed) {
   const reviewSection = parsed.review;
   if (!reviewSection || typeof reviewSection !== "object") {
@@ -2381,16 +2637,519 @@ function isInitConfigPathShaped(token) {
     return false;
   return token.startsWith("./") || token.startsWith("/") || token.startsWith("~") || token.endsWith(".json");
 }
+function parseDuration(input) {
+  const trimmed = input.trim();
+  if (trimmed === "-1") {
+    return Infinity;
+  }
+  if (/^\d+$/.test(trimmed)) {
+    return parseInt(trimmed);
+  }
+  const match = trimmed.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h)$/i);
+  if (!match) {
+    throw new Error(`Invalid duration format '${input}'. Use number or number+unit (e.g., 5000, 30s, 5m, 2h)`);
+  }
+  const value = parseFloat(match[1]);
+  const unit = match[2].toLowerCase();
+  switch (unit) {
+    case "ms":
+      return value;
+    case "s":
+      return value * 1000;
+    case "m":
+      return value * 60 * 1000;
+    case "h":
+      return value * 60 * 60 * 1000;
+    default:
+      throw new Error(`Unknown duration unit '${unit}'`);
+  }
+}
+function parseRotationInput(raw, validAgents) {
+  const entries = raw.split(",").map((entry) => entry.trim());
+  const parsed = [];
+  for (const entry of entries) {
+    const parts = entry.split(":");
+    if (parts.length !== 2) {
+      throw new Error(`Invalid rotation entry '${entry}'. Expected format: agent:model`);
+    }
+    const agent = parts[0].trim();
+    const modelName = parts[1].trim();
+    if (!agent || !modelName) {
+      throw new Error(`Invalid rotation entry '${entry}'. Both agent and model are required.`);
+    }
+    if (!validAgents.includes(agent)) {
+      throw new Error(`Invalid agent '${agent}' in rotation entry '${entry}'. Valid agents: ${validAgents.join(", ")}`);
+    }
+    parsed.push(`${agent}:${modelName}`);
+  }
+  return parsed;
+}
+function getDefaultMainArgs() {
+  return {
+    prompt: "",
+    agentType: "opencode",
+    minIterations: 1,
+    maxIterations: 0,
+    completionPromise: "COMPLETE",
+    abortPromise: "",
+    tasksMode: false,
+    taskPromise: "READY_FOR_NEXT_TASK",
+    model: "",
+    rotationInput: "",
+    autoCommit: true,
+    disablePlugins: false,
+    allowAllPermissions: true,
+    promptFile: "",
+    promptTemplatePath: "",
+    streamOutput: true,
+    verboseTools: false,
+    handleQuestions: true,
+    stallingTimeoutMs: 2 * 60 * 60 * 1000,
+    blacklistDurationMs: 8 * 60 * 60 * 1000,
+    stallingAction: "stop",
+    heartbeatIntervalMs: 1e4,
+    preStartTimeoutMs: -1,
+    stallRetries: false,
+    stallRetryMinutes: 15,
+    reuseState: false,
+    extraAgentFlags: [],
+    passthroughAgentFlags: [],
+    agentBinary: "",
+    promptParts: [],
+    disableHooks: false,
+    verboseHooks: false,
+    hookTimeoutMsFlag: undefined,
+    reuseCheck: "strict",
+    reuseSkipModel: false,
+    reuseSkipAgent: false,
+    reuseSkipRotation: false,
+    reuseSkipMinIterations: false,
+    reuseSkipMaxIterations: false,
+    maxIterationsProvided: false,
+    minIterationsProvided: false,
+    stallingTimeoutProvided: false,
+    blacklistDurationProvided: false,
+    stallingActionProvided: false,
+    stallRetriesProvided: false,
+    stallRetryMinutesProvided: false,
+    goalPath: "",
+    goalDir: "",
+    initGoal: "",
+    listGoals: false,
+    goalStatus: false
+  };
+}
+function applyTomlConfig(result, config) {
+  if (config.prompt)
+    result.prompt = config.prompt;
+  if (config.agent)
+    result.agentType = config.agent;
+  if (config.agent_binary)
+    result.agentBinary = config.agent_binary;
+  if (config.min_iterations !== undefined)
+    result.minIterations = config.min_iterations;
+  if (config.max_iterations !== undefined)
+    result.maxIterations = config.max_iterations;
+  if (config.completion_promise)
+    result.completionPromise = config.completion_promise;
+  if (config.abort_promise)
+    result.abortPromise = config.abort_promise;
+  if (config.tasks !== undefined)
+    result.tasksMode = config.tasks;
+  if (config.task_promise)
+    result.taskPromise = config.task_promise;
+  if (config.model)
+    result.model = config.model;
+  if (config.rotation?.length)
+    result.rotationInput = config.rotation.join(",");
+  if (config.stalling_timeout) {
+    result.stallingTimeoutMs = parseDuration(config.stalling_timeout);
+    result.stallingTimeoutProvided = true;
+  }
+  if (config.blacklist_duration) {
+    result.blacklistDurationMs = parseDuration(config.blacklist_duration);
+    result.blacklistDurationProvided = true;
+  }
+  if (config.stalling_action) {
+    if (config.stalling_action !== "stop" && config.stalling_action !== "rotate") {
+      throw new Error(`Invalid stalling_action '${config.stalling_action}'. Must be 'stop' or 'rotate'.`);
+    }
+    result.stallingAction = config.stalling_action;
+    result.stallingActionProvided = true;
+  }
+  if (config.heartbeat_interval)
+    result.heartbeatIntervalMs = parseDuration(config.heartbeat_interval);
+  if (config.no_commit !== undefined)
+    result.autoCommit = !config.no_commit;
+  if (config.no_plugins !== undefined)
+    result.disablePlugins = config.no_plugins;
+  if (config.allow_all !== undefined)
+    result.allowAllPermissions = config.allow_all;
+  if (config.prompt_file)
+    result.promptFile = config.prompt_file;
+  if (config.prompt_template)
+    result.promptTemplatePath = config.prompt_template;
+  if (config.stream !== undefined)
+    result.streamOutput = config.stream;
+  if (config.verbose_tools !== undefined)
+    result.verboseTools = config.verbose_tools;
+  if (config.questions !== undefined)
+    result.handleQuestions = config.questions;
+  if (config.extra_agent_flags?.length) {
+    result.extraAgentFlags = [...config.extra_agent_flags, ...result.extraAgentFlags];
+  }
+  if (config.stall_retries !== undefined) {
+    result.stallRetries = config.stall_retries;
+    result.stallRetriesProvided = true;
+  }
+  if (config.stall_retry_minutes !== undefined) {
+    result.stallRetryMinutes = config.stall_retry_minutes;
+    result.stallRetryMinutesProvided = true;
+  }
+  if (config.reuse_check) {
+    const validModes = ["strict", "relaxed", "off"];
+    if (!validModes.includes(config.reuse_check)) {
+      throw new Error(`Invalid reuse_check '${config.reuse_check}'. Must be one of: ${validModes.join(", ")}`);
+    }
+    result.reuseCheck = config.reuse_check;
+  }
+  if (config.reuse_skip_model !== undefined)
+    result.reuseSkipModel = config.reuse_skip_model;
+  if (config.reuse_skip_agent !== undefined)
+    result.reuseSkipAgent = config.reuse_skip_agent;
+  if (config.reuse_skip_rotation !== undefined)
+    result.reuseSkipRotation = config.reuse_skip_rotation;
+  if (config.reuse_skip_min_iterations !== undefined)
+    result.reuseSkipMinIterations = config.reuse_skip_min_iterations;
+  if (config.reuse_skip_max_iterations !== undefined)
+    result.reuseSkipMaxIterations = config.reuse_skip_max_iterations;
+  if (config.goal)
+    result.goalPath = config.goal;
+  if (config.goal_dir)
+    result.goalDir = config.goal_dir;
+  if (config.goal_promise && (config.goal || config.goal_dir)) {
+    result.completionPromise = config.goal_promise;
+  }
+}
+function parseMainArgs(args, validAgents, base) {
+  const result = base ?? getDefaultMainArgs();
+  const doubleDashIndex = args.indexOf("--");
+  if (doubleDashIndex !== -1) {
+    result.passthroughAgentFlags = args.slice(doubleDashIndex + 1);
+    args = args.slice(0, doubleDashIndex);
+  }
+  for (let i = 0;i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--agent") {
+      const val = args[++i];
+      if (!val || !validAgents.includes(val)) {
+        throw new Error(`--agent requires one of: ${validAgents.join(", ")}`);
+      }
+      result.agentType = val;
+    } else if (arg === "--agent-binary") {
+      const val = args[++i];
+      if (!val) {
+        throw new Error("--agent-binary requires a path or binary name");
+      }
+      result.agentBinary = val;
+    } else if (arg === "--min-iterations") {
+      const val = args[++i];
+      if (!val || isNaN(parseInt(val))) {
+        throw new Error("--min-iterations requires a number");
+      }
+      result.minIterations = parseInt(val);
+      result.minIterationsProvided = true;
+    } else if (arg === "--max-iterations") {
+      const val = args[++i];
+      if (!val || isNaN(parseInt(val))) {
+        throw new Error("--max-iterations requires a number");
+      }
+      result.maxIterations = parseInt(val);
+      result.maxIterationsProvided = true;
+    } else if (arg === "--completion-promise") {
+      const val = args[++i];
+      if (!val) {
+        throw new Error("--completion-promise requires a value");
+      }
+      result.completionPromise = val;
+    } else if (arg === "--abort-promise") {
+      const val = args[++i];
+      if (!val) {
+        throw new Error("--abort-promise requires a value");
+      }
+      result.abortPromise = val;
+    } else if (arg === "--tasks" || arg === "-t") {
+      result.tasksMode = true;
+    } else if (arg === "--task-promise") {
+      const val = args[++i];
+      if (!val) {
+        throw new Error("--task-promise requires a value");
+      }
+      result.taskPromise = val;
+    } else if (arg === "--rotation") {
+      const val = args[++i];
+      if (!val) {
+        throw new Error("--rotation requires a value");
+      }
+      result.rotationInput = val;
+    } else if (arg === "--stalling-timeout") {
+      const val = args[++i];
+      if (!val) {
+        throw new Error("--stalling-timeout requires a value");
+      }
+      result.stallingTimeoutMs = parseDuration(val);
+      result.stallingTimeoutProvided = true;
+    } else if (arg === "--blacklist-duration") {
+      const val = args[++i];
+      if (!val) {
+        throw new Error("--blacklist-duration requires a value");
+      }
+      const ms = parseDuration(val);
+      if (!Number.isFinite(ms) || ms <= 0) {
+        throw new Error(`--blacklist-duration must be a positive duration (got '${val}')`);
+      }
+      result.blacklistDurationMs = ms;
+      result.blacklistDurationProvided = true;
+    } else if (arg === "--stalling-action") {
+      const val = args[++i];
+      if (!val || val !== "stop" && val !== "rotate") {
+        throw new Error("--stalling-action requires 'stop' or 'rotate'");
+      }
+      result.stallingAction = val;
+      result.stallingActionProvided = true;
+    } else if (arg === "--heartbeat-interval") {
+      const val = args[++i];
+      if (!val) {
+        throw new Error("--heartbeat-interval requires a value");
+      }
+      result.heartbeatIntervalMs = parseDuration(val);
+    } else if (arg === "--pre-start-timeout") {
+      const val = args[++i];
+      if (!val) {
+        throw new Error("--pre-start-timeout requires a value (ms, or -1 to disable)");
+      }
+      result.preStartTimeoutMs = parseDuration(val);
+    } else if (arg === "--model") {
+      const val = args[++i];
+      if (!val) {
+        throw new Error("--model requires a value");
+      }
+      result.model = val;
+    } else if (arg === "--prompt-file" || arg === "--file" || arg === "-f") {
+      const val = args[++i];
+      if (!val) {
+        throw new Error("--prompt-file requires a file path");
+      }
+      result.promptFile = val;
+    } else if (arg === "--prompt-template") {
+      const val = args[++i];
+      if (!val) {
+        throw new Error("--prompt-template requires a file path");
+      }
+      result.promptTemplatePath = val;
+    } else if (arg === "--no-stream") {
+      result.streamOutput = false;
+    } else if (arg === "--stream") {
+      result.streamOutput = true;
+    } else if (arg === "--verbose-tools") {
+      result.verboseTools = true;
+    } else if (arg === "--no-commit") {
+      result.autoCommit = false;
+    } else if (arg === "--no-plugins") {
+      result.disablePlugins = true;
+    } else if (arg === "--no-hooks") {
+      result.disableHooks = true;
+    } else if (arg === "--verbose-hooks") {
+      result.verboseHooks = true;
+    } else if (arg === "--hook-timeout") {
+      const val = args[++i];
+      if (val === undefined) {
+        throw new Error("--hook-timeout requires a number");
+      }
+      result.hookTimeoutMsFlag = val;
+    } else if (arg === "--allow-all") {
+      result.allowAllPermissions = true;
+    } else if (arg === "--no-allow-all") {
+      result.allowAllPermissions = false;
+    } else if (arg === "--reuse-state") {
+      result.reuseState = true;
+    } else if (arg === "--questions") {
+      result.handleQuestions = true;
+    } else if (arg === "--no-questions") {
+      result.handleQuestions = false;
+    } else if (arg === "--stall-retries") {
+      result.stallRetries = true;
+      result.stallRetriesProvided = true;
+    } else if (arg === "--no-stall-retries") {
+      result.stallRetries = false;
+      result.stallRetriesProvided = true;
+    } else if (arg === "--stall-retry-minutes") {
+      const val = args[++i];
+      if (!val || Number.isNaN(Number(val))) {
+        throw new Error("--stall-retry-minutes requires a number");
+      }
+      result.stallRetryMinutes = Number(val);
+      result.stallRetryMinutesProvided = true;
+    } else if (arg === "--goal") {
+      const val = args[++i];
+      if (!val) {
+        throw new Error("--goal requires a path to goal.md");
+      }
+      result.goalPath = val;
+    } else if (arg === "--goal-dir") {
+      const val = args[++i];
+      if (!val) {
+        throw new Error("--goal-dir requires a directory path");
+      }
+      result.goalDir = val;
+    } else if (arg === "--init-goal") {
+      const val = args[++i];
+      if (!val) {
+        throw new Error("--init-goal requires a title");
+      }
+      result.initGoal = val;
+    } else if (arg === "--list-goals") {
+      result.listGoals = true;
+    } else if (arg === "--goal-status") {
+      result.goalStatus = true;
+    } else if (arg === "--state-dir") {
+      i++;
+    } else if (arg === "--toml-config") {
+      i++;
+    } else if (arg === "--config") {
+      i++;
+    } else if (arg === "--init-config") {
+      const next = args[i + 1];
+      if (next !== undefined && isInitConfigPathShaped(next)) {
+        i++;
+      }
+    } else if (arg.startsWith("-")) {
+      throw new Error(`Unknown option: ${arg}`);
+    } else {
+      result.promptParts.push(arg);
+    }
+  }
+  return result;
+}
+function applyPassthroughOverrides(result, setStatePaths) {
+  const flags = result.passthroughAgentFlags;
+  for (let i = 0;i < flags.length; i++) {
+    if (flags[i] === "--model" && flags[i + 1]) {
+      result.model = flags[i + 1];
+      i++;
+    } else if (flags[i] === "--max-iterations" && flags[i + 1]) {
+      const v = flags[i + 1];
+      if (!/^\d+$/.test(v)) {
+        throw new Error(`--max-iterations requires a non-negative integer, got '${v}'`);
+      }
+      result.maxIterations = parseInt(v);
+      i++;
+    } else if (flags[i] === "--min-iterations" && flags[i + 1]) {
+      const v = flags[i + 1];
+      if (!/^\d+$/.test(v)) {
+        throw new Error(`--min-iterations requires a non-negative integer, got '${v}'`);
+      }
+      result.minIterations = parseInt(v);
+      i++;
+    } else if (flags[i] === "--completion-promise" && flags[i + 1]) {
+      result.completionPromise = flags[i + 1];
+      i++;
+    } else if (flags[i] === "--abort-promise" && flags[i + 1]) {
+      result.abortPromise = flags[i + 1];
+      i++;
+    } else if (flags[i] === "--stalling-timeout" && flags[i + 1]) {
+      result.stallingTimeoutMs = parseDuration(flags[i + 1]);
+      i++;
+    } else if (flags[i] === "--blacklist-duration" && flags[i + 1]) {
+      const v = flags[i + 1];
+      const ms = parseDuration(v);
+      if (!Number.isFinite(ms) || ms <= 0) {
+        throw new Error(`--blacklist-duration must be a positive duration, got '${v}'`);
+      }
+      result.blacklistDurationMs = ms;
+      i++;
+    } else if (flags[i] === "--stalling-action" && flags[i + 1]) {
+      const v = flags[i + 1];
+      if (v !== "stop" && v !== "rotate") {
+        throw new Error(`--stalling-action requires 'stop' or 'rotate', got '${v}'`);
+      }
+      result.stallingAction = v;
+      i++;
+    } else if (flags[i] === "--stall-retries") {
+      result.stallRetries = true;
+    } else if (flags[i] === "--no-stall-retries") {
+      result.stallRetries = false;
+    } else if (flags[i] === "--stall-retry-minutes" && flags[i + 1]) {
+      result.stallRetryMinutes = parseInt(flags[i + 1]);
+      i++;
+    } else if (flags[i] === "--state-dir" && flags[i + 1]) {
+      if (setStatePaths) {
+        const { resolve: resolve3 } = __require("path");
+        setStatePaths(resolve3(flags[i + 1]));
+      }
+      i++;
+    }
+  }
+}
+
+// src/state-paths.ts
+import { join as join3, resolve as resolve3, relative } from "path";
+var stateDir = join3(process.cwd(), ".ralph");
+var statePath = join3(stateDir, "ralph-loop.state.json");
+var contextPath = join3(stateDir, "ralph-context.md");
+var historyPath = join3(stateDir, "ralph-history.json");
+var tasksPath = join3(stateDir, "ralph-tasks.md");
+var questionsPath = join3(stateDir, "ralph-questions.json");
+function setStatePaths(nextStateDir) {
+  stateDir = resolve3(nextStateDir);
+  statePath = join3(stateDir, "ralph-loop.state.json");
+  contextPath = join3(stateDir, "ralph-context.md");
+  historyPath = join3(stateDir, "ralph-history.json");
+  tasksPath = join3(stateDir, "ralph-tasks.md");
+  questionsPath = join3(stateDir, "ralph-questions.json");
+}
+function formatStatePath(path) {
+  const rel = relative(process.cwd(), path);
+  if (!rel || rel === "")
+    return ".";
+  if (!rel.startsWith(".."))
+    return rel;
+  return path;
+}
+function currentStateDirLabel() {
+  return formatStatePath(stateDir);
+}
+function currentTasksFileLabel() {
+  return formatStatePath(tasksPath);
+}
+function getStateDir() {
+  return stateDir;
+}
+function getStatePath() {
+  return statePath;
+}
+function getContextPath() {
+  return contextPath;
+}
+function getHistoryPath() {
+  return historyPath;
+}
+function getTasksPath() {
+  return tasksPath;
+}
+function getQuestionsPath() {
+  return questionsPath;
+}
 
 // src/goal-parser.ts
-import { readFileSync as readFileSync5, writeFileSync as writeFileSync4 } from "fs";
+import { readFileSync as readFileSync7, writeFileSync as writeFileSync5 } from "fs";
 function parseGoalMd(filePath, slug) {
   if (!filePath) {
     throw new Error(`goal.md path is empty`);
   }
   let content;
   try {
-    content = readFileSync5(filePath, "utf-8");
+    content = readFileSync7(filePath, "utf-8");
   } catch {
     throw new Error(`goal.md not found: ${filePath}`);
   }
@@ -2487,7 +3246,7 @@ function escapeRegex2(str) {
 }
 
 // src/goal-state.ts
-import { readFileSync as readFileSync6, writeFileSync as writeFileSync5, existsSync as existsSync4 } from "fs";
+import { readFileSync as readFileSync8, writeFileSync as writeFileSync6, existsSync as existsSync6 } from "fs";
 var VALID_PHASES = ["planning", "executing", "verifying", "done"];
 var VALID_PHASE_SET = new Set(VALID_PHASES);
 var PHASE_ORDER = {
@@ -2533,10 +3292,10 @@ function validateNestedFields(parsed) {
   return true;
 }
 function loadGoalState(filePath) {
-  if (!existsSync4(filePath))
+  if (!existsSync6(filePath))
     return null;
   try {
-    const raw = readFileSync6(filePath, "utf-8");
+    const raw = readFileSync8(filePath, "utf-8");
     const parsed = JSON.parse(raw);
     if (typeof parsed?.slug !== "string" || typeof parsed?.phase !== "string" || !VALID_PHASE_SET.has(parsed.phase) || typeof parsed?.startedAt !== "string" || typeof parsed?.lastIterationAt !== "string" || typeof parsed?.completionPromise !== "string") {
       return null;
@@ -2552,7 +3311,7 @@ function loadGoalState(filePath) {
   }
 }
 function saveGoalState(filePath, state) {
-  writeFileSync5(filePath, JSON.stringify(state, null, 2), "utf-8");
+  writeFileSync6(filePath, JSON.stringify(state, null, 2), "utf-8");
 }
 function transitionPhase(state, target) {
   const currentIdx = PHASE_ORDER[state.phase];
@@ -2647,8 +3406,8 @@ function syncGoalStateAfterIteration(goalFilePath, goalStateFilePath, iteration,
 }
 
 // src/goal-inventory.ts
-import { existsSync as existsSync5, readdirSync as readdirSync2, statSync as statSync2 } from "fs";
-import { join as join3 } from "path";
+import { existsSync as existsSync7, readdirSync as readdirSync2, statSync as statSync2 } from "fs";
+import { join as join4 } from "path";
 var PHASE_PRIORITY = {
   executing: 0,
   verifying: 1,
@@ -2656,7 +3415,7 @@ var PHASE_PRIORITY = {
   done: 3
 };
 function buildInventory(goalsDir) {
-  if (!existsSync5(goalsDir))
+  if (!existsSync7(goalsDir))
     return { goals: [] };
   let entries;
   try {
@@ -2666,7 +3425,7 @@ function buildInventory(goalsDir) {
   }
   const goals = [];
   for (const entry of entries) {
-    const entryPath = join3(goalsDir, entry);
+    const entryPath = join4(goalsDir, entry);
     let stat;
     try {
       stat = statSync2(entryPath);
@@ -2675,16 +3434,16 @@ function buildInventory(goalsDir) {
     }
     if (!stat.isDirectory())
       continue;
-    const goalMdPath = join3(entryPath, "goal.md");
-    if (!existsSync5(goalMdPath))
+    const goalMdPath = join4(entryPath, "goal.md");
+    if (!existsSync7(goalMdPath))
       continue;
     try {
       const goal = parseGoalMd(goalMdPath, entry);
-      const statePath = join3(entryPath, "goal.state.json");
+      const statePath2 = join4(entryPath, "goal.state.json");
       let phase = "planning";
       let lastIterationAt = "";
       let factsVerified = goal.facts.filter((f) => f.verified).length;
-      const loadedState = loadGoalState(statePath);
+      const loadedState = loadGoalState(statePath2);
       if (loadedState) {
         phase = loadedState.phase;
         lastIterationAt = loadedState.lastIterationAt;
@@ -2841,64 +3600,37 @@ function titleToSlug(title) {
 // ralph.ts
 var VERSION = "1.3.0";
 var IS_WINDOWS2 = process.platform === "win32";
-var stateDir = join4(process.cwd(), ".ralph");
-var statePath = join4(stateDir, "ralph-loop.state.json");
-var contextPath = join4(stateDir, "ralph-context.md");
-var historyPath = join4(stateDir, "ralph-history.json");
-var tasksPath = join4(stateDir, "ralph-tasks.md");
-var questionsPath = join4(stateDir, "ralph-questions.json");
-function setStatePaths(nextStateDir) {
-  stateDir = resolve2(nextStateDir);
-  statePath = join4(stateDir, "ralph-loop.state.json");
-  contextPath = join4(stateDir, "ralph-context.md");
-  historyPath = join4(stateDir, "ralph-history.json");
-  tasksPath = join4(stateDir, "ralph-tasks.md");
-  questionsPath = join4(stateDir, "ralph-questions.json");
-}
 function ensureStateDir() {
-  if (existsSync6(stateDir)) {
+  const stateDir2 = getStateDir();
+  if (existsSync8(getStateDir())) {
     try {
-      const stats = statSync3(stateDir);
+      const stats = statSync3(getStateDir());
       if (!stats.isDirectory()) {
-        const linkStats = lstatSync(stateDir);
+        const linkStats = lstatSync2(getStateDir());
         console.error(`
 \u274C Ralph Initialization Failed`);
-        console.error(`   ${stateDir} exists but is not a directory!`);
+        console.error(`   ${getStateDir()} exists but is not a directory!`);
         console.error(`   Type: ${linkStats?.isSymbolicLink() ? "symlink" : "file"}`);
         console.error(`
-Fix: rm ${stateDir}  # remove the file/symlink`);
-        console.error(`     mkdir ${stateDir}  # then recreate as a directory`);
+Fix: rm ${getStateDir()}  # remove the file/symlink`);
+        console.error(`     mkdir ${getStateDir()}  # then recreate as a directory`);
         process.exit(1);
       }
     } catch (err) {
       console.error(`
 \u274C Ralph Initialization Failed`);
-      console.error(`   Cannot access ${stateDir}: ${err}`);
+      console.error(`   Cannot access ${getStateDir()}: ${err}`);
       process.exit(1);
     }
   }
 }
-function formatStatePath(path) {
-  const rel = relative(process.cwd(), path);
-  if (!rel || rel === "")
-    return ".";
-  if (!rel.startsWith(".."))
-    return rel;
-  return path;
-}
-function currentStateDirLabel() {
-  return formatStatePath(stateDir);
-}
-function currentTasksFileLabel() {
-  return formatStatePath(tasksPath);
-}
 var customConfigPath = "";
 var initConfigPath = undefined;
 var AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot", "cursor-agent", "grok", "agy", "hermes"];
-var DEFAULT_CONFIG_PATH2 = join4(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
-var stateDirInput = join4(process.cwd(), ".ralph");
+var DEFAULT_CONFIG_PATH2 = join5(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
+var stateDirInput = join5(process.cwd(), ".ralph");
 function ensureRalphConfig2(options) {
-  return ensureRalphConfig(options, stateDir);
+  return ensureRalphConfig(options, getStateDir());
 }
 var ENV_TEMPLATES2 = {
   opencode: (options) => {
@@ -2915,10 +3647,10 @@ var ENV_TEMPLATES2 = {
 };
 function loadAgentConfig(configPath) {
   const path = configPath || DEFAULT_CONFIG_PATH2;
-  if (!existsSync6(path))
+  if (!existsSync8(path))
     return null;
   try {
-    const content = readFileSync7(path, "utf-8");
+    const content = readFileSync9(path, "utf-8");
     const config = JSON.parse(content);
     const agents = {};
     for (const agent of config.agents) {
@@ -3236,117 +3968,6 @@ show_status = true
 reminder = "These are recent state entries for context."
 `;
 }
-function normalizeRuntimeConfigValue2(path, value, expected) {
-  if (value === undefined)
-    return;
-  if (expected === "string") {
-    if (typeof value !== "string") {
-      console.error(`Error: Ralph TOML config key '${path}' must be a string.`);
-      process.exit(1);
-    }
-    return value;
-  }
-  if (expected === "number") {
-    if (typeof value !== "number" || Number.isNaN(value)) {
-      console.error(`Error: Ralph TOML config key '${path}' must be a number.`);
-      process.exit(1);
-    }
-    return value;
-  }
-  if (expected === "boolean") {
-    if (typeof value !== "boolean") {
-      console.error(`Error: Ralph TOML config key '${path}' must be a boolean.`);
-      process.exit(1);
-    }
-    return value;
-  }
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
-    console.error(`Error: Ralph TOML config key '${path}' must be an array of strings.`);
-    process.exit(1);
-  }
-  return value;
-}
-function resolveConfigRelativePath2(baseFilePath, targetPath) {
-  if (!targetPath)
-    return targetPath;
-  return isAbsolute2(targetPath) ? targetPath : resolve2(dirname2(baseFilePath), targetPath);
-}
-function loadRuntimeTomlConfig(configPath, explicit) {
-  if (!existsSync6(configPath)) {
-    if (explicit) {
-      console.error(`Error: Ralph TOML config not found: ${configPath}`);
-      process.exit(1);
-    }
-    return null;
-  }
-  try {
-    const raw = readFileSync7(configPath, "utf-8");
-    const parsed = Bun.TOML.parse(raw);
-    enforceTomlStrictness(parsed);
-    const config = {};
-    config.prompt = normalizeRuntimeConfigValue2("prompt", parsed.prompt, "string");
-    config.agent = normalizeRuntimeConfigValue2("agent", parsed.agent, "string");
-    config.agent_binary = normalizeRuntimeConfigValue2("agent_binary", parsed.agent_binary, "string");
-    config.min_iterations = normalizeRuntimeConfigValue2("min_iterations", parsed.min_iterations, "number");
-    config.max_iterations = normalizeRuntimeConfigValue2("max_iterations", parsed.max_iterations, "number");
-    config.completion_promise = normalizeRuntimeConfigValue2("completion_promise", parsed.completion_promise, "string");
-    config.abort_promise = normalizeRuntimeConfigValue2("abort_promise", parsed.abort_promise, "string");
-    config.tasks = normalizeRuntimeConfigValue2("tasks", parsed.tasks, "boolean");
-    config.task_promise = normalizeRuntimeConfigValue2("task_promise", parsed.task_promise, "string");
-    config.model = normalizeRuntimeConfigValue2("model", parsed.model, "string");
-    config.rotation = normalizeRuntimeConfigValue2("rotation", parsed.rotation, "string[]");
-    config.stalling_timeout = normalizeRuntimeConfigValue2("stalling_timeout", parsed.stalling_timeout, "string");
-    config.blacklist_duration = normalizeRuntimeConfigValue2("blacklist_duration", parsed.blacklist_duration, "string");
-    config.stalling_action = normalizeRuntimeConfigValue2("stalling_action", parsed.stalling_action, "string");
-    config.heartbeat_interval = normalizeRuntimeConfigValue2("heartbeat_interval", parsed.heartbeat_interval, "string");
-    config.pre_start_timeout = normalizePreStartTimeout(parsed.pre_start_timeout);
-    config.no_commit = normalizeRuntimeConfigValue2("no_commit", parsed.no_commit, "boolean");
-    config.no_plugins = normalizeRuntimeConfigValue2("no_plugins", parsed.no_plugins, "boolean");
-    config.allow_all = normalizeRuntimeConfigValue2("allow_all", parsed.allow_all, "boolean");
-    config.prompt_file = normalizeRuntimeConfigValue2("prompt_file", parsed.prompt_file, "string");
-    config.prompt_template = normalizeRuntimeConfigValue2("prompt_template", parsed.prompt_template, "string");
-    config.stream = normalizeRuntimeConfigValue2("stream", parsed.stream, "boolean");
-    config.verbose_tools = normalizeRuntimeConfigValue2("verbose_tools", parsed.verbose_tools, "boolean");
-    config.questions = normalizeRuntimeConfigValue2("questions", parsed.questions, "boolean");
-    config.agent_config = normalizeRuntimeConfigValue2("agent_config", parsed.agent_config, "string");
-    config.extra_agent_flags = normalizeRuntimeConfigValue2("extra_agent_flags", parsed.extra_agent_flags, "string[]");
-    config.stall_retries = normalizeRuntimeConfigValue2("stall_retries", parsed.stall_retries, "boolean");
-    config.stall_retry_minutes = normalizeRuntimeConfigValue2("stall_retry_minutes", parsed.stall_retry_minutes, "number");
-    config.reuse_check = normalizeRuntimeConfigValue2("reuse_check", parsed.reuse_check, "string");
-    config.reuse_skip_model = normalizeRuntimeConfigValue2("reuse_skip_model", parsed.reuse_skip_model, "boolean");
-    config.reuse_skip_agent = normalizeRuntimeConfigValue2("reuse_skip_agent", parsed.reuse_skip_agent, "boolean");
-    config.reuse_skip_rotation = normalizeRuntimeConfigValue2("reuse_skip_rotation", parsed.reuse_skip_rotation, "boolean");
-    config.reuse_skip_min_iterations = normalizeRuntimeConfigValue2("reuse_skip_min_iterations", parsed.reuse_skip_min_iterations, "boolean");
-    config.reuse_skip_max_iterations = normalizeRuntimeConfigValue2("reuse_skip_max_iterations", parsed.reuse_skip_max_iterations, "boolean");
-    config.json_display = normalizeRuntimeConfigValue2("json_display", parsed.json_display, "string");
-    config.output_buffer_bytes = normalizeRuntimeConfigValue2("output_buffer_bytes", parsed.output_buffer_bytes, "number");
-    if (config.json_display !== undefined && !["beautify", "raw", "text"].includes(config.json_display)) {
-      console.error(`Error: Invalid json_display value '${config.json_display}'. Must be 'beautify', 'raw', or 'text'.`);
-      process.exit(1);
-    }
-    if (config.output_buffer_bytes !== undefined && config.output_buffer_bytes < 0) {
-      console.error("Error: output_buffer_bytes must be non-negative.");
-      process.exit(1);
-    }
-    config.goal = normalizeRuntimeConfigValue2("goal", parsed.goal, "string");
-    config.goal_dir = normalizeRuntimeConfigValue2("goal_dir", parsed.goal_dir, "string");
-    config.goal_promise = normalizeRuntimeConfigValue2("goal_promise", parsed.goal_promise, "string");
-    if (config.prompt_file) {
-      config.prompt_file = resolveConfigRelativePath2(configPath, config.prompt_file);
-    }
-    if (config.prompt_template) {
-      config.prompt_template = resolveConfigRelativePath2(configPath, config.prompt_template);
-    }
-    if (config.agent_config) {
-      config.agent_config = resolveConfigRelativePath2(configPath, config.agent_config);
-    }
-    return config;
-  } catch (error) {
-    console.error(`Error: Failed to parse Ralph TOML config at ${configPath}`);
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  }
-}
 function extractStateDirBasename(dir) {
   return dir.replace(/[/\\]+$/, "").replace(/.*[\/\\]/, "") || dir;
 }
@@ -3354,13 +3975,13 @@ function loadRulesToml(currentStateDir) {
   const stateDirName = extractStateDirBasename(currentStateDir);
   const tomlName = `.ralph-${stateDirName}.toml`;
   const candidates = [
-    join4(currentStateDir, tomlName),
-    join4(process.cwd(), tomlName)
+    join5(currentStateDir, tomlName),
+    join5(process.cwd(), tomlName)
   ];
   for (const path of candidates) {
-    if (existsSync6(path)) {
+    if (existsSync8(path)) {
       try {
-        const raw = readFileSync7(path, "utf-8");
+        const raw = readFileSync9(path, "utf-8");
         if (raw.trim().length === 0)
           return null;
         const parsed = Bun.TOML.parse(raw);
@@ -3382,19 +4003,19 @@ function loadRulesToml(currentStateDir) {
 function resolveRulesTomlPath(currentStateDir) {
   const stateDirName = extractStateDirBasename(currentStateDir);
   const tomlName = `.ralph-${stateDirName}.toml`;
-  if (existsSync6(join4(currentStateDir, tomlName)))
-    return join4(currentStateDir, tomlName);
-  return join4(process.cwd(), tomlName);
+  if (existsSync8(join5(currentStateDir, tomlName)))
+    return join5(currentStateDir, tomlName);
+  return join5(process.cwd(), tomlName);
 }
 function scaffoldRulesToml(rulesName, currentStateDir) {
   const stateDirName = extractStateDirBasename(currentStateDir);
-  const tomlPath = join4(currentStateDir, `.ralph-${stateDirName}.toml`);
-  const tomlDir = dirname2(tomlPath);
-  if (!existsSync6(tomlDir))
-    mkdirSync2(tomlDir, { recursive: true });
+  const tomlPath = join5(currentStateDir, `.ralph-${stateDirName}.toml`);
+  const tomlDir = dirname3(tomlPath);
+  if (!existsSync8(tomlDir))
+    mkdirSync3(tomlDir, { recursive: true });
   let existingContent = "";
-  if (existsSync6(tomlPath)) {
-    existingContent = readFileSync7(tomlPath, "utf-8");
+  if (existsSync8(tomlPath)) {
+    existingContent = readFileSync9(tomlPath, "utf-8");
   }
   if (existingContent) {
     const headerRegex = new RegExp(`(?<=^|
@@ -3418,7 +4039,7 @@ enabled = true
 at = 1
 prompt = "PLACEHOLDER: configure rules.${rulesName} entries"
 `;
-  writeFileSync6(tomlPath, section, { flag: "a" });
+  writeFileSync7(tomlPath, section, { flag: "a" });
   return `\u26A0\uFE0F SCAFFOLDED [rules.${rulesName}] \u2014 PLACEHOLDER detected. Configure your rules in ${tomlPath} before continuing.
 
 [rules.${rulesName}]
@@ -3545,20 +4166,20 @@ function resolveInjectPlaceholders(template, state, currentStateDir, toml) {
     const cfg = toml.state_injection;
     if (!cfg.source || typeof cfg.source !== "string")
       return "";
-    if (isAbsolute2(cfg.source) || cfg.source.includes("..")) {
+    if (isAbsolute3(cfg.source) || cfg.source.includes("..")) {
       console.warn(`\u26A0\uFE0F Ralph: state_injection.source rejected (unsafe path): ${cfg.source}`);
       return "";
     }
-    const sourcePath = resolve2(currentStateDir, cfg.source);
-    const stateDirRoot = resolve2(currentStateDir) + sep;
+    const sourcePath = resolve4(currentStateDir, cfg.source);
+    const stateDirRoot = resolve4(currentStateDir) + sep;
     if (!sourcePath.startsWith(stateDirRoot)) {
       console.warn(`\u26A0\uFE0F Ralph: state_injection.source resolved outside state-dir: ${sourcePath}`);
       return "";
     }
-    if (!existsSync6(sourcePath))
+    if (!existsSync8(sourcePath))
       return "";
     try {
-      const raw = readFileSync7(sourcePath, "utf-8");
+      const raw = readFileSync9(sourcePath, "utf-8");
       if (raw.length > 1048576) {
         console.warn(`\u26A0\uFE0F Ralph: state_injection.source too large (${raw.length} bytes), skipping`);
         return "";
@@ -3625,11 +4246,11 @@ function resolveCommand2(cmd, envOverride, basePath) {
     if (Bun.which(cmdWithExt))
       return cmdWithExt;
   }
-  if (!isAbsolute2(cmd)) {
+  if (!isAbsolute3(cmd)) {
     const ralphDir = import.meta.dirname;
-    const base = ralphDir ? resolve2(ralphDir, cmd) : basePath || process.cwd();
-    const resolved = isAbsolute2(base) ? base : resolveConfigRelativePath2(base, cmd);
-    if (existsSync6(resolved))
+    const base = ralphDir ? resolve4(ralphDir, cmd) : basePath || process.cwd();
+    const resolved = isAbsolute3(base) ? base : resolveConfigRelativePath2(base, cmd);
+    if (existsSync8(resolved))
       return resolved;
     const whichPath = Bun.which(cmd);
     if (whichPath)
@@ -3638,657 +4259,7 @@ function resolveCommand2(cmd, envOverride, basePath) {
   }
   return cmd;
 }
-if (import.meta.main) {
-  let loadHistory = function() {
-    if (!existsSync6(historyPath)) {
-      return EMPTY_HISTORY;
-    }
-    try {
-      return JSON.parse(readFileSync7(historyPath, "utf-8"));
-    } catch {
-      return EMPTY_HISTORY;
-    }
-  }, saveHistory = function(history) {
-    if (!existsSync6(stateDir)) {
-      mkdirSync2(stateDir, { recursive: true });
-    }
-    writeFileSync6(historyPath, JSON.stringify(history, null, 2));
-  }, clearHistory = function() {
-    if (existsSync6(historyPath)) {
-      try {
-        __require("fs").unlinkSync(historyPath);
-      } catch {}
-    }
-  }, formatDurationLong = function(ms) {
-    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor(totalSeconds % 3600 / 60);
-    const seconds = totalSeconds % 60;
-    if (hours > 0) {
-      return `${hours}h ${minutes}m ${seconds}s`;
-    }
-    if (minutes > 0) {
-      return `${minutes}m ${seconds}s`;
-    }
-    return `${seconds}s`;
-  }, parseTasks = function(content) {
-    const tasks = [];
-    const lines = content.split(`
-`);
-    let currentTask = null;
-    for (const line of lines) {
-      const topLevelMatch = line.match(/^- \[([ x\/])\]\s*(.+)/);
-      if (topLevelMatch) {
-        if (currentTask) {
-          tasks.push(currentTask);
-        }
-        const [, statusChar, text] = topLevelMatch;
-        let status = "todo";
-        if (statusChar === "x")
-          status = "complete";
-        else if (statusChar === "/")
-          status = "in-progress";
-        currentTask = { text, status, subtasks: [], originalLine: line };
-        continue;
-      }
-      const subtaskMatch = line.match(/^\s+- \[([ x\/])\]\s*(.+)/);
-      if (subtaskMatch && currentTask) {
-        const [, statusChar, text] = subtaskMatch;
-        let status = "todo";
-        if (statusChar === "x")
-          status = "complete";
-        else if (statusChar === "/")
-          status = "in-progress";
-        currentTask.subtasks.push({ text, status, subtasks: [], originalLine: line });
-      }
-    }
-    if (currentTask) {
-      tasks.push(currentTask);
-    }
-    return tasks;
-  }, displayTasksWithIndices = function(tasks) {
-    if (tasks.length === 0) {
-      console.log("No tasks found.");
-      return;
-    }
-    console.log("Current tasks:");
-    for (let i = 0;i < tasks.length; i++) {
-      const task = tasks[i];
-      const statusIcon = task.status === "complete" ? "\u2705" : task.status === "in-progress" ? "\uD83D\uDD04" : "\u23F8\uFE0F";
-      console.log(`${i + 1}. ${statusIcon} ${task.text}`);
-      for (const subtask of task.subtasks) {
-        const subStatusIcon = subtask.status === "complete" ? "\u2705" : subtask.status === "in-progress" ? "\uD83D\uDD04" : "\u23F8\uFE0F";
-        console.log(`   ${subStatusIcon} ${subtask.text}`);
-      }
-    }
-  }, findCurrentTask = function(tasks) {
-    for (const task of tasks) {
-      if (task.status === "in-progress") {
-        return task;
-      }
-    }
-    return null;
-  }, findNextTask = function(tasks) {
-    for (const task of tasks) {
-      if (task.status === "todo") {
-        return task;
-      }
-    }
-    return null;
-  }, allTasksComplete = function(tasks) {
-    return tasks.length > 0 && tasks.every((t) => t.status === "complete" && t.subtasks.every((st) => st.status === "complete"));
-  }, parseRotationInput = function(raw) {
-    const entries = raw.split(",").map((entry) => entry.trim());
-    const parsed = [];
-    for (const entry of entries) {
-      const parts = entry.split(":");
-      if (parts.length !== 2) {
-        console.error(`Error: Invalid rotation entry '${entry}'. Expected format: agent:model`);
-        process.exit(1);
-      }
-      const agent = parts[0].trim();
-      const modelName = parts[1].trim();
-      if (!agent || !modelName) {
-        console.error(`Error: Invalid rotation entry '${entry}'. Both agent and model are required.`);
-        process.exit(1);
-      }
-      if (!AGENTS[agent]) {
-        console.error(`Error: Invalid agent '${agent}' in rotation entry '${entry}'. Valid agents: ${Object.keys(AGENTS).join(", ")}`);
-        process.exit(1);
-      }
-      parsed.push(`${agent}:${modelName}`);
-    }
-    return parsed;
-  }, parseDuration = function(input) {
-    const trimmed = input.trim();
-    if (trimmed === "-1") {
-      return Infinity;
-    }
-    if (/^\d+$/.test(trimmed)) {
-      return parseInt(trimmed);
-    }
-    const match = trimmed.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h)$/i);
-    if (!match) {
-      console.error(`Error: Invalid duration format '${input}'. Use number or number+unit (e.g., 5000, 30s, 5m, 2h)`);
-      process.exit(1);
-    }
-    const value = parseFloat(match[1]);
-    const unit = match[2].toLowerCase();
-    switch (unit) {
-      case "ms":
-        return value;
-      case "s":
-        return value * 1000;
-      case "m":
-        return value * 60 * 1000;
-      case "h":
-        return value * 60 * 60 * 1000;
-      default:
-        console.error(`Error: Unknown duration unit '${unit}'`);
-        process.exit(1);
-    }
-  }, readPromptFile = function(path) {
-    if (!existsSync6(path)) {
-      console.error(`Error: Prompt file not found: ${path}`);
-      process.exit(1);
-    }
-    try {
-      const stat = statSync3(path);
-      if (!stat.isFile()) {
-        console.error(`Error: Prompt path is not a file: ${path}`);
-        process.exit(1);
-      }
-    } catch {
-      console.error(`Error: Unable to stat prompt file: ${path}`);
-      process.exit(1);
-    }
-    try {
-      const content = readFileSync7(path, "utf-8");
-      if (!content.trim()) {
-        console.error(`Error: Prompt file is empty: ${path}`);
-        process.exit(1);
-      }
-      return content;
-    } catch {
-      console.error(`Error: Unable to read prompt file: ${path}`);
-      process.exit(1);
-    }
-  }, getFallbackKey = function(agent, modelName) {
-    return `${agent}:${modelName}`;
-  }, getFallbackPool = function(state) {
-    if (state.rotation && state.rotation.length > 0) {
-      return Array.from(new Set(state.rotation));
-    }
-    return [getFallbackKey(state.agent, state.model)];
-  }, markFallbackExhausted = function(current, fallbackKey) {
-    return Array.from(new Set([...current ?? [], fallbackKey]));
-  }, getStallRetryDelayMs = function(minutes) {
-    return Math.max(0, Math.round(minutes * 60000));
-  }, saveState = function(state) {
-    if (existsSync6(stateDir)) {
-      try {
-        const stats = lstatSync(stateDir);
-        if (!stats.isDirectory()) {
-          console.error(`
-\u274C Ralph Initialization Failed`);
-          console.error(`   ${stateDir} exists but is not a directory!`);
-          console.error(`   Type: ${stats.isSymbolicLink() ? "symlink" : "file"}`);
-          console.error(`
-Fix: rm ${stateDir}  # remove the file/symlink`);
-          console.error(`     mkdir ${stateDir}  # then recreate as a directory`);
-          process.exit(1);
-        }
-      } catch (err) {
-        console.error(`
-\u274C Ralph Initialization Failed`);
-        console.error(`   Cannot access ${stateDir}: ${err}`);
-        process.exit(1);
-      }
-    } else {
-      mkdirSync2(stateDir, { recursive: true });
-    }
-    const tmpPath = `${statePath}.tmp-${process.pid}-${Date.now()}`;
-    writeFileSync6(tmpPath, JSON.stringify(state, null, 2));
-    renameSync2(tmpPath, statePath);
-  }, loadState = function() {
-    if (!existsSync6(statePath)) {
-      return null;
-    }
-    try {
-      return JSON.parse(readFileSync7(statePath, "utf-8"));
-    } catch {
-      return null;
-    }
-  }, clearState = function() {
-    if (existsSync6(statePath)) {
-      try {
-        __require("fs").unlinkSync(statePath);
-      } catch {}
-    }
-  }, loadContext = function() {
-    if (!existsSync6(contextPath)) {
-      return null;
-    }
-    try {
-      const content = readFileSync7(contextPath, "utf-8").trim();
-      return content || null;
-    } catch {
-      return null;
-    }
-  }, clearContext = function() {
-    if (existsSync6(contextPath)) {
-      try {
-        __require("fs").unlinkSync(contextPath);
-      } catch {}
-    }
-  }, savePendingQuestion = function(question) {
-    if (!existsSync6(stateDir)) {
-      mkdirSync2(stateDir, { recursive: true });
-    }
-    const questions = loadPendingQuestions();
-    questions.push({ question, timestamp: new Date().toISOString() });
-    writeFileSync6(questionsPath, JSON.stringify(questions, null, 2));
-  }, loadPendingQuestions = function() {
-    if (!existsSync6(questionsPath)) {
-      return [];
-    }
-    try {
-      return JSON.parse(readFileSync7(questionsPath, "utf-8"));
-    } catch {
-      return [];
-    }
-  }, clearPendingQuestions = function() {
-    if (existsSync6(questionsPath)) {
-      try {
-        __require("fs").unlinkSync(questionsPath);
-      } catch {}
-    }
-  }, getAndClearPendingQuestion = function() {
-    const questions = loadPendingQuestions();
-    if (questions.length === 0) {
-      return null;
-    }
-    const question = questions[0].question;
-    const remaining = questions.slice(1);
-    if (remaining.length > 0) {
-      writeFileSync6(questionsPath, JSON.stringify(remaining, null, 2));
-    } else {
-      clearPendingQuestions();
-    }
-    return question;
-  }, detectQuestionTool = function(output, agent) {
-    const lines = output.split(`
-`);
-    for (const line of lines) {
-      const tool = agent.parseToolOutput(line);
-      if (tool && tool.toLowerCase() === "question") {
-        const questionMatch = line.match(/(?:question|asking|please confirm|do you want|should i|can i)\s*[:\-]?\s*(.+)/i);
-        if (questionMatch) {
-          return questionMatch[1].substring(0, 200);
-        }
-        return "question detected";
-      }
-    }
-    return null;
-  }, loadCustomPromptTemplate = function(templatePath, state) {
-    if (!existsSync6(templatePath)) {
-      console.error(`Error: Prompt template not found: ${templatePath}`);
-      process.exit(1);
-    }
-    try {
-      let template = readFileSync7(templatePath, "utf-8");
-      template = stripFrontmatter(template);
-      if (!template?.trim())
-        return null;
-      const rulesToml = loadRulesToml(stateDir);
-      template = resolveInjectPlaceholders(template, { iteration: state.iteration }, stateDir, rulesToml);
-      const rulesTomlUpdated = loadRulesToml(stateDir);
-      const placeholderSections = findPlaceholderRules(rulesTomlUpdated);
-      if (placeholderSections.length > 0) {
-        console.error(`
-\u274C Ralph PLACEHOLDER Gate \u2014 Iteration ${state.iteration}`);
-        for (const sec of placeholderSections) {
-          console.error(`   [rules.${sec}] contains a PLACEHOLDER prompt.`);
-        }
-        console.error(`   Configure your rules in the TOML file before continuing.`);
-        process.exit(1);
-      }
-      const context = loadContext() || "";
-      let tasksContent = "";
-      if (state.tasksMode && existsSync6(tasksPath)) {
-        tasksContent = readFileSync7(tasksPath, "utf-8");
-      }
-      template = template.replace(/\{\{iteration\}\}/g, String(state.iteration)).replace(/\{\{max_iterations\}\}/g, state.maxIterations > 0 ? String(state.maxIterations) : "unlimited").replace(/\{\{min_iterations\}\}/g, String(state.minIterations)).replace(/\{\{prompt\}\}/g, state.prompt).replace(/\{\{completion_promise\}\}/g, state.completionPromise).replace(/\{\{abort_promise\}\}/g, state.abortPromise || "").replace(/\{\{task_promise\}\}/g, state.taskPromise).replace(/\{\{context\}\}/g, context).replace(/\{\{tasks\}\}/g, tasksContent);
-      return template;
-    } catch (err) {
-      console.error(`Error reading prompt template: ${err}`);
-      process.exit(1);
-    }
-  }, buildPrompt = function(state, _agent) {
-    if (promptTemplatePath) {
-      const customPrompt = loadCustomPromptTemplate(promptTemplatePath, state);
-      if (customPrompt)
-        return customPrompt;
-    }
-    const context = loadContext();
-    const contextSection = context ? `
-## Additional Context (added by user mid-loop)
-
-${context}
-
----
-` : "";
-    if (state.goalSlug && goalPath) {
-      try {
-        const goal = parseGoalMd(goalPath, state.goalSlug);
-        const goalStatePath = join4(dirname2(goalPath), "goal.state.json");
-        const goalState = loadGoalState(goalStatePath) ?? createInitialState(state.goalSlug, state.completionPromise);
-        const goalSection = buildGoalPromptSection(goal, goalState, state.iteration);
-        return `
-# Ralph Wiggum Loop - Iteration ${state.iteration}
-
-You are in a goal-driven development loop.
-${contextSection}
-${goalSection}
-
-## Your Task
-
-${state.prompt}
-
-## Critical Rules
-
-- ONLY output <promise>${state.completionPromise}</promise> when ALL facts are verified
-- Output promise tags DIRECTLY - do not quote them, explain them, or say you "will" output them
-- Do NOT lie or output false promises to exit the loop
-- If stuck, try a different approach
-- Check your work before claiming completion
-
-## Current Iteration: ${state.iteration}${state.maxIterations > 0 ? ` / ${state.maxIterations}` : " (unlimited)"} (min: ${state.minIterations ?? 1})
-
-Now, work on the goal. Good luck!
-`.trim();
-      } catch (err) {
-        console.error(`Warning: Goal mode parse error: ${err}`);
-      }
-    }
-    if (state.tasksMode) {
-      const tasksSection = getTasksModeSection(state);
-      return `
-# Ralph Wiggum Loop - Iteration ${state.iteration}
-
-You are in an iterative development loop working through a task list.
-${contextSection}${tasksSection}
-## Your Main Goal
-
-${state.prompt}
-
-## Critical Rules
-
-- Work on ONE task at a time from ${currentTasksFileLabel()}
-- ONLY output <promise>${state.taskPromise}</promise> when the current task is complete and marked in ${currentTasksFileLabel()}
-- ONLY output <promise>${state.completionPromise}</promise> when ALL tasks are truly done
-- Output promise tags DIRECTLY - do not quote them, explain them, or say you "will" output them
-- Do NOT lie or output false promises to exit the loop
-- If stuck, try a different approach
-- Check your work before claiming completion
-
-## Current Iteration: ${state.iteration}${state.maxIterations > 0 ? ` / ${state.maxIterations}` : " (unlimited)"} (min: ${state.minIterations ?? 1})
-
-Tasks Mode: ENABLED - Work on one task at a time from ${currentTasksFileLabel()}
-
-Now, work on the current task. Good luck!
-`.trim();
-    }
-    return `
-# Ralph Wiggum Loop - Iteration ${state.iteration}
-
-You are in an iterative development loop. Work on the task below until you can genuinely complete it.
-${contextSection}
-## Your Task
-
-${state.prompt}
-
-## Instructions
-
-1. Read the current state of files to understand what's been done
-2. Track your progress and plan remaining work
-3. Make progress on the task
-4. Run tests/verification if applicable
-5. When the task is GENUINELY COMPLETE, output:
-   <promise>${state.completionPromise}</promise>
-
-## Critical Rules
-
-- ONLY output <promise>${state.completionPromise}</promise> when the task is truly done
-- Output the promise tag DIRECTLY - do not quote it, explain it, or say you "will" output it
-- Do NOT lie or output false promises to exit the loop
-- If stuck, try a different approach
-- Check your work before claiming completion
-- The loop will continue until you succeed
-
-## Current Iteration: ${state.iteration}${state.maxIterations > 0 ? ` / ${state.maxIterations}` : " (unlimited)"} (min: ${state.minIterations ?? 1})
-
-Now, work on the task. Good luck!
-`.trim();
-  }, getTasksModeSection = function(state) {
-    if (!existsSync6(tasksPath)) {
-      return `
-## TASKS MODE: Enabled (no tasks file found)
-
-Create ${currentTasksFileLabel()} with your task list, or use \`ralph --add-task "description"\` to add tasks.
-`;
-    }
-    try {
-      const tasksContent = readFileSync7(tasksPath, "utf-8");
-      const tasks = parseTasks(tasksContent);
-      const currentTask = findCurrentTask(tasks);
-      const nextTask = findNextTask(tasks);
-      let taskInstructions = "";
-      if (currentTask) {
-        taskInstructions = `
-\uD83D\uDD04 CURRENT TASK: "${currentTask.text}"
-   Focus on completing this specific task.
-   When done: Mark as [x] in ${currentTasksFileLabel()} and output <promise>${state.taskPromise}</promise>`;
-      } else if (nextTask) {
-        taskInstructions = `
-\uD83D\uDCCD NEXT TASK: "${nextTask.text}"
-   Mark as [/] in ${currentTasksFileLabel()} before starting.
-   When done: Mark as [x] and output <promise>${state.taskPromise}</promise>`;
-      } else if (allTasksComplete(tasks)) {
-        taskInstructions = `
-\u2705 ALL TASKS COMPLETE!
-   Output <promise>${state.completionPromise}</promise> to finish.`;
-      } else {
-        taskInstructions = `
-\uD83D\uDCCB No tasks found. Add tasks to ${currentTasksFileLabel()} or use \`ralph --add-task\``;
-      }
-      return `
-## TASKS MODE: Working through task list
-
-Current tasks from ${currentTasksFileLabel()}:
-\`\`\`markdown
-${tasksContent.trim()}
-\`\`\`
-${taskInstructions}
-
-### Task Workflow
-1. Find any task marked [/] (in progress). If none, pick the first [ ] task.
-2. Mark the task as [/] in ${currentTasksFileLabel()} before starting.
-3. Complete the task.
-4. Mark as [x] when verified complete.
-5. Output <promise>${state.taskPromise}</promise> to move to the next task.
-6. Only output <promise>${state.completionPromise}</promise> when ALL tasks are [x].
-
----
-`;
-    } catch {
-      return `
-## TASKS MODE: Error reading tasks file
-
-Unable to read ${currentTasksFileLabel()}
-`;
-    }
-  }, checkCompletion = function(output, promise, rawOutput, agentType2, extraFlags, sentPrompt) {
-    if (agentType2 && isJsonModeAgent(agentType2, extraFlags)) {
-      const source = rawOutput ?? output;
-      const assistantText = source.split(/\r?\n/).flatMap((line) => line ? extractJsonCompletionText(line, agentType2) : []).join(`
-`);
-      return checkTerminalPromise(assistantText, promise) || containsPromiseTag(assistantText, promise);
-    }
-    const scanOutput = sentPrompt ? stripInjectedPrompt(output, sentPrompt) : output;
-    const scanRaw = rawOutput !== undefined ? sentPrompt ? stripInjectedPrompt(rawOutput, sentPrompt) : rawOutput : undefined;
-    if (checkTerminalPromise(scanOutput, promise))
-      return true;
-    if (scanRaw !== undefined && containsPromiseTag(scanRaw, promise))
-      return true;
-    return false;
-  }, detectPlaceholderPluginError = function(output) {
-    return output.includes("ralph-wiggum is not yet ready for use. This is a placeholder package.");
-  }, detectModelNotFoundError = function(output) {
-    return output.includes("ProviderModelNotFoundError") || output.includes("Provider returned error") || output.includes("model not found") || output.includes("No model configured") || output.includes(".split is not a function");
-  }, extractClaudeStreamDisplayLines = function(rawLine) {
-    const cleanLine = stripAnsi(rawLine).trim();
-    if (!cleanLine.startsWith("{")) {
-      return [rawLine];
-    }
-    let payload;
-    try {
-      payload = JSON.parse(cleanLine);
-    } catch {
-      return [rawLine];
-    }
-    if (!payload || typeof payload !== "object") {
-      return [];
-    }
-    const lines = [];
-    const addText = (value) => {
-      if (typeof value !== "string")
-        return;
-      for (const splitLine of value.split(/\r?\n/)) {
-        const trimmed = splitLine.trim();
-        if (trimmed)
-          lines.push(trimmed);
-      }
-    };
-    const addContentText = (content) => {
-      if (typeof content === "string") {
-        addText(content);
-        return;
-      }
-      if (!Array.isArray(content))
-        return;
-      for (const block of content) {
-        if (!block || typeof block !== "object")
-          continue;
-        const blockRecord = block;
-        if (blockRecord.type === "tool_use")
-          continue;
-        addText(blockRecord.text);
-        addText(blockRecord.thinking);
-        if (typeof blockRecord.content === "string") {
-          addText(blockRecord.content);
-        }
-      }
-    };
-    const payloadRecord = payload;
-    const payloadType = typeof payloadRecord.type === "string" ? payloadRecord.type : "";
-    if (payloadType === "assistant") {
-      if (payloadRecord.message && typeof payloadRecord.message === "object") {
-        const message = payloadRecord.message;
-        addContentText(message.content);
-      }
-      if (payloadRecord.delta && typeof payloadRecord.delta === "object") {
-        const delta = payloadRecord.delta;
-        addText(delta.text);
-        addText(delta.thinking);
-        addText(delta.content);
-      }
-    } else if (payloadType === "result") {
-      addText(payloadRecord.result);
-    } else if (payloadType === "error") {
-      if (payloadRecord.error && typeof payloadRecord.error === "object") {
-        const error = payloadRecord.error;
-        addText(error.message);
-      } else {
-        addText(payloadRecord.error);
-      }
-    }
-    return lines;
-  }, formatDuration = function(ms) {
-    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor(totalSeconds % 3600 / 60);
-    const seconds = totalSeconds % 60;
-    if (hours > 0) {
-      return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-    }
-    return `${minutes}:${String(seconds).padStart(2, "0")}`;
-  }, formatToolSummary = function(toolCounts, maxItems = 6) {
-    if (!toolCounts.size)
-      return "";
-    const entries = Array.from(toolCounts.entries()).sort((a, b) => b[1] - a[1]);
-    const shown = entries.slice(0, maxItems);
-    const remaining = entries.length - shown.length;
-    const parts = shown.map(([name, count]) => `${name} ${count}`);
-    if (remaining > 0) {
-      parts.push(`+${remaining} more`);
-    }
-    return parts.join(" \u2022 ");
-  }, collectToolSummaryFromText = function(text, agent) {
-    const counts = new Map;
-    const lines = text.split(/\r?\n/);
-    for (const line of lines) {
-      const tool = agent.parseToolOutput(line);
-      if (tool) {
-        counts.set(tool, (counts.get(tool) ?? 0) + 1);
-      }
-    }
-    return counts;
-  }, printIterationSummary = function(params) {
-    const toolSummary = formatToolSummary(params.toolCounts);
-    const duration = formatDuration(params.elapsedMs);
-    console.log(`Iteration ${params.iteration} completed in ${duration} (${params.agent} / ${params.model})`);
-    console.log(`
-Iteration Summary`);
-    console.log("\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500");
-    console.log(`Iteration: ${params.iteration}`);
-    console.log(`Elapsed:   ${duration} (${params.agent} / ${params.model})`);
-    if (toolSummary) {
-      console.log(`Tools:     ${toolSummary}`);
-    } else {
-      console.log("Tools:     none");
-    }
-    console.log(`Exit code: ${params.exitCode}`);
-    console.log(`Completion promise: ${params.completionDetected ? "detected" : "not detected"}`);
-  }, getModifiedFilesSinceSnapshot = function(before, after) {
-    const changedFiles = [];
-    for (const [file, hash] of after.files) {
-      const prevHash = before.files.get(file);
-      if (prevHash !== hash) {
-        changedFiles.push(file);
-      }
-    }
-    for (const [file] of before.files) {
-      if (!after.files.has(file)) {
-        changedFiles.push(file);
-      }
-    }
-    return changedFiles;
-  }, extractErrors = function(output) {
-    const errors = [];
-    const lines = output.split(`
-`);
-    for (const line of lines) {
-      const lower = line.toLowerCase();
-      if (lower.includes("error:") || lower.includes("failed:") || lower.includes("exception:") || lower.includes("typeerror") || lower.includes("syntaxerror") || lower.includes("referenceerror") || lower.includes("test") && lower.includes("fail")) {
-        const cleaned = line.trim().substring(0, 200);
-        if (cleaned && !errors.includes(cleaned)) {
-          errors.push(cleaned);
-        }
-      }
-    }
-    return errors.slice(0, 10);
-  };
+async function ralphMain() {
   const args = process.argv.slice(2);
   let explicitTomlConfigPath = false;
   let tomlConfigPath = "";
@@ -4332,22 +4303,22 @@ Iteration Summary`);
   setStatePaths(stateDirInput);
   ensureStateDir();
   if (!tomlConfigPath) {
-    tomlConfigPath = join4(stateDir, "config.toml");
+    tomlConfigPath = join5(getStateDir(), "config.toml");
   }
   if (initConfigPath !== undefined) {
     const agentConfigPath = initConfigPath || DEFAULT_CONFIG_PATH2;
-    const tomlConfigPathOutput = join4(stateDir, "config.toml");
-    const agentConfigDir = join4(agentConfigPath, "..");
-    if (!existsSync6(agentConfigDir)) {
-      mkdirSync2(agentConfigDir, { recursive: true });
+    const tomlConfigPathOutput = join5(getStateDir(), "config.toml");
+    const agentConfigDir = join5(agentConfigPath, "..");
+    if (!existsSync8(agentConfigDir)) {
+      mkdirSync3(agentConfigDir, { recursive: true });
     }
-    writeFileSync6(agentConfigPath, JSON.stringify(getDefaultConfig(), null, 2));
+    writeFileSync7(agentConfigPath, JSON.stringify(getDefaultConfig(), null, 2));
     console.log(`Created agent config at: ${agentConfigPath}`);
-    const tomlDir = join4(tomlConfigPathOutput, "..");
-    if (!existsSync6(tomlDir)) {
-      mkdirSync2(tomlDir, { recursive: true });
+    const tomlDir = join5(tomlConfigPathOutput, "..");
+    if (!existsSync8(tomlDir)) {
+      mkdirSync3(tomlDir, { recursive: true });
     }
-    writeFileSync6(tomlConfigPathOutput, getDefaultTomlConfig());
+    writeFileSync7(tomlConfigPathOutput, getDefaultTomlConfig());
     console.log(`Created runtime config at: ${tomlConfigPathOutput}`);
     console.log(`
 Configuration initialized! You can edit these files to customize Ralph.`);
@@ -4355,17 +4326,17 @@ Configuration initialized! You can edit these files to customize Ralph.`);
     process.exit(0);
   }
   if (args.includes("--init-rules")) {
-    const stateDirName = extractStateDirBasename(stateDir);
+    const stateDirName = extractStateDirBasename(getStateDir());
     const tomlName = `.ralph-${stateDirName}.toml`;
-    const tomlPath = join4(stateDir, tomlName);
-    if (existsSync6(tomlPath)) {
+    const tomlPath = join5(getStateDir(), tomlName);
+    if (existsSync8(tomlPath)) {
       console.log(`Rules TOML already exists: ${tomlPath}`);
       console.log("Remove it first if you want to re-scaffold.");
       process.exit(0);
     }
-    if (!existsSync6(stateDir))
-      mkdirSync2(stateDir, { recursive: true });
-    writeFileSync6(tomlPath, getDefaultRulesToml());
+    if (!existsSync8(getStateDir()))
+      mkdirSync3(getStateDir(), { recursive: true });
+    writeFileSync7(tomlPath, getDefaultRulesToml());
     console.log(`Created rules TOML at: ${tomlPath}`);
     console.log("Edit this file to configure deterministic rule injections.");
     process.exit(0);
@@ -4503,13 +4474,13 @@ Learn more: https://ghuntley.com/ralph/
     if (reasonIdx !== -1 && reviewArgs[reasonIdx + 1]) {
       reason = reviewArgs[reasonIdx + 1];
     }
-    if (!existsSync6(statePath)) {
+    if (!existsSync8(getStatePath())) {
       console.error("Error: No active Ralph state file found. Is Ralph running in this directory?");
       process.exit(1);
     }
     const reviewState = (() => {
       try {
-        return JSON.parse(readFileSync7(statePath, "utf-8"));
+        return JSON.parse(readFileSync9(getStatePath(), "utf-8"));
       } catch {
         return null;
       }
@@ -4559,9 +4530,9 @@ Learn more: https://ghuntley.com/ralph/
     } else {
       reviewState.reviewGate.votes[voterKey] = { status: "rejected", at: now, reason };
     }
-    const tmpPath = `${statePath}.tmp-${process.pid}-${Date.now()}`;
-    writeFileSync6(tmpPath, JSON.stringify(reviewState, null, 2));
-    renameSync2(tmpPath, statePath);
+    const tmpPath = `${getStatePath()}.tmp-${process.pid}-${Date.now()}`;
+    writeFileSync7(tmpPath, JSON.stringify(reviewState, null, 2));
+    renameSync3(tmpPath, getStatePath());
     console.log(JSON.stringify({
       action,
       voterKey,
@@ -4588,7 +4559,7 @@ Learn more: https://ghuntley.com/ralph/
       }
     }
     if (!dir) {
-      dir = join4(process.cwd(), "goals");
+      dir = join5(process.cwd(), "goals");
     }
     const inv = buildInventory(dir);
     console.log(formatGoalInventory(inv.goals));
@@ -4605,18 +4576,18 @@ Learn more: https://ghuntley.com/ralph/
       console.error("Error: --init-goal title produces empty slug");
       process.exit(1);
     }
-    const goalDir2 = join4(process.cwd(), "goals", slug);
-    mkdirSync2(goalDir2, { recursive: true });
-    const goalMdPath = join4(goalDir2, "goal.md");
-    if (existsSync6(goalMdPath)) {
+    const goalDir2 = join5(process.cwd(), "goals", slug);
+    mkdirSync3(goalDir2, { recursive: true });
+    const goalMdPath = join5(goalDir2, "goal.md");
+    if (existsSync8(goalMdPath)) {
       console.error(`Error: goal already exists at ${goalMdPath}`);
       process.exit(1);
     }
-    writeFileSync6(goalMdPath, scaffoldGoalMd(title), "utf-8");
-    const goalStatePath = join4(goalDir2, "goal.state.json");
-    if (!existsSync6(goalStatePath)) {
+    writeFileSync7(goalMdPath, scaffoldGoalMd(title), "utf-8");
+    const goalStatePath = join5(goalDir2, "goal.state.json");
+    if (!existsSync8(goalStatePath)) {
       const initState = createInitialState(slug);
-      writeFileSync6(goalStatePath, JSON.stringify(initState, null, 2), "utf-8");
+      writeFileSync7(goalStatePath, JSON.stringify(initState, null, 2), "utf-8");
     }
     console.log(`\u2705 Created goal scaffold: ${goalDir2}/`);
     process.exit(0);
@@ -4636,7 +4607,7 @@ Learn more: https://ghuntley.com/ralph/
           console.error("No active goals found in " + dir);
           process.exit(1);
         }
-        statusGoalPath = join4(dir, next.slug, "goal.md");
+        statusGoalPath = join5(dir, next.slug, "goal.md");
       }
     }
     if (!statusGoalPath) {
@@ -4647,18 +4618,18 @@ Learn more: https://ghuntley.com/ralph/
         const inv = buildInventory(tomlCfg.goal_dir);
         const next = findNextActionableGoal(inv);
         if (next) {
-          statusGoalPath = join4(tomlCfg.goal_dir, next.slug, "goal.md");
+          statusGoalPath = join5(tomlCfg.goal_dir, next.slug, "goal.md");
         }
       }
     }
-    if (!statusGoalPath || !existsSync6(statusGoalPath)) {
+    if (!statusGoalPath || !existsSync8(statusGoalPath)) {
       console.error("Error: --goal-status requires --goal <path> or --goal-dir <dir> (or TOML config) with an active goal");
       process.exit(1);
     }
     try {
-      const slug = basename2(dirname2(statusGoalPath));
+      const slug = basename2(dirname3(statusGoalPath));
       const goal = parseGoalMd(statusGoalPath, slug);
-      const goalStatePath = join4(dirname2(statusGoalPath), "goal.state.json");
+      const goalStatePath = join5(dirname3(statusGoalPath), "goal.state.json");
       const goalState = loadGoalState(goalStatePath) ?? createInitialState(slug);
       console.log(formatGoalStatus(goal, goalState));
       process.exit(0);
@@ -4669,11 +4640,11 @@ Learn more: https://ghuntley.com/ralph/
   }
   const runtimeTomlConfig = loadRuntimeTomlConfig(tomlConfigPath, explicitTomlConfigPath);
   let reviewConfig = null;
-  if (existsSync6(tomlConfigPath)) {
+  if (existsSync8(tomlConfigPath)) {
     try {
-      const raw = readFileSync7(tomlConfigPath, "utf-8");
-      const parsed = Bun.TOML.parse(raw);
-      reviewConfig = parseReviewConfig(parsed);
+      const raw = readFileSync9(tomlConfigPath, "utf-8");
+      const parsed2 = Bun.TOML.parse(raw);
+      reviewConfig = parseReviewConfig(parsed2);
       if (reviewConfig) {
         validateReviewConfig(reviewConfig);
       }
@@ -4689,7 +4660,7 @@ Learn more: https://ghuntley.com/ralph/
   const AGENTS = { ...BUILT_IN_AGENTS };
   if (customAgents) {
     for (const [type, json] of Object.entries(customAgents)) {
-      AGENTS[type] = createAgentConfig(json, customConfigPath ? dirname2(customConfigPath) : undefined);
+      AGENTS[type] = createAgentConfig(json, customConfigPath ? dirname3(customConfigPath) : undefined);
     }
   }
   const EMPTY_HISTORY = {
@@ -4698,48 +4669,28 @@ Learn more: https://ghuntley.com/ralph/
     struggleIndicators: { repeatedErrors: {}, noProgressIterations: 0, shortIterations: 0 },
     stallingEvents: []
   };
-  async function appendIterationHistory(params) {
-    const iterationDuration = Date.now() - params.iterationStart;
-    const snapshotAfter = await captureFileSnapshot();
-    const filesModified = getModifiedFilesSinceSnapshot(params.snapshotBefore, snapshotAfter);
-    const errors = extractErrors(`${params.result}
-${params.stderr}`);
-    const iterationRecord = {
-      iteration: params.iteration,
-      startedAt: new Date(params.iterationStart).toISOString(),
-      endedAt: new Date().toISOString(),
-      durationMs: iterationDuration,
-      agent: params.currentAgent,
-      model: params.currentModel,
-      toolsUsed: Object.fromEntries(params.toolCounts),
-      filesModified,
-      exitCode: params.exitCode,
-      completionDetected: params.completionDetected,
-      errors
-    };
-    params.history.iterations.push(iterationRecord);
-    capHistoryIterations(params.history);
-    params.history.totalDurationMs += iterationDuration;
-    if (filesModified.length === 0) {
-      params.history.struggleIndicators.noProgressIterations++;
-    } else {
-      params.history.struggleIndicators.noProgressIterations = 0;
+  function loadHistory() {
+    if (!existsSync8(getHistoryPath())) {
+      return EMPTY_HISTORY;
     }
-    if (iterationDuration < 30000) {
-      params.history.struggleIndicators.shortIterations++;
-    } else {
-      params.history.struggleIndicators.shortIterations = 0;
+    try {
+      return JSON.parse(readFileSync9(getHistoryPath(), "utf-8"));
+    } catch {
+      return EMPTY_HISTORY;
     }
-    if (errors.length === 0) {
-      params.history.struggleIndicators.repeatedErrors = {};
-    } else {
-      for (const error of errors) {
-        const key = error.substring(0, 100);
-        params.history.struggleIndicators.repeatedErrors[key] = (params.history.struggleIndicators.repeatedErrors[key] || 0) + 1;
-      }
-      capRepeatedErrors(params.history);
+  }
+  function saveHistory2(history) {
+    if (!existsSync8(getStateDir())) {
+      mkdirSync3(getStateDir(), { recursive: true });
     }
-    saveHistory(params.history);
+    writeFileSync7(getHistoryPath(), JSON.stringify(history, null, 2));
+  }
+  function clearHistory() {
+    if (existsSync8(getHistoryPath())) {
+      try {
+        __require("fs").unlinkSync(getHistoryPath());
+      } catch {}
+    }
   }
   if (args.includes("--doctor")) {
     console.log(`
@@ -4752,17 +4703,17 @@ ${params.stderr}`);
     let fixesApplied = 0;
     console.log(`
 \uD83D\uDCC1 Checking state directory...`);
-    if (!existsSync6(stateDir)) {
+    if (!existsSync8(getStateDir())) {
       console.log("  \u26A0\uFE0F  State directory does not exist. Creating...");
-      mkdirSync2(stateDir, { recursive: true });
-      console.log(`  \u2705 Created: ${stateDir}/`);
+      mkdirSync3(getStateDir(), { recursive: true });
+      console.log(`  \u2705 Created: ${getStateDir()}/`);
       fixesApplied++;
     } else {
       try {
-        const stats = lstatSync(stateDir);
+        const stats = lstatSync2(getStateDir());
         if (!stats.isDirectory()) {
-          console.log(`  \u274C ERROR: ${stateDir} exists but is not a directory!`);
-          console.log(`     Path: ${stateDir}`);
+          console.log(`  \u274C ERROR: ${getStateDir()} exists but is not a directory!`);
+          console.log(`     Path: ${getStateDir()}`);
           console.log(`     Type: ${stats.isSymbolicLink() ? "symlink" : "file"}`);
           issuesFound++;
         } else {
@@ -4776,9 +4727,9 @@ ${params.stderr}`);
     console.log(`
 \u2699\uFE0F  Checking configuration files...`);
     const agentConfigPath = DEFAULT_CONFIG_PATH2;
-    if (existsSync6(agentConfigPath)) {
+    if (existsSync8(agentConfigPath)) {
       try {
-        const content = readFileSync7(agentConfigPath, "utf-8");
+        const content = readFileSync9(agentConfigPath, "utf-8");
         JSON.parse(content);
         console.log("  \u2705 Agent config is valid JSON");
       } catch {
@@ -4788,10 +4739,10 @@ ${params.stderr}`);
     } else {
       console.log(`  \u2139\uFE0F  No agent config found (will use defaults)`);
     }
-    const runtimeConfigPath = join4(stateDir, "config.toml");
-    if (existsSync6(runtimeConfigPath)) {
+    const runtimeConfigPath = join5(getStateDir(), "config.toml");
+    if (existsSync8(runtimeConfigPath)) {
       try {
-        const content = readFileSync7(runtimeConfigPath, "utf-8");
+        const content = readFileSync9(runtimeConfigPath, "utf-8");
         Bun.TOML.parse(content);
         console.log("  \u2705 Runtime config is valid TOML");
       } catch (err) {
@@ -4814,9 +4765,9 @@ ${params.stderr}`);
     }
     console.log(`
 \uD83D\uDD0D Checking for common issues...`);
-    if (existsSync6(statePath)) {
+    if (existsSync8(getStatePath())) {
       try {
-        const state = JSON.parse(readFileSync7(statePath, "utf-8"));
+        const state = JSON.parse(readFileSync9(getStatePath(), "utf-8"));
         if (state.active) {
           console.log("  \u26A0\uFE0F  Active loop detected. Use 'ralph --status' for details.");
         } else {
@@ -4829,9 +4780,9 @@ ${params.stderr}`);
     } else {
       console.log("  \u2705 No active loop");
     }
-    if (existsSync6(historyPath)) {
+    if (existsSync8(getHistoryPath())) {
       try {
-        const history = JSON.parse(readFileSync7(historyPath, "utf-8"));
+        const history = JSON.parse(readFileSync9(getHistoryPath(), "utf-8"));
         console.log(`  \u2705 History file valid (${history.iterations?.length || 0} iterations)`);
       } catch {
         console.log("  \u26A0\uFE0F  History file is corrupted");
@@ -4857,7 +4808,7 @@ Tip: Run 'ralph --init-config' to create default configuration files.`);
   if (args.includes("--status")) {
     const state = loadState();
     const history = loadHistory();
-    const context = existsSync6(contextPath) ? readFileSync7(contextPath, "utf-8").trim() : null;
+    const context = existsSync8(getContextPath()) ? readFileSync9(getContextPath(), "utf-8").trim() : null;
     const showTasks = args.includes("--tasks") || args.includes("-t") || state?.tasksMode;
     console.log(`
 \u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557
@@ -4904,9 +4855,9 @@ Tip: Run 'ralph --init-config' to create default configuration files.`);
    `)}`);
     }
     if (showTasks) {
-      if (existsSync6(tasksPath)) {
+      if (existsSync8(getTasksPath())) {
         try {
-          const tasksContent = readFileSync7(tasksPath, "utf-8");
+          const tasksContent = readFileSync9(getTasksPath(), "utf-8");
           const tasks = parseTasks(tasksContent);
           if (tasks.length > 0) {
             console.log(`
@@ -5014,10 +4965,10 @@ Tip: Run 'ralph --init-config' to create default configuration files.`);
   if (args[0] === "pipeline") {
     const subCmd = args[1];
     if (subCmd === "show") {
-      console.log(showPipelineContext(stateDir));
+      console.log(showPipelineContext(getStateDir()));
       process.exit(0);
     } else if (subCmd === "clear") {
-      clearPipelineContext(stateDir);
+      clearPipelineContext(getStateDir());
       console.log("Pipeline context cleared");
       process.exit(0);
     } else {
@@ -5037,23 +4988,23 @@ Tip: Run 'ralph --init-config' to create default configuration files.`);
       console.error('Usage: ralph --add-context "Your context or hint here"');
       process.exit(1);
     }
-    if (!existsSync6(stateDir)) {
-      mkdirSync2(stateDir, { recursive: true });
+    if (!existsSync8(getStateDir())) {
+      mkdirSync3(getStateDir(), { recursive: true });
     }
     const timestamp = new Date().toISOString();
     const newEntry = `
 ## Context added at ${timestamp}
 ${contextText}
 `;
-    if (existsSync6(contextPath)) {
-      const existing = readFileSync7(contextPath, "utf-8");
-      writeFileSync6(contextPath, existing + newEntry);
+    if (existsSync8(getContextPath())) {
+      const existing = readFileSync9(getContextPath(), "utf-8");
+      writeFileSync7(getContextPath(), existing + newEntry);
     } else {
-      writeFileSync6(contextPath, `# Ralph Loop Context
+      writeFileSync7(getContextPath(), `# Ralph Loop Context
 ${newEntry}`);
     }
     console.log(`\u2705 Context added for next iteration`);
-    console.log(`   File: ${contextPath}`);
+    console.log(`   File: ${getContextPath()}`);
     const state = loadState();
     if (state?.active) {
       console.log(`   Will be picked up in iteration ${state.iteration + 1}`);
@@ -5063,8 +5014,8 @@ ${newEntry}`);
     process.exit(0);
   }
   if (args.includes("--clear-context")) {
-    if (existsSync6(contextPath)) {
-      __require("fs").unlinkSync(contextPath);
+    if (existsSync8(getContextPath())) {
+      __require("fs").unlinkSync(getContextPath());
       console.log(`\u2705 Context cleared`);
     } else {
       console.log(`\u2139\uFE0F  No pending context to clear`);
@@ -5072,12 +5023,12 @@ ${newEntry}`);
     process.exit(0);
   }
   if (args.includes("--list-tasks")) {
-    if (!existsSync6(tasksPath)) {
+    if (!existsSync8(getTasksPath())) {
       console.log("No tasks file found. Use --add-task to create your first task.");
       process.exit(0);
     }
     try {
-      const tasksContent = readFileSync7(tasksPath, "utf-8");
+      const tasksContent = readFileSync9(getTasksPath(), "utf-8");
       const tasks = parseTasks(tasksContent);
       displayTasksWithIndices(tasks);
     } catch (error) {
@@ -5094,13 +5045,13 @@ ${newEntry}`);
       console.error('Usage: ralph --add-task "Task description"');
       process.exit(1);
     }
-    if (!existsSync6(stateDir)) {
-      mkdirSync2(stateDir, { recursive: true });
+    if (!existsSync8(getStateDir())) {
+      mkdirSync3(getStateDir(), { recursive: true });
     }
     try {
       let tasksContent = "";
-      if (existsSync6(tasksPath)) {
-        tasksContent = readFileSync7(tasksPath, "utf-8");
+      if (existsSync8(getTasksPath())) {
+        tasksContent = readFileSync9(getTasksPath(), "utf-8");
       } else {
         tasksContent = `# Ralph Tasks
 
@@ -5109,7 +5060,7 @@ ${newEntry}`);
       const newTaskContent = tasksContent.trimEnd() + `
 ` + `- [ ] ${taskDescription}
 `;
-      writeFileSync6(tasksPath, newTaskContent);
+      writeFileSync7(getTasksPath(), newTaskContent);
       console.log(`\u2705 Task added: "${taskDescription}"`);
     } catch (error) {
       console.error("Error adding task:", error);
@@ -5126,12 +5077,12 @@ ${newEntry}`);
       process.exit(1);
     }
     const taskIndex = parseInt(taskIndexStr);
-    if (!existsSync6(tasksPath)) {
+    if (!existsSync8(getTasksPath())) {
       console.error("Error: No tasks file found");
       process.exit(1);
     }
     try {
-      const tasksContent = readFileSync7(tasksPath, "utf-8");
+      const tasksContent = readFileSync9(getTasksPath(), "utf-8");
       const tasks = parseTasks(tasksContent);
       if (taskIndex < 1 || taskIndex > tasks.length) {
         console.error(`Error: Task index ${taskIndex} is out of range (1-${tasks.length})`);
@@ -5157,7 +5108,7 @@ ${newEntry}`);
         }
         newLines.push(line);
       }
-      writeFileSync6(tasksPath, newLines.join(`
+      writeFileSync7(getTasksPath(), newLines.join(`
 `));
       console.log(`\u2705 Removed task ${taskIndex} and its subtasks`);
     } catch (error) {
@@ -5166,435 +5117,170 @@ ${newEntry}`);
     }
     process.exit(0);
   }
-  let prompt = "";
-  let minIterations = 1;
-  let maxIterations = 0;
-  let completionPromise = "COMPLETE";
-  let abortPromise = "";
-  let tasksMode = false;
-  let taskPromise = "READY_FOR_NEXT_TASK";
-  let model = "";
-  let agentType = "opencode";
-  let agentBinary = "";
-  let rotationInput = "";
-  let rotation = null;
-  let autoCommit = true;
-  let disablePlugins = false;
-  let disableHooks = false;
-  let verboseHooks = false;
-  let hookTimeoutMsFlag = undefined;
-  let allowAllPermissions = true;
-  let promptFile = "";
-  let promptTemplatePath = "";
-  let streamOutput = true;
-  let verboseTools = false;
-  let promptSource = "";
-  let handleQuestions = true;
-  let stallingTimeoutMs = 2 * 60 * 60 * 1000;
-  let blacklistDurationMs = 8 * 60 * 60 * 1000;
-  let stallingAction = "stop";
-  let heartbeatIntervalMs = 1e4;
-  let preStartTimeoutMs = -1;
-  let stallingTimeoutProvided = false;
-  let blacklistDurationProvided = false;
-  let stallingActionProvided = false;
-  let stallRetries = false;
-  let stallRetryMinutes = 15;
-  let goalPath = "";
-  let goalDir = "";
-  let stallRetriesProvided = false;
-  let stallRetryMinutesProvided = false;
-  let maxIterationsProvided = false;
-  let minIterationsProvided = false;
-  let reuseState = false;
-  let reuseCheck = "strict";
-  let reuseSkipModel = false;
-  let reuseSkipAgent = false;
-  let reuseSkipRotation = false;
-  let reuseSkipMinIterations = false;
-  let reuseSkipMaxIterations = false;
-  const promptParts = [];
-  let extraAgentFlags = [];
-  let passthroughAgentFlags = [];
-  const doubleDashIndex = args.indexOf("--");
-  if (doubleDashIndex !== -1) {
-    passthroughAgentFlags = args.slice(doubleDashIndex + 1);
-    args.splice(doubleDashIndex);
+  function formatDurationLong(ms) {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor(totalSeconds % 3600 / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) {
+      return `${hours}h ${minutes}m ${seconds}s`;
+    }
+    if (minutes > 0) {
+      return `${minutes}m ${seconds}s`;
+    }
+    return `${seconds}s`;
   }
-  if (runtimeTomlConfig) {
-    if (runtimeTomlConfig.prompt)
-      prompt = runtimeTomlConfig.prompt;
-    if (runtimeTomlConfig.agent)
-      agentType = runtimeTomlConfig.agent;
-    if (runtimeTomlConfig.agent_binary)
-      agentBinary = runtimeTomlConfig.agent_binary;
-    if (runtimeTomlConfig.min_iterations !== undefined)
-      minIterations = runtimeTomlConfig.min_iterations;
-    if (runtimeTomlConfig.max_iterations !== undefined)
-      maxIterations = runtimeTomlConfig.max_iterations;
-    if (runtimeTomlConfig.completion_promise)
-      completionPromise = runtimeTomlConfig.completion_promise;
-    if (runtimeTomlConfig.abort_promise)
-      abortPromise = runtimeTomlConfig.abort_promise;
-    if (runtimeTomlConfig.tasks !== undefined)
-      tasksMode = runtimeTomlConfig.tasks;
-    if (runtimeTomlConfig.task_promise)
-      taskPromise = runtimeTomlConfig.task_promise;
-    if (runtimeTomlConfig.model)
-      model = runtimeTomlConfig.model;
-    if (runtimeTomlConfig.rotation?.length)
-      rotationInput = runtimeTomlConfig.rotation.join(",");
-    if (runtimeTomlConfig.stalling_timeout) {
-      stallingTimeoutMs = parseDuration(runtimeTomlConfig.stalling_timeout);
-      stallingTimeoutProvided = true;
-    }
-    if (runtimeTomlConfig.blacklist_duration) {
-      blacklistDurationMs = parseDuration(runtimeTomlConfig.blacklist_duration);
-      blacklistDurationProvided = true;
-    }
-    if (runtimeTomlConfig.stalling_action) {
-      if (runtimeTomlConfig.stalling_action !== "stop" && runtimeTomlConfig.stalling_action !== "rotate") {
-        console.error(`Error: Invalid stalling_action '${runtimeTomlConfig.stalling_action}'. Must be 'stop' or 'rotate'.`);
-        process.exit(1);
+  function parseTasks(content) {
+    const tasks = [];
+    const lines = content.split(`
+`);
+    let currentTask = null;
+    for (const line of lines) {
+      const topLevelMatch = line.match(/^- \[([ x\/])\]\s*(.+)/);
+      if (topLevelMatch) {
+        if (currentTask) {
+          tasks.push(currentTask);
+        }
+        const [, statusChar, text] = topLevelMatch;
+        let status = "todo";
+        if (statusChar === "x")
+          status = "complete";
+        else if (statusChar === "/")
+          status = "in-progress";
+        currentTask = { text, status, subtasks: [], originalLine: line };
+        continue;
       }
-      stallingAction = runtimeTomlConfig.stalling_action;
-      stallingActionProvided = true;
+      const subtaskMatch = line.match(/^\s+- \[([ x\/])\]\s*(.+)/);
+      if (subtaskMatch && currentTask) {
+        const [, statusChar, text] = subtaskMatch;
+        let status = "todo";
+        if (statusChar === "x")
+          status = "complete";
+        else if (statusChar === "/")
+          status = "in-progress";
+        currentTask.subtasks.push({ text, status, subtasks: [], originalLine: line });
+      }
     }
-    if (runtimeTomlConfig.heartbeat_interval)
-      heartbeatIntervalMs = parseDuration(runtimeTomlConfig.heartbeat_interval);
-    if (runtimeTomlConfig.no_commit !== undefined)
-      autoCommit = !runtimeTomlConfig.no_commit;
-    if (runtimeTomlConfig.no_plugins !== undefined)
-      disablePlugins = runtimeTomlConfig.no_plugins;
-    if (runtimeTomlConfig.allow_all !== undefined)
-      allowAllPermissions = runtimeTomlConfig.allow_all;
-    if (runtimeTomlConfig.prompt_file)
-      promptFile = runtimeTomlConfig.prompt_file;
-    if (runtimeTomlConfig.prompt_template)
-      promptTemplatePath = runtimeTomlConfig.prompt_template;
-    if (runtimeTomlConfig.stream !== undefined)
-      streamOutput = runtimeTomlConfig.stream;
-    if (runtimeTomlConfig.verbose_tools !== undefined)
-      verboseTools = runtimeTomlConfig.verbose_tools;
-    if (runtimeTomlConfig.questions !== undefined)
-      handleQuestions = runtimeTomlConfig.questions;
-    if (runtimeTomlConfig.extra_agent_flags?.length) {
-      extraAgentFlags = [...runtimeTomlConfig.extra_agent_flags, ...extraAgentFlags];
+    if (currentTask) {
+      tasks.push(currentTask);
     }
-    if (runtimeTomlConfig.stall_retries !== undefined) {
-      stallRetries = runtimeTomlConfig.stall_retries;
-      stallRetriesProvided = true;
+    return tasks;
+  }
+  function displayTasksWithIndices(tasks) {
+    if (tasks.length === 0) {
+      console.log("No tasks found.");
+      return;
     }
-    if (runtimeTomlConfig.stall_retry_minutes !== undefined) {
-      stallRetryMinutes = runtimeTomlConfig.stall_retry_minutes;
-      stallRetryMinutesProvided = true;
+    console.log("Current tasks:");
+    for (let i = 0;i < tasks.length; i++) {
+      const task = tasks[i];
+      const statusIcon = task.status === "complete" ? "\u2705" : task.status === "in-progress" ? "\uD83D\uDD04" : "\u23F8\uFE0F";
+      console.log(`${i + 1}. ${statusIcon} ${task.text}`);
+      for (const subtask of task.subtasks) {
+        const subStatusIcon = subtask.status === "complete" ? "\u2705" : subtask.status === "in-progress" ? "\uD83D\uDD04" : "\u23F8\uFE0F";
+        console.log(`   ${subStatusIcon} ${subtask.text}`);
+      }
     }
-    if (runtimeTomlConfig.reuse_check) {
+  }
+  function findCurrentTask(tasks) {
+    for (const task of tasks) {
+      if (task.status === "in-progress") {
+        return task;
+      }
+    }
+    return null;
+  }
+  function findNextTask(tasks) {
+    for (const task of tasks) {
+      if (task.status === "todo") {
+        return task;
+      }
+    }
+    return null;
+  }
+  function allTasksComplete(tasks) {
+    return tasks.length > 0 && tasks.every((t) => t.status === "complete" && t.subtasks.every((st) => st.status === "complete"));
+  }
+  let parsed;
+  try {
+    parsed = getDefaultMainArgs();
+    if (runtimeTomlConfig)
+      applyTomlConfig(parsed, runtimeTomlConfig);
+    if (!runtimeTomlConfig?.reuse_check && process.env.RALPH_REUSE_CHECK) {
+      const envVal = process.env.RALPH_REUSE_CHECK;
       const validModes = ["strict", "relaxed", "off"];
-      if (!validModes.includes(runtimeTomlConfig.reuse_check)) {
-        console.error(`Error: Invalid reuse_check '${runtimeTomlConfig.reuse_check}'. Must be one of: ${validModes.join(", ")}`);
-        process.exit(1);
+      if (validModes.includes(envVal)) {
+        parsed.reuseCheck = envVal;
+      } else {
+        throw new Error(`Invalid RALPH_REUSE_CHECK '${envVal}'. Must be one of: ${validModes.join(", ")}`);
       }
-      reuseCheck = runtimeTomlConfig.reuse_check;
     }
-    if (runtimeTomlConfig.reuse_skip_model !== undefined)
-      reuseSkipModel = runtimeTomlConfig.reuse_skip_model;
-    if (runtimeTomlConfig.reuse_skip_agent !== undefined)
-      reuseSkipAgent = runtimeTomlConfig.reuse_skip_agent;
-    if (runtimeTomlConfig.reuse_skip_rotation !== undefined)
-      reuseSkipRotation = runtimeTomlConfig.reuse_skip_rotation;
-    if (runtimeTomlConfig.reuse_skip_min_iterations !== undefined)
-      reuseSkipMinIterations = runtimeTomlConfig.reuse_skip_min_iterations;
-    if (runtimeTomlConfig.reuse_skip_max_iterations !== undefined)
-      reuseSkipMaxIterations = runtimeTomlConfig.reuse_skip_max_iterations;
-    if (runtimeTomlConfig.goal)
-      goalPath = runtimeTomlConfig.goal;
-    if (runtimeTomlConfig.goal_dir)
-      goalDir = runtimeTomlConfig.goal_dir;
-    if (runtimeTomlConfig.goal_promise && (runtimeTomlConfig.goal || runtimeTomlConfig.goal_dir)) {
-      completionPromise = runtimeTomlConfig.goal_promise;
-    }
-  }
-  if (!runtimeTomlConfig?.reuse_check && process.env.RALPH_REUSE_CHECK) {
-    const envVal = process.env.RALPH_REUSE_CHECK;
-    const validModes = ["strict", "relaxed", "off"];
-    if (validModes.includes(envVal)) {
-      reuseCheck = envVal;
-    } else {
-      console.error(`Error: Invalid RALPH_REUSE_CHECK '${envVal}'. Must be one of: ${validModes.join(", ")}`);
-      process.exit(1);
-    }
-  }
-  for (let i = 0;i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--agent") {
-      const val = args[++i];
-      if (!val || !AGENTS[val]) {
-        console.error(`Error: --agent requires one of: ${Object.keys(AGENTS).join(", ")}`);
-        process.exit(1);
-      }
-      agentType = val;
-    } else if (arg === "--agent-binary") {
-      const val = args[++i];
-      if (!val) {
-        console.error("Error: --agent-binary requires a path or binary name");
-        process.exit(1);
-      }
-      agentBinary = val;
-    } else if (arg === "--min-iterations") {
-      const val = args[++i];
-      if (!val || isNaN(parseInt(val))) {
-        console.error("Error: --min-iterations requires a number");
-        process.exit(1);
-      }
-      minIterations = parseInt(val);
-      minIterationsProvided = true;
-    } else if (arg === "--max-iterations") {
-      const val = args[++i];
-      if (!val || isNaN(parseInt(val))) {
-        console.error("Error: --max-iterations requires a number");
-        process.exit(1);
-      }
-      maxIterations = parseInt(val);
-      maxIterationsProvided = true;
-    } else if (arg === "--completion-promise") {
-      const val = args[++i];
-      if (!val) {
-        console.error("Error: --completion-promise requires a value");
-        process.exit(1);
-      }
-      completionPromise = val;
-    } else if (arg === "--abort-promise") {
-      const val = args[++i];
-      if (!val) {
-        console.error("Error: --abort-promise requires a value");
-        process.exit(1);
-      }
-      abortPromise = val;
-    } else if (arg === "--tasks" || arg === "-t") {
-      tasksMode = true;
-    } else if (arg === "--task-promise") {
-      const val = args[++i];
-      if (!val) {
-        console.error("Error: --task-promise requires a value");
-        process.exit(1);
-      }
-      taskPromise = val;
-    } else if (arg === "--goal") {
-      const val = args[++i];
-      if (!val) {
-        console.error("Error: --goal requires a path to goal.md");
-        process.exit(1);
-      }
-      goalPath = val;
-    } else if (arg === "--goal-dir") {
-      const val = args[++i];
-      if (!val) {
-        console.error("Error: --goal-dir requires a directory path");
-        process.exit(1);
-      }
-      goalDir = val;
-    } else if (arg === "--init-goal") {
-      const val = args[++i];
-      if (!val) {
-        console.error("Error: --init-goal requires a title");
-        process.exit(1);
-      }
-    } else if (arg === "--list-goals") {} else if (arg === "--goal-status") {} else if (arg === "--rotation") {
-      const val = args[++i];
-      if (!val) {
-        console.error("Error: --rotation requires a value");
-        process.exit(1);
-      }
-      rotationInput = val;
-    } else if (arg === "--stalling-timeout") {
-      const val = args[++i];
-      if (!val) {
-        console.error("Error: --stalling-timeout requires a value");
-        process.exit(1);
-      }
-      stallingTimeoutMs = parseDuration(val);
-      stallingTimeoutProvided = true;
-    } else if (arg === "--blacklist-duration") {
-      const val = args[++i];
-      if (!val) {
-        console.error("Error: --blacklist-duration requires a value");
-        process.exit(1);
-      }
-      const ms = parseDuration(val);
-      if (!Number.isFinite(ms) || ms <= 0) {
-        console.error(`Error: --blacklist-duration must be a positive duration, got '${val}'`);
-        process.exit(1);
-      }
-      blacklistDurationMs = ms;
-      blacklistDurationProvided = true;
-    } else if (arg === "--stalling-action") {
-      const val = args[++i];
-      if (!val || val !== "stop" && val !== "rotate") {
-        console.error("Error: --stalling-action requires 'stop' or 'rotate'");
-        process.exit(1);
-      }
-      stallingAction = val;
-      stallingActionProvided = true;
-    } else if (arg === "--heartbeat-interval") {
-      const val = args[++i];
-      if (!val) {
-        console.error("Error: --heartbeat-interval requires a value");
-        process.exit(1);
-      }
-      heartbeatIntervalMs = parseDuration(val);
-    } else if (arg === "--pre-start-timeout") {
-      const val = args[++i];
-      if (!val) {
-        console.error("Error: --pre-start-timeout requires a value (ms, or -1 to disable)");
-        process.exit(1);
-      }
-      preStartTimeoutMs = parseDuration(val);
-    } else if (arg === "--model") {
-      const val = args[++i];
-      if (!val) {
-        console.error("Error: --model requires a value");
-        process.exit(1);
-      }
-      model = val;
-    } else if (arg === "--prompt-file" || arg === "--file" || arg === "-f") {
-      const val = args[++i];
-      if (!val) {
-        console.error("Error: --prompt-file requires a file path");
-        process.exit(1);
-      }
-      promptFile = val;
-    } else if (arg === "--prompt-template") {
-      const val = args[++i];
-      if (!val) {
-        console.error("Error: --prompt-template requires a file path");
-        process.exit(1);
-      }
-      promptTemplatePath = val;
-    } else if (arg === "--no-stream") {
-      streamOutput = false;
-    } else if (arg === "--stream") {
-      streamOutput = true;
-    } else if (arg === "--verbose-tools") {
-      verboseTools = true;
-    } else if (arg === "--no-commit") {
-      autoCommit = false;
-    } else if (arg === "--no-plugins") {
-      disablePlugins = true;
-    } else if (arg === "--no-hooks") {
-      disableHooks = true;
-    } else if (arg === "--verbose-hooks") {
-      verboseHooks = true;
-    } else if (arg === "--hook-timeout") {
-      const val = args[++i];
-      if (val === undefined) {
-        console.error("Error: --hook-timeout requires a number");
-        process.exit(1);
-      }
-      hookTimeoutMsFlag = val;
-    } else if (arg === "--allow-all") {
-      allowAllPermissions = true;
-    } else if (arg === "--no-allow-all") {
-      allowAllPermissions = false;
-    } else if (arg === "--reuse-state") {
-      reuseState = true;
-    } else if (arg === "--questions") {
-      handleQuestions = true;
-    } else if (arg === "--no-questions") {
-      handleQuestions = false;
-    } else if (arg === "--stall-retries") {
-      stallRetries = true;
-      stallRetriesProvided = true;
-    } else if (arg === "--no-stall-retries") {
-      stallRetries = false;
-      stallRetriesProvided = true;
-    } else if (arg === "--stall-retry-minutes") {
-      const val = args[++i];
-      if (!val || Number.isNaN(Number(val))) {
-        console.error("Error: --stall-retry-minutes requires a number");
-        process.exit(1);
-      }
-      stallRetryMinutes = Number(val);
-      stallRetryMinutesProvided = true;
-    } else if (arg === "--state-dir") {
-      i++;
-    } else if (arg === "--toml-config") {
-      i++;
-    } else if (arg === "--config") {
-      i++;
-    } else if (arg === "--init-config") {
-      const next = args[i + 1];
-      if (next !== undefined && isInitConfigPathShaped(next))
-        i++;
-    } else if (arg.startsWith("-")) {
-      console.error(`Error: Unknown option: ${arg}`);
+    parsed = parseMainArgs(args, Object.keys(AGENTS), parsed);
+    applyPassthroughOverrides(parsed, (dir) => {
+      stateDirInput = dir;
+      setStatePaths(dir);
+    });
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    if (err.message.startsWith("Unknown option")) {
       console.error("Run 'ralph --help' for available options");
-      process.exit(1);
-    } else {
-      promptParts.push(arg);
     }
+    process.exit(1);
   }
-  for (let i = 0;i < passthroughAgentFlags.length; i++) {
-    if (passthroughAgentFlags[i] === "--model" && passthroughAgentFlags[i + 1]) {
-      model = passthroughAgentFlags[i + 1];
-      i++;
-    } else if (passthroughAgentFlags[i] === "--max-iterations" && passthroughAgentFlags[i + 1]) {
-      const v = passthroughAgentFlags[i + 1];
-      if (!/^\d+$/.test(v)) {
-        console.error(`Error: --max-iterations requires a non-negative integer, got '${v}'`);
-        process.exit(1);
-      }
-      maxIterations = parseInt(v);
-      i++;
-    } else if (passthroughAgentFlags[i] === "--min-iterations" && passthroughAgentFlags[i + 1]) {
-      const v = passthroughAgentFlags[i + 1];
-      if (!/^\d+$/.test(v)) {
-        console.error(`Error: --min-iterations requires a non-negative integer, got '${v}'`);
-        process.exit(1);
-      }
-      minIterations = parseInt(v);
-      i++;
-    } else if (passthroughAgentFlags[i] === "--completion-promise" && passthroughAgentFlags[i + 1]) {
-      completionPromise = passthroughAgentFlags[i + 1];
-      i++;
-    } else if (passthroughAgentFlags[i] === "--abort-promise" && passthroughAgentFlags[i + 1]) {
-      abortPromise = passthroughAgentFlags[i + 1];
-      i++;
-    } else if (passthroughAgentFlags[i] === "--stalling-timeout" && passthroughAgentFlags[i + 1]) {
-      stallingTimeoutMs = parseDuration(passthroughAgentFlags[i + 1]);
-      i++;
-    } else if (passthroughAgentFlags[i] === "--blacklist-duration" && passthroughAgentFlags[i + 1]) {
-      const v = passthroughAgentFlags[i + 1];
-      const ms = parseDuration(v);
-      if (!Number.isFinite(ms) || ms <= 0) {
-        console.error(`Error: --blacklist-duration must be a positive duration, got '${v}'`);
-        process.exit(1);
-      }
-      blacklistDurationMs = ms;
-      i++;
-    } else if (passthroughAgentFlags[i] === "--stalling-action" && passthroughAgentFlags[i + 1]) {
-      const v = passthroughAgentFlags[i + 1];
-      if (v !== "stop" && v !== "rotate") {
-        console.error(`Error: --stalling-action requires 'stop' or 'rotate', got '${v}'`);
-        process.exit(1);
-      }
-      stallingAction = v;
-      i++;
-    } else if (passthroughAgentFlags[i] === "--stall-retries") {
-      stallRetries = true;
-    } else if (passthroughAgentFlags[i] === "--no-stall-retries") {
-      stallRetries = false;
-    } else if (passthroughAgentFlags[i] === "--stall-retry-minutes" && passthroughAgentFlags[i + 1]) {
-      stallRetryMinutes = parseInt(passthroughAgentFlags[i + 1]);
-      i++;
-    } else if (passthroughAgentFlags[i] === "--state-dir" && passthroughAgentFlags[i + 1]) {
-      stateDirInput = resolve2(passthroughAgentFlags[i + 1]);
-      setStatePaths(stateDirInput);
-      i++;
-    }
-  }
+  let {
+    prompt,
+    minIterations,
+    maxIterations,
+    minIterationsProvided,
+    maxIterationsProvided,
+    completionPromise,
+    abortPromise,
+    tasksMode,
+    taskPromise,
+    model,
+    agentType,
+    agentBinary,
+    rotationInput,
+    autoCommit,
+    disablePlugins,
+    disableHooks,
+    verboseHooks,
+    hookTimeoutMsFlag,
+    allowAllPermissions,
+    promptFile,
+    promptTemplatePath,
+    streamOutput,
+    verboseTools,
+    handleQuestions,
+    stallingTimeoutMs,
+    stallingTimeoutProvided,
+    blacklistDurationMs,
+    blacklistDurationProvided,
+    stallingAction,
+    stallingActionProvided,
+    heartbeatIntervalMs,
+    preStartTimeoutMs,
+    stallRetries,
+    stallRetriesProvided,
+    stallRetryMinutes,
+    stallRetryMinutesProvided,
+    goalPath,
+    goalDir,
+    reuseState,
+    reuseCheck,
+    reuseSkipModel,
+    reuseSkipAgent,
+    reuseSkipRotation,
+    reuseSkipMinIterations,
+    reuseSkipMaxIterations,
+    extraAgentFlags,
+    passthroughAgentFlags,
+    promptParts
+  } = parsed;
+  let promptSource = "";
+  let rotation = null;
   ensureStateDir();
-  const usingCustomStateDir = stateDir !== resolve2(process.cwd(), ".ralph");
+  const usingCustomStateDir = getStateDir() !== resolve4(process.cwd(), ".ralph");
   if (usingCustomStateDir && autoCommit) {
     console.error("Error: --state-dir currently requires --no-commit.");
     console.error("Shared git/worktree side effects are not isolated for custom state directories yet.");
@@ -5608,7 +5294,12 @@ ${newEntry}`);
     process.exit(1);
   }
   if (rotationInput) {
-    rotation = parseRotationInput(rotationInput);
+    try {
+      rotation = parseRotationInput(rotationInput, Object.keys(AGENTS));
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
   } else if (!AGENTS[agentType]) {
     console.error(`Error: --agent requires one of: ${Object.keys(AGENTS).join(", ")}`);
     process.exit(1);
@@ -5617,10 +5308,37 @@ ${newEntry}`);
     const resolved = resolveCommand2(agentBinary);
     AGENTS[agentType] = { ...AGENTS[agentType], command: resolved };
   }
+  function readPromptFile(path) {
+    if (!existsSync8(path)) {
+      console.error(`Error: Prompt file not found: ${path}`);
+      process.exit(1);
+    }
+    try {
+      const stat = statSync3(path);
+      if (!stat.isFile()) {
+        console.error(`Error: Prompt path is not a file: ${path}`);
+        process.exit(1);
+      }
+    } catch {
+      console.error(`Error: Unable to stat prompt file: ${path}`);
+      process.exit(1);
+    }
+    try {
+      const content = readFileSync9(path, "utf-8");
+      if (!content.trim()) {
+        console.error(`Error: Prompt file is empty: ${path}`);
+        process.exit(1);
+      }
+      return content;
+    } catch {
+      console.error(`Error: Unable to read prompt file: ${path}`);
+      process.exit(1);
+    }
+  }
   if (promptFile) {
     promptSource = promptFile;
     prompt = readPromptFile(promptFile);
-  } else if (promptParts.length === 1 && existsSync6(promptParts[0])) {
+  } else if (promptParts.length === 1 && existsSync8(promptParts[0])) {
     promptSource = promptParts[0];
     prompt = readPromptFile(promptParts[0]);
   } else if (promptParts.length > 0) {
@@ -5657,11 +5375,70 @@ ${newEntry}`);
     console.error("Use --stream, or re-enable auto-approval with --allow-all.");
     process.exit(1);
   }
+  function getFallbackKey(agent, modelName) {
+    return `${agent}:${modelName}`;
+  }
+  function getFallbackPool(state) {
+    if (state.rotation && state.rotation.length > 0) {
+      return Array.from(new Set(state.rotation));
+    }
+    return [getFallbackKey(state.agent, state.model)];
+  }
+  function markFallbackExhausted(current, fallbackKey) {
+    return Array.from(new Set([...current ?? [], fallbackKey]));
+  }
+  function getStallRetryDelayMs(minutes) {
+    return Math.max(0, Math.round(minutes * 60000));
+  }
   async function sleepForStallRetry(minutes) {
     const delayMs = getStallRetryDelayMs(minutes);
     if (delayMs === 0)
       return;
-    await new Promise((resolve3) => setTimeout(resolve3, delayMs));
+    await new Promise((resolve5) => setTimeout(resolve5, delayMs));
+  }
+  function saveState(state) {
+    if (existsSync8(getStateDir())) {
+      try {
+        const stats = lstatSync2(getStateDir());
+        if (!stats.isDirectory()) {
+          console.error(`
+\u274C Ralph Initialization Failed`);
+          console.error(`   ${getStateDir()} exists but is not a directory!`);
+          console.error(`   Type: ${stats.isSymbolicLink() ? "symlink" : "file"}`);
+          console.error(`
+Fix: rm ${getStateDir()}  # remove the file/symlink`);
+          console.error(`     mkdir ${getStateDir()}  # then recreate as a directory`);
+          process.exit(1);
+        }
+      } catch (err) {
+        console.error(`
+\u274C Ralph Initialization Failed`);
+        console.error(`   Cannot access ${getStateDir()}: ${err}`);
+        process.exit(1);
+      }
+    } else {
+      mkdirSync3(getStateDir(), { recursive: true });
+    }
+    const tmpPath = `${getStatePath()}.tmp-${process.pid}-${Date.now()}`;
+    writeFileSync7(tmpPath, JSON.stringify(state, null, 2));
+    renameSync3(tmpPath, getStatePath());
+  }
+  function loadState() {
+    if (!existsSync8(getStatePath())) {
+      return null;
+    }
+    try {
+      return JSON.parse(readFileSync9(getStatePath(), "utf-8"));
+    } catch {
+      return null;
+    }
+  }
+  function clearState() {
+    if (existsSync8(getStatePath())) {
+      try {
+        __require("fs").unlinkSync(getStatePath());
+      } catch {}
+    }
   }
   async function validateAgent(agent) {
     const path = Bun.which(agent.command);
@@ -5670,8 +5447,80 @@ ${newEntry}`);
       process.exit(1);
     }
   }
+  function loadContext() {
+    if (!existsSync8(getContextPath())) {
+      return null;
+    }
+    try {
+      const content = readFileSync9(getContextPath(), "utf-8").trim();
+      return content || null;
+    } catch {
+      return null;
+    }
+  }
+  function clearContext() {
+    if (existsSync8(getContextPath())) {
+      try {
+        __require("fs").unlinkSync(getContextPath());
+      } catch {}
+    }
+  }
+  function savePendingQuestion(question) {
+    if (!existsSync8(getStateDir())) {
+      mkdirSync3(getStateDir(), { recursive: true });
+    }
+    const questions = loadPendingQuestions();
+    questions.push({ question, timestamp: new Date().toISOString() });
+    writeFileSync7(getQuestionsPath(), JSON.stringify(questions, null, 2));
+  }
+  function loadPendingQuestions() {
+    if (!existsSync8(getQuestionsPath())) {
+      return [];
+    }
+    try {
+      return JSON.parse(readFileSync9(getQuestionsPath(), "utf-8"));
+    } catch {
+      return [];
+    }
+  }
+  function clearPendingQuestions() {
+    if (existsSync8(getQuestionsPath())) {
+      try {
+        __require("fs").unlinkSync(getQuestionsPath());
+      } catch {}
+    }
+  }
+  function getAndClearPendingQuestion() {
+    const questions = loadPendingQuestions();
+    if (questions.length === 0) {
+      return null;
+    }
+    const question = questions[0].question;
+    const remaining = questions.slice(1);
+    if (remaining.length > 0) {
+      writeFileSync7(getQuestionsPath(), JSON.stringify(remaining, null, 2));
+    } else {
+      clearPendingQuestions();
+    }
+    return question;
+  }
+  function detectQuestionTool(output, agent) {
+    const lines = output.split(`
+`);
+    for (const line of lines) {
+      const tool = agent.parseToolOutput(line);
+      if (tool && tool.toLowerCase() === "question") {
+        const questionMatch = line.match(/(?:question|asking|please confirm|do you want|should i|can i)\s*[:\-]?\s*(.+)/i);
+        if (questionMatch) {
+          return questionMatch[1].substring(0, 200);
+        }
+        return "question detected";
+      }
+    }
+    return null;
+  }
   async function promptUser(question) {
-    return new Promise((resolve3) => {
+    return new Promise((resolve5) => {
       const rl = __require("readline").createInterface({
         input: process.stdin,
         output: process.stdout
@@ -5680,9 +5529,350 @@ ${newEntry}`);
 \uD83E\uDD14 Question: ${question}
 Your answer: `, (answer) => {
         rl.close();
-        resolve3(answer);
+        resolve5(answer);
       });
     });
+  }
+  function loadCustomPromptTemplate(templatePath, state) {
+    if (!existsSync8(templatePath)) {
+      console.error(`Error: Prompt template not found: ${templatePath}`);
+      process.exit(1);
+    }
+    try {
+      let template = readFileSync9(templatePath, "utf-8");
+      template = stripFrontmatter(template);
+      if (!template?.trim())
+        return null;
+      const rulesToml = loadRulesToml(getStateDir());
+      template = resolveInjectPlaceholders(template, { iteration: state.iteration }, getStateDir(), rulesToml);
+      const rulesTomlUpdated = loadRulesToml(getStateDir());
+      const placeholderSections = findPlaceholderRules(rulesTomlUpdated);
+      if (placeholderSections.length > 0) {
+        console.error(`
+\u274C Ralph PLACEHOLDER Gate \u2014 Iteration ${state.iteration}`);
+        for (const sec of placeholderSections) {
+          console.error(`   [rules.${sec}] contains a PLACEHOLDER prompt.`);
+        }
+        console.error(`   Configure your rules in the TOML file before continuing.`);
+        process.exit(1);
+      }
+      const context = loadContext() || "";
+      let tasksContent = "";
+      if (state.tasksMode && existsSync8(getTasksPath())) {
+        tasksContent = readFileSync9(getTasksPath(), "utf-8");
+      }
+      template = template.replace(/\{\{iteration\}\}/g, String(state.iteration)).replace(/\{\{max_iterations\}\}/g, state.maxIterations > 0 ? String(state.maxIterations) : "unlimited").replace(/\{\{min_iterations\}\}/g, String(state.minIterations)).replace(/\{\{prompt\}\}/g, state.prompt).replace(/\{\{completion_promise\}\}/g, state.completionPromise).replace(/\{\{abort_promise\}\}/g, state.abortPromise || "").replace(/\{\{task_promise\}\}/g, state.taskPromise).replace(/\{\{context\}\}/g, context).replace(/\{\{tasks\}\}/g, tasksContent);
+      return template;
+    } catch (err) {
+      console.error(`Error reading prompt template: ${err}`);
+      process.exit(1);
+    }
+  }
+  function buildPrompt(state, _agent) {
+    if (promptTemplatePath) {
+      const customPrompt = loadCustomPromptTemplate(promptTemplatePath, state);
+      if (customPrompt)
+        return customPrompt;
+    }
+    const context = loadContext();
+    const contextSection = context ? `
+## Additional Context (added by user mid-loop)
+
+${context}
+
+---
+` : "";
+    if (state.goalSlug && goalPath) {
+      try {
+        const goal = parseGoalMd(goalPath, state.goalSlug);
+        const goalStatePath = join5(dirname3(goalPath), "goal.state.json");
+        const goalState = loadGoalState(goalStatePath) ?? createInitialState(state.goalSlug, state.completionPromise);
+        const goalSection = buildGoalPromptSection(goal, goalState, state.iteration);
+        return `
+# Ralph Wiggum Loop - Iteration ${state.iteration}
+
+You are in a goal-driven development loop.
+${contextSection}
+${goalSection}
+
+## Your Task
+
+${state.prompt}
+
+## Critical Rules
+
+- ONLY output <promise>${state.completionPromise}</promise> when ALL facts are verified
+- Output promise tags DIRECTLY - do not quote them, explain them, or say you "will" output them
+- Do NOT lie or output false promises to exit the loop
+- If stuck, try a different approach
+- Check your work before claiming completion
+
+## Current Iteration: ${state.iteration}${state.maxIterations > 0 ? ` / ${state.maxIterations}` : " (unlimited)"} (min: ${state.minIterations ?? 1})
+
+Now, work on the goal. Good luck!
+`.trim();
+      } catch (err) {
+        console.error(`Warning: Goal mode parse error: ${err}`);
+      }
+    }
+    if (state.tasksMode) {
+      const tasksSection = getTasksModeSection(state);
+      return `
+# Ralph Wiggum Loop - Iteration ${state.iteration}
+
+You are in an iterative development loop working through a task list.
+${contextSection}${tasksSection}
+## Your Main Goal
+
+${state.prompt}
+
+## Critical Rules
+
+- Work on ONE task at a time from ${currentTasksFileLabel()}
+- ONLY output <promise>${state.taskPromise}</promise> when the current task is complete and marked in ${currentTasksFileLabel()}
+- ONLY output <promise>${state.completionPromise}</promise> when ALL tasks are truly done
+- Output promise tags DIRECTLY - do not quote them, explain them, or say you "will" output them
+- Do NOT lie or output false promises to exit the loop
+- If stuck, try a different approach
+- Check your work before claiming completion
+
+## Current Iteration: ${state.iteration}${state.maxIterations > 0 ? ` / ${state.maxIterations}` : " (unlimited)"} (min: ${state.minIterations ?? 1})
+
+Tasks Mode: ENABLED - Work on one task at a time from ${currentTasksFileLabel()}
+
+Now, work on the current task. Good luck!
+`.trim();
+    }
+    return `
+# Ralph Wiggum Loop - Iteration ${state.iteration}
+
+You are in an iterative development loop. Work on the task below until you can genuinely complete it.
+${contextSection}
+## Your Task
+
+${state.prompt}
+
+## Instructions
+
+1. Read the current state of files to understand what's been done
+2. Track your progress and plan remaining work
+3. Make progress on the task
+4. Run tests/verification if applicable
+5. When the task is GENUINELY COMPLETE, output:
+   <promise>${state.completionPromise}</promise>
+
+## Critical Rules
+
+- ONLY output <promise>${state.completionPromise}</promise> when the task is truly done
+- Output the promise tag DIRECTLY - do not quote it, explain it, or say you "will" output it
+- Do NOT lie or output false promises to exit the loop
+- If stuck, try a different approach
+- Check your work before claiming completion
+- The loop will continue until you succeed
+
+## Current Iteration: ${state.iteration}${state.maxIterations > 0 ? ` / ${state.maxIterations}` : " (unlimited)"} (min: ${state.minIterations ?? 1})
+
+Now, work on the task. Good luck!
+`.trim();
+  }
+  function getTasksModeSection(state) {
+    if (!existsSync8(getTasksPath())) {
+      return `
+## TASKS MODE: Enabled (no tasks file found)
+
+Create ${currentTasksFileLabel()} with your task list, or use \`ralph --add-task "description"\` to add tasks.
+`;
+    }
+    try {
+      const tasksContent = readFileSync9(getTasksPath(), "utf-8");
+      const tasks = parseTasks(tasksContent);
+      const currentTask = findCurrentTask(tasks);
+      const nextTask = findNextTask(tasks);
+      let taskInstructions = "";
+      if (currentTask) {
+        taskInstructions = `
+\uD83D\uDD04 CURRENT TASK: "${currentTask.text}"
+   Focus on completing this specific task.
+   When done: Mark as [x] in ${currentTasksFileLabel()} and output <promise>${state.taskPromise}</promise>`;
+      } else if (nextTask) {
+        taskInstructions = `
+\uD83D\uDCCD NEXT TASK: "${nextTask.text}"
+   Mark as [/] in ${currentTasksFileLabel()} before starting.
+   When done: Mark as [x] and output <promise>${state.taskPromise}</promise>`;
+      } else if (allTasksComplete(tasks)) {
+        taskInstructions = `
+\u2705 ALL TASKS COMPLETE!
+   Output <promise>${state.completionPromise}</promise> to finish.`;
+      } else {
+        taskInstructions = `
+\uD83D\uDCCB No tasks found. Add tasks to ${currentTasksFileLabel()} or use \`ralph --add-task\``;
+      }
+      return `
+## TASKS MODE: Working through task list
+
+Current tasks from ${currentTasksFileLabel()}:
+\`\`\`markdown
+${tasksContent.trim()}
+\`\`\`
+${taskInstructions}
+
+### Task Workflow
+1. Find any task marked [/] (in progress). If none, pick the first [ ] task.
+2. Mark the task as [/] in ${currentTasksFileLabel()} before starting.
+3. Complete the task.
+4. Mark as [x] when verified complete.
+5. Output <promise>${state.taskPromise}</promise> to move to the next task.
+6. Only output <promise>${state.completionPromise}</promise> when ALL tasks are [x].
+
+---
+`;
+    } catch {
+      return `
+## TASKS MODE: Error reading tasks file
+
+Unable to read ${currentTasksFileLabel()}
+`;
+    }
+  }
+  function checkCompletion(output, promise, rawOutput, agentType2, extraFlags, sentPrompt) {
+    if (agentType2 && isJsonModeAgent(agentType2, extraFlags)) {
+      const source = rawOutput ?? output;
+      const assistantText = source.split(/\r?\n/).flatMap((line) => line ? extractJsonCompletionText(line, agentType2) : []).join(`
+`);
+      return checkTerminalPromise(assistantText, promise) || containsPromiseTag(assistantText, promise);
+    }
+    const scanOutput = sentPrompt ? stripInjectedPrompt(output, sentPrompt) : output;
+    const scanRaw = rawOutput !== undefined ? sentPrompt ? stripInjectedPrompt(rawOutput, sentPrompt) : rawOutput : undefined;
+    if (checkTerminalPromise(scanOutput, promise))
+      return true;
+    if (scanRaw !== undefined && containsPromiseTag(scanRaw, promise))
+      return true;
+    return false;
+  }
+  function detectPlaceholderPluginError(output) {
+    return output.includes("ralph-wiggum is not yet ready for use. This is a placeholder package.");
+  }
+  function detectModelNotFoundError(output) {
+    return output.includes("ProviderModelNotFoundError") || output.includes("Provider returned error") || output.includes("model not found") || output.includes("No model configured") || output.includes(".split is not a function");
+  }
+  function extractClaudeStreamDisplayLines(rawLine) {
+    const cleanLine = stripAnsi(rawLine).trim();
+    if (!cleanLine.startsWith("{")) {
+      return [rawLine];
+    }
+    let payload;
+    try {
+      payload = JSON.parse(cleanLine);
+    } catch {
+      return [rawLine];
+    }
+    if (!payload || typeof payload !== "object") {
+      return [];
+    }
+    const lines = [];
+    const addText = (value) => {
+      if (typeof value !== "string")
+        return;
+      for (const splitLine of value.split(/\r?\n/)) {
+        const trimmed = splitLine.trim();
+        if (trimmed)
+          lines.push(trimmed);
+      }
+    };
+    const addContentText = (content) => {
+      if (typeof content === "string") {
+        addText(content);
+        return;
+      }
+      if (!Array.isArray(content))
+        return;
+      for (const block of content) {
+        if (!block || typeof block !== "object")
+          continue;
+        const blockRecord = block;
+        if (blockRecord.type === "tool_use")
+          continue;
+        addText(blockRecord.text);
+        addText(blockRecord.thinking);
+        if (typeof blockRecord.content === "string") {
+          addText(blockRecord.content);
+        }
+      }
+    };
+    const payloadRecord = payload;
+    const payloadType = typeof payloadRecord.type === "string" ? payloadRecord.type : "";
+    if (payloadType === "assistant") {
+      if (payloadRecord.message && typeof payloadRecord.message === "object") {
+        const message = payloadRecord.message;
+        addContentText(message.content);
+      }
+      if (payloadRecord.delta && typeof payloadRecord.delta === "object") {
+        const delta = payloadRecord.delta;
+        addText(delta.text);
+        addText(delta.thinking);
+        addText(delta.content);
+      }
+    } else if (payloadType === "result") {
+      addText(payloadRecord.result);
+    } else if (payloadType === "error") {
+      if (payloadRecord.error && typeof payloadRecord.error === "object") {
+        const error = payloadRecord.error;
+        addText(error.message);
+      } else {
+        addText(payloadRecord.error);
+      }
+    }
+    return lines;
+  }
+  function formatDuration(ms) {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor(totalSeconds % 3600 / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) {
+      return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    }
+    return `${minutes}:${String(seconds).padStart(2, "0")}`;
+  }
+  function formatToolSummary(toolCounts, maxItems = 6) {
+    if (!toolCounts.size)
+      return "";
+    const entries = Array.from(toolCounts.entries()).sort((a, b) => b[1] - a[1]);
+    const shown = entries.slice(0, maxItems);
+    const remaining = entries.length - shown.length;
+    const parts = shown.map(([name, count]) => `${name} ${count}`);
+    if (remaining > 0) {
+      parts.push(`+${remaining} more`);
+    }
+    return parts.join(" \u2022 ");
+  }
+  function collectToolSummaryFromText(text, agent) {
+    const counts = new Map;
+    const lines = text.split(/\r?\n/);
+    for (const line of lines) {
+      const tool = agent.parseToolOutput(line);
+      if (tool) {
+        counts.set(tool, (counts.get(tool) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }
+  function printIterationSummary(params) {
+    const toolSummary = formatToolSummary(params.toolCounts);
+    const duration = formatDuration(params.elapsedMs);
+    console.log(`Iteration ${params.iteration} completed in ${duration} (${params.agent} / ${params.model})`);
+    console.log(`
+Iteration Summary`);
+    console.log("\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500");
+    console.log(`Iteration: ${params.iteration}`);
+    console.log(`Elapsed:   ${duration} (${params.agent} / ${params.model})`);
+    if (toolSummary) {
+      console.log(`Tools:     ${toolSummary}`);
+    } else {
+      console.log("Tools:     none");
+    }
+    console.log(`Exit code: ${params.exitCode}`);
+    console.log(`Completion promise: ${params.completionDetected ? "detected" : "not detected"}`);
   }
   async function streamProcessOutput(proc, procPid, options) {
     const toolCounts = new Map;
@@ -5790,7 +5980,7 @@ Your answer: `, (answer) => {
       const useByteFilter = !isError && agentTypeStr === "pi" && isJsonModeAgent(agentTypeStr, options.extraFlags);
       const splitter = useByteFilter ? new ByteLineSplitter : null;
       const abortSignals = [stopController.signal, options.abortSignal].filter(Boolean);
-      const abortPromise2 = abortSignals.length > 0 ? new Promise((resolve3) => {
+      const abortPromise2 = abortSignals.length > 0 ? new Promise((resolve5) => {
         const handlers = new Map;
         const cleanup = () => {
           for (const [signal, handler] of handlers) {
@@ -5799,7 +5989,7 @@ Your answer: `, (answer) => {
         };
         const resolveAbort = () => {
           cleanup();
-          resolve3({ value: undefined, done: true });
+          resolve5({ value: undefined, done: true });
         };
         for (const signal of abortSignals) {
           if (signal.aborted) {
@@ -5963,76 +6153,6 @@ Your answer: `, (answer) => {
     }
     return { stdoutText: stdoutBuffer.toString(), stderrText: stderrBuffer.toString(), toolCounts, stalled, stalledForMs, preStartStalled: stalled && !firstOutputReceived, terminatedAfterPromise };
   }
-  async function captureFileSnapshot() {
-    const files = new Map;
-    const cwd = process.cwd();
-    try {
-      const insideWorkTree = await $`git rev-parse --is-inside-work-tree`.cwd(cwd).quiet().text().catch(() => "");
-      if (insideWorkTree.trim() !== "true") {
-        return { files };
-      }
-      const status = await $`git -c status.showUntrackedFiles=no status --porcelain`.cwd(cwd).text();
-      const trackedFiles = await $`git ls-files`.cwd(cwd).text();
-      const allFiles = new Set;
-      for (const line of status.split(`
-`)) {
-        if (line.trim()) {
-          allFiles.add(line.substring(3).trim());
-        }
-      }
-      for (const file of trackedFiles.split(`
-`)) {
-        if (file.trim()) {
-          allFiles.add(file.trim());
-        }
-      }
-      const pathList = [...allFiles].filter(Boolean);
-      if (pathList.length > 0) {
-        let batchOk = false;
-        try {
-          const hashProc = Bun.spawn(["git", "hash-object", "--stdin-paths"], {
-            cwd,
-            stdout: "pipe",
-            stderr: "pipe",
-            stdin: "pipe"
-          });
-          await Promise.allSettled([
-            hashProc.stdin.write(pathList.join(`
-`) + `
-`),
-            hashProc.stdin.end()
-          ]);
-          const hashOut = await new Response(hashProc.stdout).text();
-          const hashExit = await hashProc.exited;
-          if (hashExit === 0) {
-            batchOk = true;
-            const hashLines = hashOut.split(`
-`);
-            for (let i = 0;i < pathList.length; i++) {
-              const h = (hashLines[i] ?? "").trim();
-              if (h)
-                files.set(pathList[i], h);
-            }
-          }
-        } catch {
-          batchOk = false;
-        }
-        if (!batchOk || files.size < pathList.length) {
-          const statSync4 = __require("fs").statSync;
-          for (const file of pathList) {
-            if (files.has(file))
-              continue;
-            try {
-              files.set(file, `m:${statSync4(file).mtimeMs}`);
-            } catch {
-              files.set(file, "deleted");
-            }
-          }
-        }
-      }
-    } catch {}
-    return { files };
-  }
   async function runRalphLoop() {
     if (!agentType)
       agentType = "opencode";
@@ -6041,14 +6161,14 @@ Your answer: `, (answer) => {
     const ownership = decideLoopOwnership(existingState, process.pid);
     if (ownership.status === "already-running") {
       console.error(`Error: Ralph loop is already running with PID ${ownership.ownerPid}.`);
-      console.error(`Stop the existing process or clear ${statePath} if it is stale.`);
+      console.error(`Stop the existing process or clear ${getStatePath()} if it is stale.`);
       process.exit(1);
     }
     const resuming = ownership.status === "resume";
     if (resuming) {
-      pipelineContext = loadPipelineContext(stateDir);
+      pipelineContext = loadPipelineContext(getStateDir());
     } else {
-      clearPipelineContext(stateDir);
+      clearPipelineContext(getStateDir());
     }
     if (existingState?.active && !reuseState) {
       let isFieldSkipped = function(field) {
@@ -6137,7 +6257,7 @@ To reuse the existing state, pass --reuse-state:`);
         console.error(`   ralph --reuse-state [your args...]`);
         console.error(`
 To start fresh, clear the state file:`);
-        console.error(`   rm ${statePath}`);
+        console.error(`   rm ${getStatePath()}`);
         process.exit(1);
       }
       for (const w of warnings) {
@@ -6170,7 +6290,7 @@ To start fresh, clear the state file:`);
       if (ownership.ownerPid && ownership.ownerPid !== process.pid) {
         console.log(`\u26A0\uFE0F  Recovered stale active state from PID ${ownership.ownerPid}`);
       }
-      console.log(`\uD83D\uDD04 Resuming Ralph loop from ${statePath}`);
+      console.log(`\uD83D\uDD04 Resuming Ralph loop from ${getStatePath()}`);
     }
     if (tasksMode && completionPromise.trim() === taskPromise.trim()) {
       console.error("Error: completion and task promises must be different in tasks mode.");
@@ -6209,8 +6329,8 @@ To start fresh, clear the state file:`);
 `);
     if (!goalPath && goalDir) {
       if (resuming && existingState?.goalSlug) {
-        const resumedGoalPath = join4(goalDir, existingState.goalSlug, "goal.md");
-        if (existsSync6(resumedGoalPath)) {
+        const resumedGoalPath = join5(goalDir, existingState.goalSlug, "goal.md");
+        if (existsSync8(resumedGoalPath)) {
           goalPath = resumedGoalPath;
           console.log(`\uD83D\uDCCB Resuming goal: ${existingState.goalSlug} (from previous session)`);
         }
@@ -6219,14 +6339,14 @@ To start fresh, clear the state file:`);
         const inv = buildInventory(goalDir);
         const next = findNextActionableGoal(inv);
         if (next) {
-          goalPath = join4(goalDir, next.slug, "goal.md");
+          goalPath = join5(goalDir, next.slug, "goal.md");
           console.log(`\uD83D\uDCCB Auto-selected goal: ${next.slug} (${next.phase})`);
         } else {
           console.warn("Warning: No actionable goals found in " + goalDir);
         }
       }
     }
-    const goalSlug = goalPath ? basename2(dirname2(goalPath)) : "";
+    const goalSlug = goalPath ? basename2(dirname3(goalPath)) : "";
     const state = resuming && existingState ? existingState : {
       active: true,
       iteration: 1,
@@ -6259,7 +6379,7 @@ To start fresh, clear the state file:`);
     if (goalPath) {
       state.goalSlug = goalSlug;
       state.goalPhase = "planning";
-      const goalStateFilePath = join4(dirname2(goalPath), "goal.state.json");
+      const goalStateFilePath = join5(dirname3(goalPath), "goal.state.json");
       const existingGoalState = loadGoalState(goalStateFilePath);
       if (existingGoalState) {
         state.goalPhase = existingGoalState.phase;
@@ -6324,15 +6444,15 @@ To start fresh, clear the state file:`);
     try {
       saveState(state);
     } catch {}
-    if (tasksMode && !existsSync6(tasksPath)) {
-      if (!existsSync6(stateDir)) {
-        mkdirSync2(stateDir, { recursive: true });
+    if (tasksMode && !existsSync8(getTasksPath())) {
+      if (!existsSync8(getStateDir())) {
+        mkdirSync3(getStateDir(), { recursive: true });
       }
-      writeFileSync6(tasksPath, `# Ralph Tasks
+      writeFileSync7(getTasksPath(), `# Ralph Tasks
 
 Add your tasks below using: \`ralph --add-task "description"\`
 `);
-      console.log(`\uD83D\uDCCB Created tasks file: ${tasksPath}`);
+      console.log(`\uD83D\uDCCB Created tasks file: ${getTasksPath()}`);
     }
     const history = resuming ? loadHistory() : {
       iterations: [],
@@ -6341,7 +6461,7 @@ Add your tasks below using: \`ralph --add-task "description"\`
     };
     if (!resuming) {
       try {
-        saveHistory(history);
+        saveHistory2(history);
       } catch {}
     }
     function buildHookEnv(event, extra) {
@@ -6350,7 +6470,7 @@ Add your tasks below using: \`ralph --add-task "description"\`
         RALPH_ITERATION: String(state.iteration),
         RALPH_AGENT: state.agent || agentType,
         RALPH_MODEL: state.model || model,
-        RALPH_STATE_DIR: stateDir,
+        RALPH_STATE_DIR: getStateDir(),
         RALPH_CWD: process.cwd(),
         RALPH_PIPELINE_CONTEXT: JSON.stringify(pipelineContext),
         ...extra
@@ -6385,10 +6505,10 @@ Add your tasks below using: \`ralph --add-task "description"\`
     console.log("\u2550".repeat(68));
     if (resuming) {
       pipelineContext = executeHooks({ event: "loop-resume", env: buildHookEnv("loop-resume"), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-      savePipelineContext(stateDir, pipelineContext);
+      savePipelineContext(getStateDir(), pipelineContext);
     } else {
       pipelineContext = executeHooks({ event: "loop-start", env: buildHookEnv("loop-start"), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-      savePipelineContext(stateDir, pipelineContext);
+      savePipelineContext(getStateDir(), pipelineContext);
     }
     let currentProc = null;
     let currentHeartbeatTimer = null;
@@ -6400,7 +6520,7 @@ Add your tasks below using: \`ralph --add-task "description"\`
         console.log(`
 Force stopping...`);
         try {
-          clearPipelineContext(stateDir);
+          clearPipelineContext(getStateDir());
         } catch {}
         process.exit(1);
       }
@@ -6438,12 +6558,12 @@ Gracefully stopping Ralph loop...`);
       console.log("Loop cancelled.");
       executeHooks({ event: "loop-cancel", env: buildHookEnv("loop-cancel"), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
       executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "cancel" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-      clearPipelineContext(stateDir);
+      clearPipelineContext(getStateDir());
       setImmediate(() => process.exit(0));
     });
     const cleanupPipelineContext = () => {
       try {
-        clearPipelineContext(stateDir);
+        clearPipelineContext(getStateDir());
       } catch {}
     };
     const killInFlightChild = () => {
@@ -6492,7 +6612,7 @@ Received SIGTERM, stopping Ralph loop...`);
         console.log(`\u2551  Total time: ${formatDurationLong(history.totalDurationMs)}`);
         console.log(`\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D`);
         executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "max-iterations" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-        clearPipelineContext(stateDir);
+        clearPipelineContext(getStateDir());
         clearState();
         clearPendingQuestions();
         break;
@@ -6503,7 +6623,7 @@ Received SIGTERM, stopping Ralph loop...`);
 \uD83D\uDD04 Iteration ${state.iteration}${iterInfo}${minInfo}`);
       console.log("\u2500".repeat(68));
       pipelineContext = executeHooks({ event: "iteration-start", env: buildHookEnv("iteration-start"), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-      savePipelineContext(stateDir, pipelineContext);
+      savePipelineContext(getStateDir(), pipelineContext);
       const contextAtStart = loadContext();
       const snapshotBefore = await captureFileSnapshot();
       const now = Date.now();
@@ -6559,7 +6679,7 @@ Received SIGTERM, stopping Ralph loop...`);
         const env = agentConfig2.buildEnv({
           filterPlugins: disablePlugins,
           allowAllPermissions
-        }, stateDir);
+        }, getStateDir());
         env.RALPH_PIPELINE_CONTEXT = JSON.stringify(pipelineContext);
         console.log(`DEBUG: Agent Command: ${agentConfig2.command}`);
         console.log(`DEBUG: Agent Args: ${JSON.stringify(cmdArgs)}`);
@@ -6638,7 +6758,9 @@ Received SIGTERM, stopping Ralph loop...`);
               stderr,
               exitCode: stalledExitCode,
               completionDetected: false,
-              snapshotBefore
+              snapshotBefore,
+              historyPath: getHistoryPath(),
+              stateDir: getStateDir()
             });
             if (state.stallingAction === "rotate" && state.rotation && state.rotation.length > 0) {
               const blacklistEntry = {
@@ -6665,7 +6787,7 @@ Received SIGTERM, stopping Ralph loop...`);
 \uD83D\uDED1 Stopping loop due to stalling`);
               executeHooks({ event: "loop-stall", env: buildHookEnv("loop-stall"), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
               executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "stall" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-              clearPipelineContext(stateDir);
+              clearPipelineContext(getStateDir());
               state.active = false;
               try {
                 saveState(state);
@@ -6719,7 +6841,9 @@ Received SIGTERM, stopping Ralph loop...`);
               stderr,
               exitCode: stalledExitCode,
               completionDetected: false,
-              snapshotBefore
+              snapshotBefore,
+              historyPath: getHistoryPath(),
+              stateDir: getStateDir()
             });
             if (state.stallingAction === "rotate" && state.rotation && state.rotation.length > 0) {
               const blacklistEntry = {
@@ -6743,7 +6867,7 @@ Received SIGTERM, stopping Ralph loop...`);
 \uD83D\uDED1 Stopping loop due to stalling`);
               executeHooks({ event: "loop-stall", env: buildHookEnv("loop-stall"), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
               executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "stall" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-              clearPipelineContext(stateDir);
+              clearPipelineContext(getStateDir());
               state.active = false;
               try {
                 saveState(state);
@@ -6777,8 +6901,8 @@ ${stderr}`;
         if (tasksMode && completionSignalDetected) {
           let tasksGatePassed = false;
           try {
-            if (existsSync6(tasksPath)) {
-              const tasksContent = readFileSync7(tasksPath, "utf-8");
+            if (existsSync8(getTasksPath())) {
+              const tasksContent = readFileSync9(getTasksPath(), "utf-8");
               tasksGatePassed = tasksMarkdownAllComplete(tasksContent);
             }
           } catch {
@@ -6810,7 +6934,9 @@ ${stderr}`;
           stderr,
           exitCode,
           completionDetected,
-          snapshotBefore
+          snapshotBefore,
+          historyPath: getHistoryPath(),
+          stateDir: getStateDir()
         });
         pipelineContext = executeHooks({
           event: "iteration-end",
@@ -6825,11 +6951,11 @@ ${stderr}`;
           hookTimeoutMs,
           pipelineContext
         });
-        savePipelineContext(stateDir, pipelineContext);
+        savePipelineContext(getStateDir(), pipelineContext);
         let goalCompleted = false;
         if (state.goalSlug && goalPath) {
           try {
-            const goalStatePath = join4(dirname2(goalPath), "goal.state.json");
+            const goalStatePath = join5(dirname3(goalPath), "goal.state.json");
             const updatedGoalState = syncGoalStateAfterIteration(goalPath, goalStatePath, state.iteration, completionPromise);
             if (updatedGoalState) {
               state.goalPhase = updatedGoalState.phase;
@@ -6905,7 +7031,7 @@ ${stderr}`;
           console.log(`\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D`);
           executeHooks({ event: "loop-abort", env: buildHookEnv("loop-abort", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs) }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
           executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "abort" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-          clearPipelineContext(stateDir);
+          clearPipelineContext(getStateDir());
           clearState();
           clearHistory();
           clearContext();
@@ -6920,8 +7046,8 @@ ${stderr}`;
             const answer = await promptUser(detectedQuestion);
             if (answer.trim()) {
               savePendingQuestion(answer);
-              if (!existsSync6(stateDir)) {
-                mkdirSync2(stateDir, { recursive: true });
+              if (!existsSync8(getStateDir())) {
+                mkdirSync3(getStateDir(), { recursive: true });
               }
               const existingContext = loadContext() || "";
               const answerContext = `
@@ -6929,9 +7055,9 @@ ${stderr}`;
 Your previous answer was: ${answer}
 `;
               if (existingContext) {
-                writeFileSync6(contextPath, existingContext + answerContext);
+                writeFileSync7(getContextPath(), existingContext + answerContext);
               } else {
-                writeFileSync6(contextPath, `# Ralph Loop Context
+                writeFileSync7(getContextPath(), `# Ralph Loop Context
 ${answerContext}`);
               }
               console.log(`\u2705 Answer saved and injected into context`);
@@ -6941,8 +7067,8 @@ ${answerContext}`);
           } else {
             const pendingAnswer = getAndClearPendingQuestion();
             if (pendingAnswer) {
-              if (!existsSync6(stateDir)) {
-                mkdirSync2(stateDir, { recursive: true });
+              if (!existsSync8(getStateDir())) {
+                mkdirSync3(getStateDir(), { recursive: true });
               }
               const existingContext = loadContext() || "";
               const answerContext = `
@@ -6950,9 +7076,9 @@ ${answerContext}`);
 Your previous answer was: ${pendingAnswer}
 `;
               if (existingContext) {
-                writeFileSync6(contextPath, existingContext + answerContext);
+                writeFileSync7(getContextPath(), existingContext + answerContext);
               } else {
-                writeFileSync6(contextPath, `# Ralph Loop Context
+                writeFileSync7(getContextPath(), `# Ralph Loop Context
 ${answerContext}`);
               }
             }
@@ -6987,9 +7113,9 @@ ${answerContext}`);
                 cwd: process.cwd(),
                 prompt: state.prompt,
                 iterationCount: state.iteration,
-                contextPath,
-                statePath,
-                stateDir,
+                contextPath: getContextPath(),
+                statePath: getStatePath(),
+                stateDir: getStateDir(),
                 runHash: state.runHash || "",
                 saveStateFn: (rgState) => {
                   state.reviewGate = rgState;
@@ -7005,8 +7131,8 @@ ${answerContext}`);
                 console.log(`\u2551  \u2705 Review approved! Loop completing.`);
                 console.log(`\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D`);
                 executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "completion" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-                clearPipelineContext(stateDir);
-                const defaultStateDir = join4(process.cwd(), ".ralph");
+                clearPipelineContext(getStateDir());
+                const defaultStateDir = join5(process.cwd(), ".ralph");
                 if (stateDirInput === defaultStateDir) {
                   clearState();
                   clearHistory();
@@ -7033,8 +7159,8 @@ ${answerContext}`);
               console.log(`\u2551  Total time: ${formatDurationLong(history.totalDurationMs)}`);
               console.log(`\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D`);
               executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "completion" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-              clearPipelineContext(stateDir);
-              const defaultStateDir = join4(process.cwd(), ".ralph");
+              clearPipelineContext(getStateDir());
+              const defaultStateDir = join5(process.cwd(), ".ralph");
               if (stateDirInput === defaultStateDir) {
                 clearState();
                 clearHistory();
@@ -7052,8 +7178,8 @@ ${answerContext}`);
             console.log(`   Continuing to iteration ${state.iteration + 1}...`);
           } else {
             executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "completion" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-            clearPipelineContext(stateDir);
-            const defaultStateDir = join4(process.cwd(), ".ralph");
+            clearPipelineContext(getStateDir());
+            const defaultStateDir = join5(process.cwd(), ".ralph");
             if (stateDirInput === defaultStateDir) {
               clearState();
               clearHistory();
@@ -7126,7 +7252,7 @@ ${answerContext}`);
         console.error(`
 \u274C Error in iteration ${state.iteration}:`, error);
         pipelineContext = executeHooks({ event: "loop-error", env: buildHookEnv("loop-error", { RALPH_ERROR_MESSAGE: String(error).substring(0, 500) }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
-        savePipelineContext(stateDir, pipelineContext);
+        savePipelineContext(getStateDir(), pipelineContext);
         console.log("Continuing to next iteration...");
         const iterationDuration = Date.now() - iterationStart;
         const errorRecord = {
@@ -7146,7 +7272,7 @@ ${answerContext}`);
         capHistoryIterations(history);
         history.totalDurationMs += iterationDuration;
         try {
-          saveHistory(history);
+          saveHistory2(history);
         } catch {}
         if (state.rotation && state.rotation.length > 0) {
           state.rotationIndex = ((state.rotationIndex ?? 0) + 1) % state.rotation.length;
@@ -7160,14 +7286,17 @@ ${answerContext}`);
     }
   }
   extraAgentFlags = [...extraAgentFlags, ...passthroughAgentFlags];
-  runRalphLoop().catch((error) => {
+  runRalphLoop().catch(async (error) => {
     console.error("Fatal error:", error);
     try {
-      clearPipelineContext(stateDir);
+      clearPipelineContext(getStateDir());
     } catch {}
     clearState();
     process.exit(1);
   });
+}
+if (import.meta.main) {
+  await ralphMain();
 }
 export {
   validateRulesToml,
@@ -7178,7 +7307,8 @@ export {
   resolveConfigRelativePath2 as resolveConfigRelativePath,
   resolveCommand2 as resolveCommand,
   resolveAgentBinary,
-  normalizeRuntimeConfigValue2 as normalizeRuntimeConfigValue,
+  ralphMain,
+  normalizeRuntimeConfigValue,
   loadRuntimeTomlConfig,
   loadRulesToml,
   loadPluginsFromConfig,

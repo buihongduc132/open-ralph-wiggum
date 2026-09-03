@@ -166,3 +166,5 @@ bin/ralph
 .mutator-rules/
 .stryker-tmp/
 reports/mutation/
+coverage/
+tmp-test-modulo/

@@ -526,13 +526,6 @@ describe("Phase 3 — Edge Cases", () => {
       expect(gateState.phase).toBe("disabled");
    });
 
-   it("T15: abortPromise → skip review, immediate stop (design verification)", () => {
-      // When abortPromise is detected, the loop stops immediately
-      // The code checks abortPromise separately and breaks before reaching
-      // the completionDetected block where the review gate lives
-      // This is a design verification, not runtime test
-      expect(true).toBe(true);
-   });
 
    it("T22: Context injection timing — feedback written before next iteration", () => {
       const ctxPath = join(tmpDir, "ralph-context-timing.md");
