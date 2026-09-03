@@ -3354,7 +3354,7 @@ Unable to read ${currentTasksFileLabel()}
            // Check rotation
            if (!!existingState.rotation !== (!!rotation) ||
               (existingState.rotation && rotation &&
-               JSON.stringify(existingState.rotation.sort()) !== JSON.stringify([...rotation].sort()))) {
+               JSON.stringify([...existingState.rotation].sort()) !== JSON.stringify([...rotation].sort()))) {
               if (isFieldSkipped("rotation")) {
                  warnings.push("⚠️  rotation drift tolerated: stored → current");
               } else {

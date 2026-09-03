@@ -6241,7 +6241,7 @@ Iteration Summary`);
           mismatches.push(`max-iterations (stored: ${existingState.maxIterations}, current: ${maxIterations})`);
         }
       }
-      if (!!existingState.rotation !== !!rotation || existingState.rotation && rotation && JSON.stringify(existingState.rotation.sort()) !== JSON.stringify([...rotation].sort())) {
+      if (!!existingState.rotation !== !!rotation || existingState.rotation && rotation && JSON.stringify([...existingState.rotation].sort()) !== JSON.stringify([...rotation].sort())) {
         if (isFieldSkipped("rotation")) {
           warnings.push("\u26A0\uFE0F  rotation drift tolerated: stored \u2192 current");
         } else {
