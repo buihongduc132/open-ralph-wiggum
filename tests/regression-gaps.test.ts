@@ -525,7 +525,7 @@ describe("GAP-11: --reuse-state preserves CLI completionPromise when state lacks
     expect(out + err).toContain("MY_CUSTOM_COMPLETE");
   });
 
-  itSlow("--reuse-state: state completionPromise IS used when it has a value", async () => {
+  itSlow("--reuse-state: provided CLI completionPromise overrides stored value (later args win)", async () => {
     const sd = join(workDir, ".ralph2");
     mkdirSync(sd, { recursive: true });
      writeFileSync(join(sd, "ralph-loop.state.json"), JSON.stringify({
@@ -545,7 +545,7 @@ describe("GAP-11: --reuse-state preserves CLI completionPromise when state lacks
      }));
     const proc = Bun.spawn({
       cmd: [bunPath, "run", ralphPath, "--state-dir", sd, "--no-commit",
-        "--reuse-state", "--completion-promise", "CLI_SHOULD_NOT_APPEAR",
+        "--reuse-state", "--completion-promise", "CLI_TAG_WINS",
         "--config", agentConfigPath, "--max-iterations", "1", "my task",
         "--", "--agent", "opencode", "--model", TEST_MODEL],
       cwd: workDir, stdin: "ignore", stdout: "pipe", stderr: "pipe",
@@ -554,8 +554,9 @@ describe("GAP-11: --reuse-state preserves CLI completionPromise when state lacks
     const out = await new Response(proc.stdout).text();
     const err = await new Response(proc.stderr).text();
     expect((await proc.exited)).toBe(0);
-    expect(out + err).toContain("STATE_COMPLETE_TAG");
-    expect(out + err).not.toContain("CLI_SHOULD_NOT_APPEAR");
+    // New contract (2026-09-05): explicit CLI flag overrides stored value.
+    expect(out + err).toContain("completion-promise override: STATE_COMPLETE_TAG → CLI_TAG_WINS");
+    expect(out + err).toContain("Completion promise: CLI_TAG_WINS");
   });
 });
 

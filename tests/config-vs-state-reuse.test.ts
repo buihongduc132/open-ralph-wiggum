@@ -128,12 +128,14 @@ describe("config-different-from-state", () => {
    // RED TESTS — without --reuse-state: different config MUST cause rejection
    // ─────────────────────────────────────────────────────────────────────────
 
-   it("REJECTED: launching with a different agent replaces stale state WITHOUT --reuse-state", async () => {
+   it("OVERRIDE: launching with a different agent (explicit --agent) resumes and overrides WITHOUT --reuse-state", async () => {
       writeFakeAgentConfig();
       // Simulate: an opencode loop is in progress
       writeActiveState({ agent: "opencode", model: "claude-sonnet-4" });
 
-      // Second launch: codex agent (different config)
+      // Second launch: codex agent (different config) — explicit --agent is an
+      // intentional override (user rule 2026-09-05: later args always win),
+      // NOT a conflict. It resumes and applies the override.
       const proc = runRalph([
          "different-agent launch",
          "--agent", "codex",
@@ -143,46 +145,52 @@ describe("config-different-from-state", () => {
       const stdout = await new Response(proc.stdout).text();
       const exitCode = await proc.exited;
 
-      // Ralph MUST exit with an error because stored state was opencode
-      // but this launch uses codex — without --reuse-state this is a conflict.
-      expect(exitCode).toBe(1);
-      expect(stderr + stdout).toMatch(/config|state|reuse|agent|mismatch|conflict|stale/i);
+      // New contract: resumes with the override (no hard mismatch exit)
+      expect(exitCode).not.toBe(1);
+      expect(stdout).toMatch(/agent override: opencode → codex/);
+      expect(stdout).not.toMatch(/Config Mismatch/);
    });
 
-   it("REJECTED: launching with a different model replaces stale state WITHOUT --reuse-state", async () => {
+   it("OVERRIDE: launching with a different model (explicit --model) resumes and overrides WITHOUT --reuse-state", async () => {
       writeFakeAgentConfig();
       // Simulate: a gpt-4o loop is in progress
       writeActiveState({ agent: "codex", model: "gpt-4o" });
 
-      // Second launch: o3 model (different config)
+      // Second launch: o3 model (explicit --model = intentional override)
       const proc = runRalph([
          "different-model launch",
          "--agent", "codex",
          "--model", "o3",
       ]);
-      const stderr = await new Response(proc.stderr).text();
+      const stdout = await new Response(proc.stdout).text();
       const exitCode = await proc.exited;
 
-      expect(exitCode).toBe(1);
-      expect(stderr).toMatch(/config|state|reuse|model|mismatch|conflict|stale/i);
+      // New contract: resumes with the override (no hard mismatch exit)
+      expect(exitCode).not.toBe(1);
+      expect(stdout).toMatch(/model override: gpt-4o → o3/);
+      expect(stdout).not.toMatch(/Config Mismatch/);
    });
 
-   it("REJECTED: launching with different min/max iterations replaces stale state WITHOUT --reuse-state", async () => {
+   it("OVERRIDE: launching with different min/max iterations (explicit flags) resumes and overrides WITHOUT --reuse-state", async () => {
       writeFakeAgentConfig();
-      // Simulate: loop with min=1, max=10
-      writeActiveState({ minIterations: 1, maxIterations: 10 });
+      // Simulate: loop with min=1, max=10, agent/model = launch defaults
+      // (opencode + "" so the ONLY delta is the explicit min/max flags)
+      writeActiveState({ minIterations: 1, maxIterations: 10, agent: "opencode", model: "" });
 
-      // Second launch: min=3, max=20 (different!)
+      // Second launch: min=3, max=20 — explicit flags = intentional overrides
       const proc = runRalph([
          "different-iterations launch",
          "--min-iterations", "3",
          "--max-iterations", "20",
       ]);
-      const stderr = await new Response(proc.stderr).text();
+      const stdout = await new Response(proc.stdout).text();
       const exitCode = await proc.exited;
 
-      expect(exitCode).toBe(1);
-      expect(stderr).toMatch(/config|state|reuse|iteration|mismatch|conflict|stale/i);
+      // New contract: resumes with the overrides (no hard mismatch exit)
+      expect(exitCode).not.toBe(1);
+      expect(stdout).toMatch(/min-iterations override: 1 → 3/);
+      expect(stdout).toMatch(/max-iterations override: 10 → 20/);
+      expect(stdout).not.toMatch(/Config Mismatch/);
    });
 
    it("REJECTED: launching with different completion promise replaces stale state WITHOUT --reuse-state", async () => {

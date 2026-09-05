@@ -1058,7 +1058,9 @@ Options:
    --stall-retries     Sleep and restart after all fallbacks are exhausted
    --stall-retry-minutes N  Minutes to sleep before restarting exhausted fallbacks (default: 15)
    --no-commit         Don't auto-commit after each iteration
-   --reuse-state       Explicitly reuse existing state when config differs from stored state
+   --reuse-state       Resume existing state; explicitly provided args (CLI flag or
+                       TOML key) ALWAYS override stored values ("later args win");
+                       unprovided values are inherited from state
                        (use this when intentionally resuming a loop with different args)
    --allow-all         Auto-approve all tool permissions (default: on)
   --no-allow-all      Require interactive permission prompts
@@ -2123,7 +2125,19 @@ Learn more: https://ghuntley.com/ralph/
       extraAgentFlags,
       passthroughAgentFlags,
       promptParts,
+      completionPromiseProvided,
+      abortPromiseProvided,
+      tasksModeProvided,
+      taskPromiseProvided,
+      promptTemplateProvided,
+      modelProvided,
+      agentProvided,
    } = parsed;
+
+   // promptProvided: positional prompt (or --prompt-file/TOML prompt) counts as
+   // an explicit override for resume precedence. Resolved here because the
+   // prompt itself is assembled later (promptParts/promptFile/TOML order).
+   const promptProvided = parsed.promptProvided || promptParts.length > 0 || promptFile !== "";
 
    let promptSource = "";
    let rotation: string[] | null = null;
@@ -3293,10 +3307,10 @@ Unable to read ${currentTasksFileLabel()}
            const warnings: string[] = [];
 
            // Hard-block fields: ALWAYS checked regardless of config
-           if (existingState.completionPromise !== completionPromise) {
+           if (existingState.completionPromise !== completionPromise && !completionPromiseProvided) {
               mismatches.push(`completion-promise (stored: ${existingState.completionPromise}, current: ${completionPromise})`);
            }
-           if (existingState.tasksMode !== tasksMode) {
+           if (existingState.tasksMode !== tasksMode && !tasksModeProvided) {
               mismatches.push(`tasks mode (stored: ${existingState.tasksMode}, current: ${tasksMode})`);
            }
 
@@ -3324,38 +3338,31 @@ Unable to read ${currentTasksFileLabel()}
               }
            }
 
-           // Check agent
-           if (existingState.agent !== agentType) {
+           // Check agent — an explicitly provided --agent is an intentional
+           // override (later args win), not drift: skip the check entirely.
+           if (existingState.agent !== agentType && !agentProvided) {
               if (isFieldSkipped("agent")) {
-                 warnings.push(`⚠️  agent drift tolerated: ${existingState.agent} → ${agentType}`);
+                 warnings.push(`⚠️  agent drift tolerated: ${existingState.agent} → ${agentType} (stored value will be reused; pass --agent to override)`);
               } else {
                  mismatches.push(`agent (stored: ${existingState.agent}, current: ${agentType})`);
               }
            }
-           // Check model
-           if (existingState.model && existingState.model !== model && model !== "") {
+           // Check model — explicit --model is an override, not drift.
+           if (existingState.model && existingState.model !== model && model !== "" && !modelProvided) {
               if (isFieldSkipped("model")) {
-                 warnings.push(`⚠️  model drift tolerated: ${existingState.model} → ${model}`);
+                 warnings.push(`⚠️  model drift tolerated: ${existingState.model} → ${model} (stored value will be reused; pass --model to override)`);
               } else {
                  mismatches.push(`model (stored: ${existingState.model}, current: ${model})`);
               }
            }
-           // Check minIterations
-           if (existingState.minIterations !== minIterations && minIterationsProvided) {
-              if (isFieldSkipped("minIterations")) {
-                 warnings.push(`⚠️  min-iterations drift tolerated: ${existingState.minIterations} → ${minIterations}`);
-              } else {
-                 mismatches.push(`min-iterations (stored: ${existingState.minIterations}, current: ${minIterations})`);
-              }
-           }
-           // Check maxIterations
-           if (existingState.maxIterations !== maxIterations && maxIterationsProvided) {
-              if (isFieldSkipped("maxIterations")) {
-                 warnings.push(`⚠️  max-iterations drift tolerated: ${existingState.maxIterations} → ${maxIterations}`);
-              } else {
-                 mismatches.push(`max-iterations (stored: ${existingState.maxIterations}, current: ${maxIterations})`);
-              }
-           }
+           // Check minIterations — a differing EXPLICITLY-PROVIDED value is an
+           // intentional override (user rule 2026-09-05: later args always win),
+           // not a mismatch. Mismatch remains only for fields not covered by
+           // the resume-override rule (rotation below); min/max defaults vs
+           // stored were never drift (resume inherits stored when unprovided).
+           // (reuse_skip_min/max_iterations remain honored for warn-only paths
+           // in relaxed mode.)
+           // Check maxIterations — same rule as minIterations.
            // Check rotation
            if (!!existingState.rotation !== (!!rotation) ||
               (existingState.rotation && rotation &&
@@ -3386,21 +3393,31 @@ Unable to read ${currentTasksFileLabel()}
        if (resuming) {
           // existingState is guaranteed non-null when status === "resume"
           const state = existingState!;
-          minIterations = state.minIterations;
-          maxIterations = state.maxIterations;
-           // Only restore completionPromise from state if it was actually saved in the state file.
-           // Without this check, --reuse-state would always discard the CLI --completion-promise
-           // value even when resuming a state that never had completionPromise set.
-           if (state.completionPromise) {
-              completionPromise = state.completionPromise;
-           }
-           abortPromise = state.abortPromise ?? "";
-          tasksMode = state.tasksMode;
-          taskPromise = state.taskPromise;
-          prompt = state.prompt;
-          promptTemplatePath = state.promptTemplate ?? "";
-          model = state.model;
-          agentType = state.agent;
+          // Resume precedence (user rule 2026-09-05): an EXPLICIT value in the
+          // current invocation (CLI flag or TOML key) ALWAYS overrides the
+          // stored one — "always takes the args / configuration of later".
+          // Stored values are only inherited when nothing was provided.
+          // Each override prints a truthful one-line notice (stored → provided).
+          const override = <T,>(label: string, provided: boolean, currentVal: T, storedVal: T, apply: (v: T) => void): void => {
+             if (provided) {
+                apply(currentVal);
+                if (String(currentVal) !== String(storedVal)) {
+                   console.log(`🔄 ${label} override: ${String(storedVal) === "" ? "(unset)" : storedVal} → ${currentVal} (later args win)`);
+                }
+             } else {
+                apply(storedVal);
+             }
+          };
+          override("min-iterations", minIterationsProvided, minIterations, state.minIterations, (v) => { minIterations = v; });
+          override("max-iterations", maxIterationsProvided, maxIterations, state.maxIterations, (v) => { maxIterations = v; });
+          override("completion-promise", completionPromiseProvided, completionPromise, state.completionPromise ?? "", (v) => { completionPromise = v; });
+          override("abort-promise", abortPromiseProvided, abortPromise, state.abortPromise ?? "", (v) => { abortPromise = v; });
+          override("tasks", tasksModeProvided, tasksMode, state.tasksMode, (v) => { tasksMode = v; });
+          override("task-promise", taskPromiseProvided, taskPromise, state.taskPromise ?? "READY_FOR_NEXT_TASK", (v) => { taskPromise = v; });
+          override("prompt", promptProvided, prompt, state.prompt, (v) => { prompt = v; });
+          override("prompt-template", promptTemplateProvided, promptTemplatePath, state.promptTemplate ?? "", (v) => { promptTemplatePath = v; });
+          override("model", modelProvided, model, state.model ?? "", (v) => { model = v; });
+          override("agent", agentProvided, agentType, state.agent, (v) => { agentType = v; });
           if (!rotationInput) {
              rotation = state.rotation ?? null;
           }

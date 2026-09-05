@@ -175,6 +175,14 @@ export interface ParsedMainArgs {
    reuseSkipMaxIterations: boolean;
    maxIterationsProvided: boolean;
    minIterationsProvided: boolean;
+   completionPromiseProvided: boolean;
+   abortPromiseProvided: boolean;
+   tasksModeProvided: boolean;
+   taskPromiseProvided: boolean;
+   promptProvided: boolean;
+   promptTemplateProvided: boolean;
+   modelProvided: boolean;
+   agentProvided: boolean;
    stallingTimeoutProvided: boolean;
    blacklistDurationProvided: boolean;
    stallingActionProvided: boolean;
@@ -231,6 +239,14 @@ export function getDefaultMainArgs(): ParsedMainArgs {
       reuseSkipMaxIterations: false,
       maxIterationsProvided: false,
       minIterationsProvided: false,
+      completionPromiseProvided: false,
+      abortPromiseProvided: false,
+      tasksModeProvided: false,
+      taskPromiseProvided: false,
+      promptProvided: false,
+      promptTemplateProvided: false,
+      modelProvided: false,
+      agentProvided: false,
       stallingTimeoutProvided: false,
       blacklistDurationProvided: false,
       stallingActionProvided: false,
@@ -246,16 +262,16 @@ export function getDefaultMainArgs(): ParsedMainArgs {
 }
 
 export function applyTomlConfig(result: ParsedMainArgs, config: RalphRuntimeConfig): void {
-   if (config.prompt) result.prompt = config.prompt;
-   if (config.agent) result.agentType = config.agent;
+   if (config.prompt) { result.prompt = config.prompt; result.promptProvided = true; }
+   if (config.agent) { result.agentType = config.agent; result.agentProvided = true; }
    if (config.agent_binary) result.agentBinary = config.agent_binary;
    if (config.min_iterations !== undefined) result.minIterations = config.min_iterations;
    if (config.max_iterations !== undefined) result.maxIterations = config.max_iterations;
-   if (config.completion_promise) result.completionPromise = config.completion_promise;
-   if (config.abort_promise) result.abortPromise = config.abort_promise;
-   if (config.tasks !== undefined) result.tasksMode = config.tasks;
-   if (config.task_promise) result.taskPromise = config.task_promise;
-   if (config.model) result.model = config.model;
+   if (config.completion_promise) { result.completionPromise = config.completion_promise; result.completionPromiseProvided = true; }
+   if (config.abort_promise) { result.abortPromise = config.abort_promise; result.abortPromiseProvided = true; }
+   if (config.tasks !== undefined) { result.tasksMode = config.tasks; result.tasksModeProvided = true; }
+   if (config.task_promise) { result.taskPromise = config.task_promise; result.taskPromiseProvided = true; }
+   if (config.model) { result.model = config.model; result.modelProvided = true; }
    if (config.rotation?.length) result.rotationInput = config.rotation.join(",");
    if (config.stalling_timeout) {
       result.stallingTimeoutMs = parseDuration(config.stalling_timeout);
@@ -277,7 +293,7 @@ export function applyTomlConfig(result: ParsedMainArgs, config: RalphRuntimeConf
    if (config.no_plugins !== undefined) result.disablePlugins = config.no_plugins;
    if (config.allow_all !== undefined) result.allowAllPermissions = config.allow_all;
    if (config.prompt_file) result.promptFile = config.prompt_file;
-   if (config.prompt_template) result.promptTemplatePath = config.prompt_template;
+   if (config.prompt_template) { result.promptTemplatePath = config.prompt_template; result.promptTemplateProvided = true; }
    if (config.stream !== undefined) result.streamOutput = config.stream;
    if (config.verbose_tools !== undefined) result.verboseTools = config.verbose_tools;
    if (config.questions !== undefined) result.handleQuestions = config.questions;
@@ -303,14 +319,23 @@ export function applyTomlConfig(result: ParsedMainArgs, config: RalphRuntimeConf
    if (config.reuse_skip_model !== undefined) result.reuseSkipModel = config.reuse_skip_model;
    if (config.reuse_skip_agent !== undefined) result.reuseSkipAgent = config.reuse_skip_agent;
    if (config.reuse_skip_rotation !== undefined) result.reuseSkipRotation = config.reuse_skip_rotation;
-   if (config.reuse_skip_min_iterations !== undefined) result.reuseSkipMinIterations = config.reuse_skip_min_iterations;
-   if (config.reuse_skip_max_iterations !== undefined) result.reuseSkipMaxIterations = config.reuse_skip_max_iterations;
+   if (config.reuse_skip_min_iterations !== undefined) {
+      result.reuseSkipMinIterations = config.reuse_skip_min_iterations;
+      // Since 2026-09-05 an explicit --min-iterations on resume is always an
+      // override (never drift), so this key no longer changes behavior.
+      console.warn("⚠️  config: reuse_skip_min_iterations is deprecated (no effect): explicit --min-iterations now always overrides stored state on resume");
+   }
+   if (config.reuse_skip_max_iterations !== undefined) {
+      result.reuseSkipMaxIterations = config.reuse_skip_max_iterations;
+      console.warn("⚠️  config: reuse_skip_max_iterations is deprecated (no effect): explicit --max-iterations now always overrides stored state on resume");
+   }
    // Goal mode (opt-in)
    if (config.goal) result.goalPath = config.goal;
    if (config.goal_dir) result.goalDir = config.goal_dir;
    // goal_promise only applies when goal mode is active (opt-in)
    if (config.goal_promise && (config.goal || config.goal_dir)) {
       result.completionPromise = config.goal_promise;
+      result.completionPromiseProvided = true; // goal_promise is an explicit TOML key = override-eligible
    }
 }
 
@@ -339,6 +364,7 @@ export function parseMainArgs(args: string[], validAgents: string[], base?: Pars
             throw new Error(`--agent requires one of: ${validAgents.join(", ")}`);
          }
          result.agentType = val as AgentType;
+         result.agentProvided = true;
       } else if (arg === "--agent-binary") {
          const val = args[++i];
          if (!val) {
@@ -365,20 +391,24 @@ export function parseMainArgs(args: string[], validAgents: string[], base?: Pars
             throw new Error("--completion-promise requires a value");
          }
          result.completionPromise = val;
+         result.completionPromiseProvided = true;
       } else if (arg === "--abort-promise") {
          const val = args[++i];
          if (!val) {
             throw new Error("--abort-promise requires a value");
          }
          result.abortPromise = val;
+         result.abortPromiseProvided = true;
       } else if (arg === "--tasks" || arg === "-t") {
          result.tasksMode = true;
+         result.tasksModeProvided = true;
       } else if (arg === "--task-promise") {
          const val = args[++i];
          if (!val) {
             throw new Error("--task-promise requires a value");
          }
          result.taskPromise = val;
+         result.taskPromiseProvided = true;
       } else if (arg === "--rotation") {
          const val = args[++i];
          if (!val) {
@@ -431,6 +461,7 @@ export function parseMainArgs(args: string[], validAgents: string[], base?: Pars
             throw new Error("--model requires a value");
          }
          result.model = val;
+         result.modelProvided = true;
       } else if (arg === "--prompt-file" || arg === "--file" || arg === "-f") {
          const val = args[++i];
          if (!val) {
@@ -443,6 +474,7 @@ export function parseMainArgs(args: string[], validAgents: string[], base?: Pars
             throw new Error("--prompt-template requires a file path");
          }
          result.promptTemplatePath = val;
+         result.promptTemplateProvided = true;
       } else if (arg === "--no-stream") {
          result.streamOutput = false;
       } else if (arg === "--stream") {
@@ -536,6 +568,7 @@ export function applyPassthroughOverrides(result: ParsedMainArgs, setStatePaths?
    for (let i = 0; i < flags.length; i++) {
       if (flags[i] === "--model" && flags[i + 1]) {
          result.model = flags[i + 1];
+         result.modelProvided = true;
          i++;
       } else if (flags[i] === "--max-iterations" && flags[i + 1]) {
          const v = flags[i + 1];
@@ -543,6 +576,7 @@ export function applyPassthroughOverrides(result: ParsedMainArgs, setStatePaths?
             throw new Error(`--max-iterations requires a non-negative integer, got '${v}'`);
          }
          result.maxIterations = parseInt(v);
+         result.maxIterationsProvided = true;
          i++;
       } else if (flags[i] === "--min-iterations" && flags[i + 1]) {
          const v = flags[i + 1];
@@ -550,12 +584,15 @@ export function applyPassthroughOverrides(result: ParsedMainArgs, setStatePaths?
             throw new Error(`--min-iterations requires a non-negative integer, got '${v}'`);
          }
          result.minIterations = parseInt(v);
+         result.minIterationsProvided = true;
          i++;
       } else if (flags[i] === "--completion-promise" && flags[i + 1]) {
          result.completionPromise = flags[i + 1];
+         result.completionPromiseProvided = true;
          i++;
       } else if (flags[i] === "--abort-promise" && flags[i + 1]) {
          result.abortPromise = flags[i + 1];
+         result.abortPromiseProvided = true;
          i++;
       } else if (flags[i] === "--stalling-timeout" && flags[i + 1]) {
          result.stallingTimeoutMs = parseDuration(flags[i + 1]);

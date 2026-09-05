@@ -499,6 +499,12 @@ function agyAdapter(p, cfg) {
     }
     return [];
   }
+  if (event === "" && typeof p.status === "string" && typeof p.response === "string") {
+    const text = p.response;
+    if (text.trim())
+      return [ANSI.green(`\u2705 ${text.trim()}`)];
+    return [];
+  }
   if (event === "assistant")
     return claudeAssistant(p, cfg);
   if (event === "error" || p.error) {
@@ -692,6 +698,9 @@ function textExtract(p, agentType) {
     addText(p.data);
     if (typeof p.content === "string")
       addText(p.content);
+  }
+  if (t === "" && typeof p.event !== "object" && typeof p.status === "string" && typeof p.response === "string") {
+    addText(p.response);
   }
   const streamKind = typeof p.event === "string" && p.event ? p.event : t;
   if (streamKind === "result") {
@@ -2726,6 +2735,14 @@ function getDefaultMainArgs() {
     reuseSkipMaxIterations: false,
     maxIterationsProvided: false,
     minIterationsProvided: false,
+    completionPromiseProvided: false,
+    abortPromiseProvided: false,
+    tasksModeProvided: false,
+    taskPromiseProvided: false,
+    promptProvided: false,
+    promptTemplateProvided: false,
+    modelProvided: false,
+    agentProvided: false,
     stallingTimeoutProvided: false,
     blacklistDurationProvided: false,
     stallingActionProvided: false,
@@ -2739,26 +2756,40 @@ function getDefaultMainArgs() {
   };
 }
 function applyTomlConfig(result, config) {
-  if (config.prompt)
+  if (config.prompt) {
     result.prompt = config.prompt;
-  if (config.agent)
+    result.promptProvided = true;
+  }
+  if (config.agent) {
     result.agentType = config.agent;
+    result.agentProvided = true;
+  }
   if (config.agent_binary)
     result.agentBinary = config.agent_binary;
   if (config.min_iterations !== undefined)
     result.minIterations = config.min_iterations;
   if (config.max_iterations !== undefined)
     result.maxIterations = config.max_iterations;
-  if (config.completion_promise)
+  if (config.completion_promise) {
     result.completionPromise = config.completion_promise;
-  if (config.abort_promise)
+    result.completionPromiseProvided = true;
+  }
+  if (config.abort_promise) {
     result.abortPromise = config.abort_promise;
-  if (config.tasks !== undefined)
+    result.abortPromiseProvided = true;
+  }
+  if (config.tasks !== undefined) {
     result.tasksMode = config.tasks;
-  if (config.task_promise)
+    result.tasksModeProvided = true;
+  }
+  if (config.task_promise) {
     result.taskPromise = config.task_promise;
-  if (config.model)
+    result.taskPromiseProvided = true;
+  }
+  if (config.model) {
     result.model = config.model;
+    result.modelProvided = true;
+  }
   if (config.rotation?.length)
     result.rotationInput = config.rotation.join(",");
   if (config.stalling_timeout) {
@@ -2786,8 +2817,10 @@ function applyTomlConfig(result, config) {
     result.allowAllPermissions = config.allow_all;
   if (config.prompt_file)
     result.promptFile = config.prompt_file;
-  if (config.prompt_template)
+  if (config.prompt_template) {
     result.promptTemplatePath = config.prompt_template;
+    result.promptTemplateProvided = true;
+  }
   if (config.stream !== undefined)
     result.streamOutput = config.stream;
   if (config.verbose_tools !== undefined)
@@ -2818,16 +2851,21 @@ function applyTomlConfig(result, config) {
     result.reuseSkipAgent = config.reuse_skip_agent;
   if (config.reuse_skip_rotation !== undefined)
     result.reuseSkipRotation = config.reuse_skip_rotation;
-  if (config.reuse_skip_min_iterations !== undefined)
+  if (config.reuse_skip_min_iterations !== undefined) {
     result.reuseSkipMinIterations = config.reuse_skip_min_iterations;
-  if (config.reuse_skip_max_iterations !== undefined)
+    console.warn("\u26A0\uFE0F  config: reuse_skip_min_iterations is deprecated (no effect): explicit --min-iterations now always overrides stored state on resume");
+  }
+  if (config.reuse_skip_max_iterations !== undefined) {
     result.reuseSkipMaxIterations = config.reuse_skip_max_iterations;
+    console.warn("\u26A0\uFE0F  config: reuse_skip_max_iterations is deprecated (no effect): explicit --max-iterations now always overrides stored state on resume");
+  }
   if (config.goal)
     result.goalPath = config.goal;
   if (config.goal_dir)
     result.goalDir = config.goal_dir;
   if (config.goal_promise && (config.goal || config.goal_dir)) {
     result.completionPromise = config.goal_promise;
+    result.completionPromiseProvided = true;
   }
 }
 function parseMainArgs(args, validAgents, base) {
@@ -2845,6 +2883,7 @@ function parseMainArgs(args, validAgents, base) {
         throw new Error(`--agent requires one of: ${validAgents.join(", ")}`);
       }
       result.agentType = val;
+      result.agentProvided = true;
     } else if (arg === "--agent-binary") {
       const val = args[++i];
       if (!val) {
@@ -2871,20 +2910,24 @@ function parseMainArgs(args, validAgents, base) {
         throw new Error("--completion-promise requires a value");
       }
       result.completionPromise = val;
+      result.completionPromiseProvided = true;
     } else if (arg === "--abort-promise") {
       const val = args[++i];
       if (!val) {
         throw new Error("--abort-promise requires a value");
       }
       result.abortPromise = val;
+      result.abortPromiseProvided = true;
     } else if (arg === "--tasks" || arg === "-t") {
       result.tasksMode = true;
+      result.tasksModeProvided = true;
     } else if (arg === "--task-promise") {
       const val = args[++i];
       if (!val) {
         throw new Error("--task-promise requires a value");
       }
       result.taskPromise = val;
+      result.taskPromiseProvided = true;
     } else if (arg === "--rotation") {
       const val = args[++i];
       if (!val) {
@@ -2934,6 +2977,7 @@ function parseMainArgs(args, validAgents, base) {
         throw new Error("--model requires a value");
       }
       result.model = val;
+      result.modelProvided = true;
     } else if (arg === "--prompt-file" || arg === "--file" || arg === "-f") {
       const val = args[++i];
       if (!val) {
@@ -2946,6 +2990,7 @@ function parseMainArgs(args, validAgents, base) {
         throw new Error("--prompt-template requires a file path");
       }
       result.promptTemplatePath = val;
+      result.promptTemplateProvided = true;
     } else if (arg === "--no-stream") {
       result.streamOutput = false;
     } else if (arg === "--stream") {
@@ -3035,6 +3080,7 @@ function applyPassthroughOverrides(result, setStatePaths) {
   for (let i = 0;i < flags.length; i++) {
     if (flags[i] === "--model" && flags[i + 1]) {
       result.model = flags[i + 1];
+      result.modelProvided = true;
       i++;
     } else if (flags[i] === "--max-iterations" && flags[i + 1]) {
       const v = flags[i + 1];
@@ -3042,6 +3088,7 @@ function applyPassthroughOverrides(result, setStatePaths) {
         throw new Error(`--max-iterations requires a non-negative integer, got '${v}'`);
       }
       result.maxIterations = parseInt(v);
+      result.maxIterationsProvided = true;
       i++;
     } else if (flags[i] === "--min-iterations" && flags[i + 1]) {
       const v = flags[i + 1];
@@ -3049,12 +3096,15 @@ function applyPassthroughOverrides(result, setStatePaths) {
         throw new Error(`--min-iterations requires a non-negative integer, got '${v}'`);
       }
       result.minIterations = parseInt(v);
+      result.minIterationsProvided = true;
       i++;
     } else if (flags[i] === "--completion-promise" && flags[i + 1]) {
       result.completionPromise = flags[i + 1];
+      result.completionPromiseProvided = true;
       i++;
     } else if (flags[i] === "--abort-promise" && flags[i + 1]) {
       result.abortPromise = flags[i + 1];
+      result.abortPromiseProvided = true;
       i++;
     } else if (flags[i] === "--stalling-timeout" && flags[i + 1]) {
       result.stallingTimeoutMs = parseDuration(flags[i + 1]);
@@ -4395,7 +4445,9 @@ Options:
    --stall-retries     Sleep and restart after all fallbacks are exhausted
    --stall-retry-minutes N  Minutes to sleep before restarting exhausted fallbacks (default: 15)
    --no-commit         Don't auto-commit after each iteration
-   --reuse-state       Explicitly reuse existing state when config differs from stored state
+   --reuse-state       Resume existing state; explicitly provided args (CLI flag or
+                       TOML key) ALWAYS override stored values ("later args win");
+                       unprovided values are inherited from state
                        (use this when intentionally resuming a loop with different args)
    --allow-all         Auto-approve all tool permissions (default: on)
   --no-allow-all      Require interactive permission prompts
@@ -5274,8 +5326,16 @@ ${newEntry}`);
     reuseSkipMaxIterations,
     extraAgentFlags,
     passthroughAgentFlags,
-    promptParts
+    promptParts,
+    completionPromiseProvided,
+    abortPromiseProvided,
+    tasksModeProvided,
+    taskPromiseProvided,
+    promptTemplateProvided,
+    modelProvided,
+    agentProvided
   } = parsed;
+  const promptProvided = parsed.promptProvided || promptParts.length > 0 || promptFile !== "";
   let promptSource = "";
   let rotation = null;
   ensureStateDir();
@@ -6114,7 +6174,8 @@ Iteration Summary`);
     let preStartTimer = null;
     const preStartTimeoutRaw = options.preStartTimeoutMs === undefined ? -1 : options.preStartTimeoutMs;
     const stallingTimeout = options.stallingTimeoutMs ?? 2 * 60 * 60 * 1000;
-    const effectivePreStartTimeout = preStartTimeoutRaw === -1 ? Math.floor(stallingTimeout / 10) : preStartTimeoutRaw;
+    const autoPreStart = options.noIncrementalOutput ? 0 : Math.floor(stallingTimeout / 10);
+    const effectivePreStartTimeout = preStartTimeoutRaw === -1 ? autoPreStart : preStartTimeoutRaw;
     if (effectivePreStartTimeout > 0) {
       preStartTimer = setTimeout(() => {
         if (!firstOutputReceived && proc.exitCode === null) {
@@ -6206,38 +6267,24 @@ Iteration Summary`);
       };
       const mismatches = [];
       const warnings = [];
-      if (existingState.completionPromise !== completionPromise) {
+      if (existingState.completionPromise !== completionPromise && !completionPromiseProvided) {
         mismatches.push(`completion-promise (stored: ${existingState.completionPromise}, current: ${completionPromise})`);
       }
-      if (existingState.tasksMode !== tasksMode) {
+      if (existingState.tasksMode !== tasksMode && !tasksModeProvided) {
         mismatches.push(`tasks mode (stored: ${existingState.tasksMode}, current: ${tasksMode})`);
       }
-      if (existingState.agent !== agentType) {
+      if (existingState.agent !== agentType && !agentProvided) {
         if (isFieldSkipped("agent")) {
-          warnings.push(`\u26A0\uFE0F  agent drift tolerated: ${existingState.agent} \u2192 ${agentType}`);
+          warnings.push(`\u26A0\uFE0F  agent drift tolerated: ${existingState.agent} \u2192 ${agentType} (stored value will be reused; pass --agent to override)`);
         } else {
           mismatches.push(`agent (stored: ${existingState.agent}, current: ${agentType})`);
         }
       }
-      if (existingState.model && existingState.model !== model && model !== "") {
+      if (existingState.model && existingState.model !== model && model !== "" && !modelProvided) {
         if (isFieldSkipped("model")) {
-          warnings.push(`\u26A0\uFE0F  model drift tolerated: ${existingState.model} \u2192 ${model}`);
+          warnings.push(`\u26A0\uFE0F  model drift tolerated: ${existingState.model} \u2192 ${model} (stored value will be reused; pass --model to override)`);
         } else {
           mismatches.push(`model (stored: ${existingState.model}, current: ${model})`);
-        }
-      }
-      if (existingState.minIterations !== minIterations && minIterationsProvided) {
-        if (isFieldSkipped("minIterations")) {
-          warnings.push(`\u26A0\uFE0F  min-iterations drift tolerated: ${existingState.minIterations} \u2192 ${minIterations}`);
-        } else {
-          mismatches.push(`min-iterations (stored: ${existingState.minIterations}, current: ${minIterations})`);
-        }
-      }
-      if (existingState.maxIterations !== maxIterations && maxIterationsProvided) {
-        if (isFieldSkipped("maxIterations")) {
-          warnings.push(`\u26A0\uFE0F  max-iterations drift tolerated: ${existingState.maxIterations} \u2192 ${maxIterations}`);
-        } else {
-          mismatches.push(`max-iterations (stored: ${existingState.maxIterations}, current: ${maxIterations})`);
         }
       }
       if (!!existingState.rotation !== !!rotation || existingState.rotation && rotation && JSON.stringify([...existingState.rotation].sort()) !== JSON.stringify([...rotation].sort())) {
@@ -6265,18 +6312,46 @@ To start fresh, clear the state file:`);
     }
     if (resuming) {
       const state2 = existingState;
-      minIterations = state2.minIterations;
-      maxIterations = state2.maxIterations;
-      if (state2.completionPromise) {
-        completionPromise = state2.completionPromise;
-      }
-      abortPromise = state2.abortPromise ?? "";
-      tasksMode = state2.tasksMode;
-      taskPromise = state2.taskPromise;
-      prompt = state2.prompt;
-      promptTemplatePath = state2.promptTemplate ?? "";
-      model = state2.model;
-      agentType = state2.agent;
+      const override = (label, provided, currentVal, storedVal, apply) => {
+        if (provided) {
+          apply(currentVal);
+          if (String(currentVal) !== String(storedVal)) {
+            console.log(`\uD83D\uDD04 ${label} override: ${String(storedVal) === "" ? "(unset)" : storedVal} \u2192 ${currentVal} (later args win)`);
+          }
+        } else {
+          apply(storedVal);
+        }
+      };
+      override("min-iterations", minIterationsProvided, minIterations, state2.minIterations, (v) => {
+        minIterations = v;
+      });
+      override("max-iterations", maxIterationsProvided, maxIterations, state2.maxIterations, (v) => {
+        maxIterations = v;
+      });
+      override("completion-promise", completionPromiseProvided, completionPromise, state2.completionPromise ?? "", (v) => {
+        completionPromise = v;
+      });
+      override("abort-promise", abortPromiseProvided, abortPromise, state2.abortPromise ?? "", (v) => {
+        abortPromise = v;
+      });
+      override("tasks", tasksModeProvided, tasksMode, state2.tasksMode, (v) => {
+        tasksMode = v;
+      });
+      override("task-promise", taskPromiseProvided, taskPromise, state2.taskPromise ?? "READY_FOR_NEXT_TASK", (v) => {
+        taskPromise = v;
+      });
+      override("prompt", promptProvided, prompt, state2.prompt, (v) => {
+        prompt = v;
+      });
+      override("prompt-template", promptTemplateProvided, promptTemplatePath, state2.promptTemplate ?? "", (v) => {
+        promptTemplatePath = v;
+      });
+      override("model", modelProvided, model, state2.model ?? "", (v) => {
+        model = v;
+      });
+      override("agent", agentProvided, agentType, state2.agent, (v) => {
+        agentType = v;
+      });
       if (!rotationInput) {
         rotation = state2.rotation ?? null;
       }
@@ -6675,6 +6750,7 @@ Received SIGTERM, stopping Ralph loop...`);
           extraFlags: extraAgentFlags,
           streamOutput
         });
+        const noIncrementalOutput = isJsonModeAgent(agentConfig2.type, extraAgentFlags) && !cmdArgs.some((a, i) => a === "--output-format" && /stream/.test(cmdArgs[i + 1] ?? "")) && !cmdArgs.some((a) => a.startsWith("--output-format=stream"));
         const env = agentConfig2.buildEnv({
           filterPlugins: disablePlugins,
           allowAllPermissions
@@ -6709,6 +6785,7 @@ Received SIGTERM, stopping Ralph loop...`);
             abortSignal: abortController.signal,
             stallingTimeoutMs: state.stallingTimeoutMs,
             preStartTimeoutMs,
+            noIncrementalOutput,
             stopOnPromise: completionPromise,
             onHeartbeatTimer: (timer) => {
               currentHeartbeatTimer = timer;
@@ -6804,6 +6881,7 @@ Received SIGTERM, stopping Ralph loop...`);
             extraFlags: extraAgentFlags,
             stallingTimeoutMs: state.stallingTimeoutMs,
             preStartTimeoutMs,
+            noIncrementalOutput,
             suppressOutput: true,
             onHeartbeatTimer: (timer) => {
               currentHeartbeatTimer = timer;

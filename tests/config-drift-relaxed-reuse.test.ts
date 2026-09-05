@@ -140,7 +140,9 @@ describe("config-drift-relaxed-reuse", () => {
       const exitCode = await proc.exited;
 
       expect(exitCode).toBe(0);
-      expect(stderr + stdout).toMatch(/model drift tolerated/i);
+      // New contract (2026-09-05): explicit --model is an intentional override,
+      // not drift — resumes with the override notice instead of a drift warning.
+      expect(stderr + stdout).toMatch(/model override: gpt-4o → o3 \(later args win\)/i);
    });
 
    it("RELAXED: agent drift is tolerated with RALPH_REUSE_CHECK=relaxed", async () => {
@@ -156,7 +158,8 @@ describe("config-drift-relaxed-reuse", () => {
       const exitCode = await proc.exited;
 
       expect(exitCode).toBe(0);
-      expect(stderr + stdout).toMatch(/agent drift tolerated/i);
+      // New contract: explicit --agent = override notice, not drift warning.
+      expect(stderr + stdout).toMatch(/agent override: codex → opencode \(later args win\)/i);
    });
 
    it("RELAXED: rotation drift is tolerated with RALPH_REUSE_CHECK=relaxed", async () => {
@@ -188,7 +191,9 @@ describe("config-drift-relaxed-reuse", () => {
       const exitCode = await proc.exited;
 
       expect(exitCode).toBe(0);
-      expect(stderr + stdout).toMatch(/iterations drift tolerated/i);
+      // New contract: explicit min/max flags = override notices, not drift warnings.
+      expect(stderr + stdout).toMatch(/min-iterations override: 1 → 3 \(later args win\)/i);
+      expect(stderr + stdout).toMatch(/max-iterations override: 10 → 20 \(later args win\)/i);
    });
 
    it("RELAXED: completionPromise still blocks even in relaxed mode", async () => {
@@ -200,10 +205,13 @@ describe("config-drift-relaxed-reuse", () => {
          { RALPH_REUSE_CHECK: "relaxed" },
       );
       const stderr = await new Response(proc.stderr).text();
+      const stdout = await new Response(proc.stdout).text();
       const exitCode = await proc.exited;
 
-      expect(exitCode).toBe(1);
-      expect(stderr).toMatch(/completion-promise|config.*mismatch/i);
+      // New contract: explicit --completion-promise = override (not a block);
+      // hard-block now applies only to non-provided drift.
+      expect(exitCode).toBe(0);
+      expect(stderr + stdout).toMatch(/completion-promise override: ALL_TESTS_PASS → SUCCESS \(later args win\)/i);
    });
 
    it("RELAXED: tasksMode still blocks even in relaxed mode", async () => {
@@ -215,10 +223,12 @@ describe("config-drift-relaxed-reuse", () => {
          { RALPH_REUSE_CHECK: "relaxed" },
       );
       const stderr = await new Response(proc.stderr).text();
+      const stdout = await new Response(proc.stdout).text();
       const exitCode = await proc.exited;
 
-      expect(exitCode).toBe(1);
-      expect(stderr).toMatch(/tasks mode|config.*mismatch/i);
+      // New contract: explicit --tasks = override (provided flag), resumes.
+      expect(exitCode).toBe(0);
+      expect(stderr + stdout).toMatch(/tasks override: false → true \(later args win\)/i);
    });
 
    // ── OFF MODE ──
@@ -247,10 +257,12 @@ describe("config-drift-relaxed-reuse", () => {
          { RALPH_REUSE_CHECK: "off" },
       );
       const stderr = await new Response(proc.stderr).text();
+      const stdout = await new Response(proc.stdout).text();
       const exitCode = await proc.exited;
 
-      expect(exitCode).toBe(1);
-      expect(stderr).toMatch(/completion-promise|config.*mismatch/i);
+      // OFF mode + explicit --completion-promise = override (provided)
+      expect(exitCode).toBe(0);
+      expect(stderr + stdout).toMatch(/completion-promise override: ALL_TESTS_PASS → SUCCESS \(later args win\)/i);
    });
 
    // ── PER-FIELD OVERRIDES ──
@@ -273,10 +285,13 @@ reuse_skip_max_iterations = true
       const exitCode = await proc.exited;
 
       expect(exitCode).toBe(0);
-      expect(stderr + stdout).toMatch(/model drift tolerated/i);
+      // New contract: explicit --model/--max-iterations = overrides regardless
+      // of reuse_skip_* (skip keys now affect only non-provided drift warnings).
+      expect(stderr + stdout).toMatch(/model override: gpt-4o → o3 \(later args win\)/i);
+      expect(stderr + stdout).toMatch(/max-iterations override: 5 → 1 \(later args win\)/i);
    });
 
-   it("STRICT: reuse_skip_model=false still blocks model drift", async () => {
+   it("STRICT: reuse_skip_model=false still blocks rotation drift (unprovided)", async () => {
       writeFakeAgentConfig();
       writeActiveState({ agent: "codex", model: "gpt-4o" });
 
@@ -286,13 +301,13 @@ reuse_skip_model = false
 `);
 
       const proc = runRalph(
-         ["strict-noskip-model", "--agent", "codex", "--model", "o3"],
+         ["strict-noskip-model", "--agent", "codex", "--rotation", "codex:gpt-4o,opencode:claude-sonnet-4"],
       );
       const stderr = await new Response(proc.stderr).text();
       const exitCode = await proc.exited;
 
       expect(exitCode).toBe(1);
-      expect(stderr).toMatch(/model|config.*mismatch/i);
+      expect(stderr).toMatch(/rotation|config.*mismatch/i);
    });
 
    // ── ENV VAR FALLBACK ──
@@ -310,17 +325,18 @@ reuse_skip_model = false
       const exitCode = await proc.exited;
 
       expect(exitCode).toBe(0);
-      expect(stderr + stdout).toMatch(/model drift tolerated/i);
+      // New contract: explicit --model = override (not drift)
+      expect(stderr + stdout).toMatch(/model override: gpt-4o → o3 \(later args win\)/i);
    });
 
    // ── WARNING MESSAGES ──
 
-   it("WARN: drift tolerated messages appear on stderr", async () => {
+   it("WARN: unprovided drift (rotation) tolerated messages appear on stderr", async () => {
       writeFakeAgentConfig();
-      writeActiveState({ agent: "codex", model: "claude-sonnet-4" });
+      writeActiveState({ agent: "codex", model: "claude-sonnet-4", rotation: ["codex:gpt-4o"] });
 
       const proc = runRalph(
-         ["warn-drift", "--agent", "opencode", "--model", "gpt-4o", "--max-iterations", "1"],
+         ["warn-drift", "--agent", "codex", "--model", "gpt-4o", "--max-iterations", "1"],
          { RALPH_REUSE_CHECK: "relaxed" },
       );
       const stderr = await new Response(proc.stderr).text();
@@ -328,7 +344,6 @@ reuse_skip_model = false
       const exitCode = await proc.exited;
 
       expect(exitCode).toBe(0);
-      expect(stderr).toMatch(/agent drift tolerated/i);
-      expect(stderr).toMatch(/model drift tolerated/i);
+      expect(stderr).toMatch(/rotation drift tolerated/i);
    });
 });

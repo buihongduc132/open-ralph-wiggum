@@ -423,13 +423,13 @@ describe("D5-B: clean resume (3277, 3383-3411, 3574-3590, 3658-3661)", () => {
          "--agent", "opencode",
          "--completion-promise", "COMPLETE",
          "--max-iterations", "3",
-         "cli prompt ignored on resume",
       ], { configPath: cfg, until: l => l.includes("Task completed in 1 iteration") });
 
       expect(r.output).toContain(`Recovered stale active state from PID ${dead}`);
       expect(r.output).toContain("🔄 Resuming Ralph loop from");
-      expect(r.output).toContain("resumed task body");          // stored prompt restored (3395)
-      expect(r.output).not.toContain("cli prompt ignored on resume");
+      // New contract (2026-09-05): no prompt provided → stored prompt restored.
+      // (A provided positional prompt now OVERRIDES the stored one — pinned in
+      // tests/resume-override-precedence.test.ts.)
       expect(r.output).toContain("Task: resumed task body");
       expect(r.output).toContain("Task completed in 1 iteration");
    }, 60000);
@@ -501,14 +501,17 @@ describe("D5-B: relaxed drift warnings (3299-3310, 3323-3363)", () => {
             "--rotation", "claude-code:m2",
             "--completion-promise", "COMPLETE",
             "relaxed drift task",
-         ], { configPath: cfg, until: l => l.includes("Task completed in 1 iteration") });
+         ], { configPath: cfg, until: l => l.includes("Task completed in 3 iteration") });
 
-         expect(r.output).toContain("⚠️  agent drift tolerated: codex → claude-code");
-         expect(r.output).toContain("⚠️  model drift tolerated: stored-model → new-model");
-         expect(r.output).toContain("⚠️  min-iterations drift tolerated: 1 → 3");
-         expect(r.output).toContain("⚠️  max-iterations drift tolerated: 9 → 7");
+         // New contract (2026-09-05): explicit flags = overrides (later args
+         // win), so agent/model/min/max now print override notices instead of
+         // drift warnings; only rotation (not override-eligible) still warns.
+         expect(r.output).toContain("🔄 agent override: codex → claude-code (later args win)");
+         expect(r.output).toContain("🔄 model override: stored-model → new-model (later args win)");
+         expect(r.output).toContain("🔄 min-iterations override: 1 → 3 (later args win)");
+         expect(r.output).toContain("🔄 max-iterations override: 9 → 7 (later args win)");
          expect(r.output).toContain("⚠️  rotation drift tolerated: stored → current");
-         expect(r.output).toContain("Task completed in 1 iteration");
+         expect(r.output).toContain("Task completed in 3 iteration");
       } finally {
          if (savedEnv === undefined) delete process.env.RALPH_REUSE_CHECK;
          else process.env.RALPH_REUSE_CHECK = savedEnv;
@@ -554,15 +557,17 @@ reuse_skip_max_iterations = true
          "--rotation", "claude-code:m2",
          "--completion-promise", "COMPLETE",
          "strict skip task",
-      ], { configPath: cfg, until: l => l.includes("Task completed in 1 iteration") });
+      ], { configPath: cfg, until: l => l.includes("Task completed in 3 iteration") });
 
-      expect(r.output).toContain("⚠️  agent drift tolerated: codex → claude-code");
-      expect(r.output).toContain("⚠️  model drift tolerated: stored-model → new-model");
-      expect(r.output).toContain("⚠️  min-iterations drift tolerated: 1 → 3");
-      expect(r.output).toContain("⚠️  max-iterations drift tolerated: 9 → 7");
+      // New contract: explicit flags are overrides (not drift) — skip keys no
+      // longer needed for agent/model/min/max; rotation skip still applies.
+      expect(r.output).toContain("🔄 agent override: codex → claude-code (later args win)");
+      expect(r.output).toContain("🔄 model override: stored-model → new-model (later args win)");
+      expect(r.output).toContain("🔄 min-iterations override: 1 → 3 (later args win)");
+      expect(r.output).toContain("🔄 max-iterations override: 9 → 7 (later args win)");
       expect(r.output).toContain("⚠️  rotation drift tolerated: stored → current");
       expect(r.output).not.toContain("Config Mismatch");
-      expect(r.output).toContain("Task completed in 1 iteration");
+      expect(r.output).toContain("Task completed in 3 iteration");
    }, 60000);
 });
 
