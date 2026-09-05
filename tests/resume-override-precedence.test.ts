@@ -178,6 +178,45 @@ describe("resume-override-precedence (later explicit args win)", () => {
       expect(out).toMatch(/Task: a brand new task/);
    });
 
+   it("PROVIDED --prompt-file overrides stored prompt on resume (file content wins, gotcha #1)", async () => {
+      writeFileSync(join(workDir, "new-task.md"), "BRAND NEW TASK FROM FILE", "utf-8");
+      writeActiveState({ prompt: "original task" });
+      const r = await collect(resumeRun(["--prompt-file", join(workDir, "new-task.md")]));
+      const out = r.stdout + r.stderr;
+      expect(out).toMatch(/prompt override: original task → BRAND NEW TASK FROM FILE/);
+      // Banner contract: Task: shows the file PATH (promptSource), Preview: shows resolved content (gotcha #1 verified: override lands BEFORE banner, so Preview carries the NEW content)
+      expect(out).toMatch(/Task: \/tmp\/.*new-task\.md/);
+      expect(out).toMatch(/Preview: BRAND NEW TASK FROM FILE/);
+      // Behavior contract: agent instruction receives the file content
+      expect(out).toContain("## Your Task\\n\\nBRAND NEW TASK FROM FILE");
+   });
+
+   it("PROVIDED --no-tasks overrides stored tasksMode=true on resume (negation flag, gotcha #2)", async () => {
+      writeActiveState({ tasksMode: true, taskPromise: "READY_FOR_NEXT_TASK" });
+      const r = await collect(resumeRun(["--no-tasks", "original task"]));
+      const out = r.stdout + r.stderr;
+      expect(out).not.toMatch(/Tasks mode: ENABLED/);
+      expect(out).toMatch(/Resuming Ralph loop/);
+   });
+
+   it("PROVIDED --no-rotation clears stored rotation on resume (negation flag, gotcha #2)", async () => {
+      writeActiveState({ rotation: ["codex", "claude"] });
+      const r = await collect(resumeRun(["--no-rotation", "original task"]));
+      const out = r.stdout + r.stderr;
+      expect(out).toMatch(/rotation override: stored → \(none\)/);
+      expect(out).toMatch(/Resuming Ralph loop/);
+   });
+
+   it("rotation-active + --model override prints clarifying notice (gotcha #4)", async () => {
+      writeActiveState({ rotation: ["opencode:old-model", "codex:fake-codex-model"], model: "old-model" });
+      const r = await collect(resumeRun(["--model", "new-model", "original task"]));
+      const out = r.stdout + r.stderr;
+      // The override IS applied to state, but rotation wins the spawn slot —
+      // the notice must SAY that instead of implying the override takes effect now.
+      expect(out).toMatch(/model override: old-model → new-model/);
+      expect(out).toMatch(/note: rotation is active — the rotation entry picks the spawned agent\/model/i);
+   });
+
    it("PROVIDED --task-promise overrides stored task promise on resume", async () => {
       writeActiveState({ tasksMode: true, taskPromise: "READY_FOR_NEXT_TASK" });
       const r = await collect(resumeRun(["--tasks", "--task-promise", "NEXT_ONE", "original task"]));

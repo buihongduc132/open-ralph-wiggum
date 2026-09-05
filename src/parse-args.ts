@@ -142,6 +142,7 @@ export interface ParsedMainArgs {
    taskPromise: string;
    model: string;
    rotationInput: string;
+   rotationNoneProvided: boolean;
    autoCommit: boolean;
    disablePlugins: boolean;
    allowAllPermissions: boolean;
@@ -208,6 +209,7 @@ export function getDefaultMainArgs(): ParsedMainArgs {
       taskPromise: "READY_FOR_NEXT_TASK",
       model: "",
       rotationInput: "",
+      rotationNoneProvided: false,
       autoCommit: true,
       disablePlugins: false,
       allowAllPermissions: true,
@@ -402,6 +404,11 @@ export function parseMainArgs(args: string[], validAgents: string[], base?: Pars
       } else if (arg === "--tasks" || arg === "-t") {
          result.tasksMode = true;
          result.tasksModeProvided = true;
+      } else if (arg === "--no-tasks") {
+         // Negation flag (gotcha #2): explicit off MUST count as provided so a
+         // stored tasksMode=true can be overridden on resume (later args win).
+         result.tasksMode = false;
+         result.tasksModeProvided = true;
       } else if (arg === "--task-promise") {
          const val = args[++i];
          if (!val) {
@@ -415,6 +422,11 @@ export function parseMainArgs(args: string[], validAgents: string[], base?: Pars
             throw new Error("--rotation requires a value");
          }
          result.rotationInput = val;
+      } else if (arg === "--no-rotation") {
+         // Negation flag (gotcha #2): explicit off clears rotation and counts as
+         // provided so a stored rotation can be unset on resume (later args win).
+         result.rotationInput = "";
+         result.rotationNoneProvided = true;
       } else if (arg === "--stalling-timeout") {
          const val = args[++i];
          if (!val) {

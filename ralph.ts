@@ -352,8 +352,9 @@ export function getDefaultTomlConfig(): string {
 # reuse_skip_model = false
 # reuse_skip_agent = false
 # reuse_skip_rotation = false
-# reuse_skip_min_iterations = false
-# reuse_skip_max_iterations = false
+# DEPRECATED (no effect since 2026-09-05): reuse_skip_min_iterations and
+# reuse_skip_max_iterations are gone — explicit --min-iterations/--max-iterations
+# on resume ALWAYS override stored state ("later args win"). Setting them warns.
 
 # NOTE: completion_promise and tasks_mode CANNOT be skipped.
 # Changing these silently corrupts the loop lifecycle.
@@ -2094,6 +2095,7 @@ Learn more: https://ghuntley.com/ralph/
       agentType,
       agentBinary,
       rotationInput,
+      rotationNoneProvided,
       autoCommit,
       disablePlugins,
       disableHooks,
@@ -3453,7 +3455,21 @@ Unable to read ${currentTasksFileLabel()}
           override("prompt-template", promptTemplateProvided, promptTemplatePath, state.promptTemplate ?? "", (v) => { promptTemplatePath = v; }, (v) => { state.promptTemplate = v; });
           override("model", modelProvided, model, state.model ?? "", (v) => { model = v; }, (v) => { state.model = v; });
           override("agent", agentProvided, agentType, state.agent, (v) => { agentType = v; }, (v) => { state.agent = v; });
-          if (!rotationInput) {
+          if ((modelProvided || agentProvided) && (rotation ?? state.rotation ?? []).length > 0) {
+             // Gotcha #4: with rotation active the spawn slot comes from the
+             // rotation entry, not the overridden --model/--agent. Say so.
+             console.log("ℹ️  note: rotation is active — the rotation entry picks the spawned agent/model; --model/--agent overrides apply when rotation ends/is unset (--no-rotation)");
+          }
+          if (rotationNoneProvided) {
+             // Negation flag (gotcha #2): --no-rotation = explicit unset. Effective
+             // AND persisted (same Rank-5 class as fields above).
+             if ((state.rotation ?? []).length > 0) {
+                console.log(`🔄 rotation override: stored → (none) (later args win)`);
+             }
+             rotation = null;
+             state.rotation = [];
+             state.rotationIndex = 0;
+          } else if (!rotationInput) {
              rotation = state.rotation ?? null;
           } else {
              // Provided rotation = override: effective AND persisted (spawn
