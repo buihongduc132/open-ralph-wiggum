@@ -210,4 +210,41 @@ describe("resume-override-precedence (later explicit args win)", () => {
       expect(out).toMatch(/max-iterations override: 5 → 9/);
       expect(out).not.toMatch(/Config Mismatch/);
    });
+
+   // ── BEHAVIORAL evidence (gotcha Rank-5/2, 2026-09-05): assert what the
+   // spawned agent ACTUALLY receives — override must reach execution state,
+   // not just the banner. fake-agent.sh echo mode (model=echo) echoes argv.
+   it("BEHAVIOR: overridden model/prompt reach the spawned agent command", async () => {
+      writeActiveState({ iteration: 1, prompt: "original task", model: "old-model", maxIterations: 5 });
+      const r = await collect(resumeRun(["--model", "echo", "--max-iterations", "1", "brand new task text"]));
+      const out = r.stdout + r.stderr;
+      // "DEBUG: Agent Args:" prints unconditionally immediately before Bun.spawn
+      // (ralph.ts spawn path) — the exact argv the agent receives. Parse as JSON,
+      // never hand-escape stringify output.
+      const m = out.match(/DEBUG: Agent Args: (\[.*\])/);
+      expect(m).not.toBeNull();
+      const argv = JSON.parse(m![1]) as string[];
+      const argvStr = argv.join(" ");
+      expect(argvStr).toContain("brand new task text");  // overridden prompt reached spawn
+      const mi = argv.indexOf("--model");
+      expect(mi).toBeGreaterThanOrEqual(0);
+      expect(argv[mi + 1]).toBe("echo");              // overridden model reached spawn
+      expect(argv.some(a => a.includes("original task"))).toBe(false); // stored prompt replaced
+   });
+
+   it("BEHAVIOR: overridden completion promise reaches the agent's instruction prompt", async () => {
+      writeActiveState({ iteration: 1, completionPromise: "STATE_TAG" });
+      const r = await collect(resumeRun(["--model", "echo", "--completion-promise", "CLI_TAG", "--max-iterations", "1", "original task"]));
+      const out = r.stdout + r.stderr;
+      // buildPrompt interpolates state.completionPromise into the agent's
+      // instruction prompt — the agent must be told to emit CLI_TAG, never
+      // the stored STATE_TAG. Assert on the parsed spawn argv (JSON, not
+      // hand-escaped literals).
+      const m = out.match(/DEBUG: Agent Args: (\[.*\])/);
+      expect(m).not.toBeNull();
+      const argv = JSON.parse(m![1]) as string[];
+      const promptArg = argv.find(a => a.includes("Ralph Wiggum Loop")) ?? "";
+      expect(promptArg).toContain("<promise>CLI_TAG</promise>");
+      expect(promptArg).not.toContain("STATE_TAG");
+   });
 });

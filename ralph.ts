@@ -108,6 +108,10 @@ export interface AgentConfig {
    buildEnv: (options: AgentEnvOptions, stateDir?: string) => Record<string, string>;
    parseToolOutput: (line: string) => string | null;
    configName: string;
+   /** Optional external liveness probe (see src/types.ts). Optional fields keep
+    *  the twin interface assignment-compatible with src/types.ts AgentConfig. */
+   livenessProbe?: import("./src/types").LivenessProbe;
+   livenessProbeFactory?: () => import("./src/types").LivenessProbe;
 }
 
 export interface JsonAgentConfig {
@@ -2915,6 +2919,9 @@ Unable to read ${currentTasksFileLabel()}
          noIncrementalOutput?: boolean;
          stopOnPromise?: string;
          flushPartialLines?: boolean;
+         /** Stdout-independent liveness (e.g. agy steps DB). Polled by the
+          *  heartbeat + pre-start watchdogs; `active` marks activity. */
+         livenessProbe?: import("./src/types").LivenessProbe;
       },
    ): Promise<{ stdoutText: string; stderrText: string; toolCounts: Map<string, number>; stalled: boolean; stalledForMs: number | null; preStartStalled: boolean; terminatedAfterPromise: boolean }> {
       const toolCounts = new Map<string, number>();
@@ -3152,6 +3159,18 @@ Unable to read ${currentTasksFileLabel()}
       };
 
       const heartbeatTimer = setInterval(() => {
+         // Stdout-independent liveness: poll the agent's own state (agy DB)
+         // before evaluating stalling, so buffered agents aren't falsely killed.
+         if (options.livenessProbe) {
+            try {
+               const verdict = options.livenessProbe({ pid: procPid, startedAt: options.iterationStart });
+               if ("active" in verdict && verdict.active) {
+                  activityTracker.markLine();
+               }
+            } catch {
+               // Probe errors must never break the loop (fail-open).
+            }
+         }
          if (options.suppressOutput) {
             const inactivityMs = Date.now() - activityTracker.lastActivityAt;
             if (options.stallingTimeoutMs && inactivityMs >= options.stallingTimeoutMs && !stalled) {
@@ -3215,7 +3234,17 @@ Unable to read ${currentTasksFileLabel()}
           preStartTimer = setTimeout(() => {
              // Only mark as pre-start stalled if the process is still running
              // If the process exited quickly without output, that's not a stall - it's just a fast failure
-             if (!firstOutputReceived && proc.exitCode === null) {
+             // Buffered agents may be alive in their own state (agy steps DB) — poll before killing.
+             let externallyAlive = false;
+             if (options.livenessProbe) {
+                try {
+                   const verdict = options.livenessProbe({ pid: procPid, startedAt: options.iterationStart });
+                   externallyAlive = "active" in verdict && verdict.active;
+                } catch {
+                   externallyAlive = false;
+                }
+             }
+             if (!firstOutputReceived && proc.exitCode === null && !externallyAlive) {
                 stalled = true;
                 stalledForMs = Date.now() - options.iterationStart;
                 const elapsed = formatDuration(stalledForMs);
@@ -3397,10 +3426,16 @@ Unable to read ${currentTasksFileLabel()}
           // current invocation (CLI flag or TOML key) ALWAYS overrides the
           // stored one — "always takes the args / configuration of later".
           // Stored values are only inherited when nothing was provided.
-          // Each override prints a truthful one-line notice (stored → provided).
-          const override = <T,>(label: string, provided: boolean, currentVal: T, storedVal: T, apply: (v: T) => void): void => {
+          // Each override prints a truthful one-line notice (stored → provided)
+          // AND writes the effective value into BOTH the local variable and the
+          // persisted state object — every downstream consumer (agent spawn via
+          // state.agent/state.model, buildPrompt via state.prompt/promises,
+          // hooks env, review dispatch) must see the override, not the stale
+          // stored value (gotcha-coverage Rank-5 finding, 2026-09-05).
+          const override = <T,>(label: string, provided: boolean, currentVal: T, storedVal: T, apply: (v: T) => void, persist?: (v: T) => void): void => {
              if (provided) {
                 apply(currentVal);
+                persist?.(currentVal);
                 if (String(currentVal) !== String(storedVal)) {
                    console.log(`🔄 ${label} override: ${String(storedVal) === "" ? "(unset)" : storedVal} → ${currentVal} (later args win)`);
                 }
@@ -3408,18 +3443,27 @@ Unable to read ${currentTasksFileLabel()}
                 apply(storedVal);
              }
           };
-          override("min-iterations", minIterationsProvided, minIterations, state.minIterations, (v) => { minIterations = v; });
-          override("max-iterations", maxIterationsProvided, maxIterations, state.maxIterations, (v) => { maxIterations = v; });
-          override("completion-promise", completionPromiseProvided, completionPromise, state.completionPromise ?? "", (v) => { completionPromise = v; });
-          override("abort-promise", abortPromiseProvided, abortPromise, state.abortPromise ?? "", (v) => { abortPromise = v; });
-          override("tasks", tasksModeProvided, tasksMode, state.tasksMode, (v) => { tasksMode = v; });
-          override("task-promise", taskPromiseProvided, taskPromise, state.taskPromise ?? "READY_FOR_NEXT_TASK", (v) => { taskPromise = v; });
-          override("prompt", promptProvided, prompt, state.prompt, (v) => { prompt = v; });
-          override("prompt-template", promptTemplateProvided, promptTemplatePath, state.promptTemplate ?? "", (v) => { promptTemplatePath = v; });
-          override("model", modelProvided, model, state.model ?? "", (v) => { model = v; });
-          override("agent", agentProvided, agentType, state.agent, (v) => { agentType = v; });
+          override("min-iterations", minIterationsProvided, minIterations, state.minIterations, (v) => { minIterations = v; }, (v) => { state.minIterations = v; });
+          override("max-iterations", maxIterationsProvided, maxIterations, state.maxIterations, (v) => { maxIterations = v; }, (v) => { state.maxIterations = v; });
+          override("completion-promise", completionPromiseProvided, completionPromise, state.completionPromise ?? "", (v) => { completionPromise = v; }, (v) => { state.completionPromise = v; });
+          override("abort-promise", abortPromiseProvided, abortPromise, state.abortPromise ?? "", (v) => { abortPromise = v; }, (v) => { state.abortPromise = v; });
+          override("tasks", tasksModeProvided, tasksMode, state.tasksMode, (v) => { tasksMode = v; }, (v) => { state.tasksMode = v; });
+          override("task-promise", taskPromiseProvided, taskPromise, state.taskPromise ?? "READY_FOR_NEXT_TASK", (v) => { taskPromise = v; }, (v) => { state.taskPromise = v; });
+          override("prompt", promptProvided, prompt, state.prompt, (v) => { prompt = v; }, (v) => { state.prompt = v; });
+          override("prompt-template", promptTemplateProvided, promptTemplatePath, state.promptTemplate ?? "", (v) => { promptTemplatePath = v; }, (v) => { state.promptTemplate = v; });
+          override("model", modelProvided, model, state.model ?? "", (v) => { model = v; }, (v) => { state.model = v; });
+          override("agent", agentProvided, agentType, state.agent, (v) => { agentType = v; }, (v) => { state.agent = v; });
           if (!rotationInput) {
              rotation = state.rotation ?? null;
+          } else {
+             // Provided rotation = override: effective AND persisted (spawn
+             // reads state.rotation; gotcha Rank-5 same class as fields above).
+             const provided = rotation as string[];
+             if (JSON.stringify([...(state.rotation ?? [])].sort()) !== JSON.stringify([...provided].sort())) {
+                console.log(`🔄 rotation override: stored → ${rotationInput} (later args win)`);
+             }
+             state.rotation = provided;
+             state.rotationIndex = 0;
           }
           if (!stallRetriesProvided) {
              stallRetries = state.stallRetries ?? false;
@@ -3920,6 +3964,9 @@ Unable to read ${currentTasksFileLabel()}
                && !cmdArgs.some((a, i) => a === "--output-format" && /stream/.test(cmdArgs[i + 1] ?? ""))
                && !cmdArgs.some(a => a.startsWith("--output-format=stream"));
 
+            // Per-iteration liveness probe (fresh state; e.g. agy steps DB).
+            const livenessProbe = agentConfig.livenessProbeFactory?.();
+
             const env = agentConfig.buildEnv({
                filterPlugins: disablePlugins,
                allowAllPermissions: allowAllPermissions,
@@ -3966,6 +4013,7 @@ Unable to read ${currentTasksFileLabel()}
                   preStartTimeoutMs,
                   noIncrementalOutput,
                   stopOnPromise: completionPromise,
+                  livenessProbe: agentConfig.livenessProbeFactory?.(),
                   onHeartbeatTimer: (timer) => {
                      currentHeartbeatTimer = timer;
                   },
@@ -4084,6 +4132,7 @@ Unable to read ${currentTasksFileLabel()}
                   preStartTimeoutMs,
                   noIncrementalOutput,
                   suppressOutput: true,
+                  livenessProbe: agentConfig.livenessProbeFactory?.(),
                   onHeartbeatTimer: (timer) => {
                      currentHeartbeatTimer = timer;
                   },
