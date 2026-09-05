@@ -6,6 +6,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname, isAbsolute, join, resolve } from "path";
 import { stripAnsi } from "./strip-ansi";
 import { ARGS_TEMPLATES, type AgentBuildArgsOptions } from "../agent-builders";
+import { makeAgyLivenessProbe } from "./agy-liveness";
 import type { AgentConfig, AgentEnvOptions, AgentType, JsonAgentConfig, RalphConfig } from "./types";
 
 export const DEFAULT_CONFIG_PATH = join(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
@@ -379,6 +380,9 @@ export const BUILT_IN_AGENTS: Record<AgentType, AgentConfig> = {
       buildEnv: ENV_TEMPLATES["default"],
       parseToolOutput: PARSE_PATTERNS["agy"],
       configName: "AGY",
+      // Buffered `--output-format json` agent: stdout silence for hours is
+      // normal. Probe agy's own steps DB instead (see src/agy-liveness.ts).
+      livenessProbeFactory: makeAgyLivenessProbe,
    },
    hermes: {
       type: "hermes",

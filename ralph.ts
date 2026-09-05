@@ -3965,7 +3965,12 @@ Unable to read ${currentTasksFileLabel()}
                && !cmdArgs.some(a => a.startsWith("--output-format=stream"));
 
             // Per-iteration liveness probe (fresh state; e.g. agy steps DB).
+            // Created BEFORE spawn so the probe's baseline (e.g. agy presence
+            // locks) is snapshotted pre-spawn — consumed by both call sites
+            // below via `livenessProbe`.
             const livenessProbe = agentConfig.livenessProbeFactory?.();
+            // Snapshot the baseline NOW (pre-spawn), not lazily at first poll.
+            livenessProbe?.({ pid: 0, startedAt: iterationStart });
 
             const env = agentConfig.buildEnv({
                filterPlugins: disablePlugins,
@@ -4013,7 +4018,7 @@ Unable to read ${currentTasksFileLabel()}
                   preStartTimeoutMs,
                   noIncrementalOutput,
                   stopOnPromise: completionPromise,
-                  livenessProbe: agentConfig.livenessProbeFactory?.(),
+                  livenessProbe,
                   onHeartbeatTimer: (timer) => {
                      currentHeartbeatTimer = timer;
                   },
@@ -4132,7 +4137,7 @@ Unable to read ${currentTasksFileLabel()}
                   preStartTimeoutMs,
                   noIncrementalOutput,
                   suppressOutput: true,
-                  livenessProbe: agentConfig.livenessProbeFactory?.(),
+                  livenessProbe,
                   onHeartbeatTimer: (timer) => {
                      currentHeartbeatTimer = timer;
                   },

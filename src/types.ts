@@ -7,6 +7,21 @@ export type AgentType = (typeof AGENT_TYPES)[number];
 
 export type AgentEnvOptions = { filterPlugins?: boolean; allowAllPermissions?: boolean };
 
+/**
+ * External liveness probe: lets an agent report progress independent of
+ * stdout. Buffered agents (e.g. agy --output-format json) emit zero stdout
+ * for hours while writing their own state files/DBs; the stdout-only
+ * stalling watchdog would falsely kill them. A probe is polled by the
+ * heartbeat + pre-start timers; `active: true` marks activity, `unknown`
+ * keeps current behavior (fail-open, never kills early).
+ */
+export interface LivenessProbeContext {
+   pid: number;
+   startedAt: number;
+}
+export type LivenessProbeResult = { active: boolean; detail?: string } | { unknown: true; detail?: string };
+export type LivenessProbe = (ctx: LivenessProbeContext) => LivenessProbeResult;
+
 export interface AgentConfig {
    type: AgentType;
    command: string;
@@ -14,6 +29,9 @@ export interface AgentConfig {
    buildEnv: (options: AgentEnvOptions) => Record<string, string>;
    parseToolOutput: (line: string) => string | null;
    configName: string;
+   /** Called ONCE PER ITERATION (before spawn) so probe state never leaks
+    *  across iterations; returns undefined → current stdout-only behavior. */
+   livenessProbeFactory?: () => LivenessProbe;
 }
 
 export interface JsonAgentConfig {
