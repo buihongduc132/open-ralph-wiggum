@@ -20,7 +20,7 @@
 
 ### Rank 3
 - **[FIXED] Overrides ephemeral on crash/re-resume** — persist-to-state in dbafa7b makes overrides durable via saveState.
-- **[FIXED] Dead reuse_skip_min/max keys claimed deprecated-warned but code lacked warns** — warns verified present in src/parse-args.ts:326,330 (reviewer saw stale tree); template comment at ralph.ts:351-352 still stale → OPEN (minor doc).
+- **[FIXED] Dead reuse_skip_min/max keys** — warns verified present in src/parse-args.ts (reviewer saw stale tree); template comment at ralph.ts (TOML block) ALSO fixed 2026-09-05 (commit a68065d): keys now marked DEPRECATED (no effect). CLOSED — no open tail.
 - **Ambient TOML silently shadows stored state on resume** — TOML key = Provided → override. Documented contract decision (CLI > TOML-implicit > stored is user's "later args win" applied to config files); OPEN THREAD for user: want CLI-only override + TOML-inherits-stored instead?
 - **--prompt-file counts as promptProvided but override applies pre-assembly value** — VERIFIED 2026-09-05 (test: resume-override-precedence.test.ts "gotcha #1"): override banner + Preview + agent instruction ALL carry the file content on resume (prompt assembly precedes the resume-override block; banner `Task:` shows path by design). No residual defect; contract RED→GREEN pinned.
 

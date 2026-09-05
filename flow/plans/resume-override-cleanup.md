@@ -46,7 +46,7 @@ DO NOT rewrite item prose on re-run (status flips only).
 - R2 pending: audit-verifier-report.md keep/drop = user decision
 - PM2 restart timing: must NOT kill running ralph loops (AGENTS.md process-safety rule)
 - [gotcha R3] TOML-vs-stored precedence on resume: current = TOML key overrides stored (user rule applied to config files); alternative CLI-only-override = user decision
-- [gotcha R2] no CLI off-switch for --tasks / rotation unset — feature gap, user decision
+- [gotcha R2] ~~no CLI off-switch for --tasks / rotation unset~~ — RESOLVED 2026-09-05 (commit a68065d): `--no-tasks` / `--no-rotation` negation flags implemented, RED→GREEN pinned in tests/resume-override-precedence.test.ts
 - [gotcha R3] --prompt-file + resume override ordering — verify prompt-file content actually reaches override (unit test pending)
 - [gotcha R3-minor] ralph.ts:351-352 TOML template comment still advertises reuse_skip_min/max as effective — doc fix pending
 

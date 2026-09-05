@@ -131,6 +131,22 @@ Task completed in 1 iteration(s)
 ===RALPH_EXIT=0===
 ```
 
+**Buffered JSON agent variant (agy — audit B-1 gap, added 2026-09-05):**
+agy is a single-shot `{status,response}` JSON agent (`isJsonModeAgent("agy")`,
+`extractJsonCompletionText` surfaces the promise; unit-pinned in
+`tests/src-json-beautifier.test.ts:566-583` + `tests/agy-buffered-regression.test.ts`).
+Smoke it the same way — expect NO streaming stdout, completion comes from the
+single JSON payload at process end:
+
+```bash
+mkdir -p /tmp/ralph-agy-smoke && cd /tmp/ralph-agy-smoke
+timeout 900 ralph-dev --agent agy --min-iterations 1 --max-iterations 1 "Output exactly: smoke-ok"
+```
+
+Pass = iteration completes, `Exit code: 0`, `Completion promise: detected`
+(with no incremental output mid-run — buffered by design; the pre-start
+watchdog skips stdout-liveness for buffered agents, commit 5354dc4).
+
 **PASS criterion:** exit 0, exactly **1 iteration** (`1 / 1`, loop stops on
 max), `<promise>COMPLETE</promise>` **detected**, no `stalling/` warnings.
 A `stalling/...` line or a non-zero exit means the ACP streaming heartbeat is

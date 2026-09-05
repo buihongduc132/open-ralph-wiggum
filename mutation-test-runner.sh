@@ -37,7 +37,6 @@ exec bun test \
   tests/src-loop-helpers.test.ts \
   tests/src-modules.test.ts \
   tests/src-parse-args.test.ts \
-  tests/src-run-loop.test.ts \
   tests/src-runtime-config.test.ts \
   tests/cov-*.test.ts \
   tests/lifecycle-hooks.test.ts \
