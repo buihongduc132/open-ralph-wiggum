@@ -564,6 +564,22 @@ describe("Generic adapter — unknown agent type", () => {
 // ─── extractJsonCompletionText ──────────────────────────────────────────────
 
 describe("extractJsonCompletionText", () => {
+  // agy single-shot json: promise tag lives in top-level `response`
+  it("agy single-shot json: extracts response text incl. promise tag", () => {
+    const line = JSON.stringify({
+      conversation_id: "c2",
+      status: "SUCCESS",
+      response: "Task finished.\n\n<promise>DONE</promise>\n",
+      duration_seconds: 79.2,
+    });
+    const result = extractJsonCompletionText(line, "agy");
+    expect(result.some(r => r.includes("<promise>DONE</promise>"))).toBe(true);
+  });
+
+  it("agy single-shot json: non-json passes through unchanged (raw fallback)", () => {
+    const result = extractJsonCompletionText("plain text", "agy");
+    expect(result).toEqual(["plain text"]);
+  });
   it("returns plain text without ANSI codes", () => {
     const line = JSON.stringify({
       type: "assistant",
@@ -945,6 +961,27 @@ describe("agy stream-json adapter (beautify mode)", () => {
       init: { cwd: "/repo", permission_mode: "always-proceed", tools: ["read_file"] },
     });
     expect(beautifyJsonLine(line, cfg)).toEqual([]);
+  });
+
+  // agy single-shot json (`--output-format json`): {status, response} payload
+  // with NO event/type discriminator (live capture 2026-09-03, /tmp/agy-raw-stdout.json).
+  it("agy single-shot json: displays response text", () => {
+    const line = JSON.stringify({
+      conversation_id: "e0444839-b7d8-453a-b0cc-4a3df25e35bb",
+      status: "SUCCESS",
+      response: "Created abs-test.txt containing ABS-OK.\n\n<promise>DONE</promise>\n",
+      duration_seconds: 79.2,
+      num_turns: 1,
+      usage: { input_tokens: 48257, output_tokens: 1298 },
+    });
+    const result = beautifyJsonLine(line, { ...defaultConfig, agentType: "agy" });
+    expect(result.some(r => stripAnsi(r).includes("ABS-OK"))).toBe(true);
+    expect(result.every(r => !r.trim().startsWith("{"))).toBe(true);
+  });
+
+  it("agy single-shot json: empty response displays nothing", () => {
+    const line = JSON.stringify({ conversation_id: "c1", status: "SUCCESS", response: "   ", duration_seconds: 1 });
+    expect(beautifyJsonLine(line, { ...defaultConfig, agentType: "agy" })).toEqual([]);
   });
 });
 

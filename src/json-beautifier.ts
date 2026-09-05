@@ -613,6 +613,14 @@ function agyAdapter(p: Record<string, unknown>, cfg: BeautifierConfig): string[]
     return [];
   }
 
+  // agy single-shot json (`--output-format json`): {status, response} with no
+  // event/type discriminator. Mirror the stream `result` branch for display.
+  if (event === "" && typeof p.status === "string" && typeof p.response === "string") {
+    const text = p.response as string;
+    if (text.trim()) return [ANSI.green(`✅ ${text.trim()}`)];
+    return [];
+  }
+
   if (event === "assistant") return claudeAssistant(p, cfg);
   if (event === "error" || p.error) {
     if (!cfg.showError) return [];
@@ -845,6 +853,16 @@ function textExtract(p: Record<string, unknown>, agentType: string): string[] {
     addText(p.text);
     addText(p.data);
     if (typeof p.content === "string") addText(p.content);
+  }
+
+  // agy single-shot json (`agy --output-format json -p ...`): payload shape is
+  // {conversation_id, status, response, ...} — NO `type`/`event` discriminator,
+  // so every branch above misses it. Top-level `response` is the assistant text
+  // (and is the only place the completion promise can live). Verified live
+  // 2026-09-03: without this, extractJsonCompletionText returns [] and ralph
+  // reports "Completion promise: not detected" for a SUCCESSFUL agy run.
+  if (t === "" && typeof p.event !== "object" && typeof p.status === "string" && typeof p.response === "string") {
+    addText(p.response);
   }
 
   const streamKind = (typeof p.event === "string" && p.event) ? p.event : t;

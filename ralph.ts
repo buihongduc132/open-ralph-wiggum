@@ -2895,6 +2895,10 @@ Unable to read ${currentTasksFileLabel()}
          onStallingDetected?: () => void;
          suppressOutput?: boolean;
          preStartTimeoutMs?: number; // -1 = auto (1/10 stallingTimeout), 0 = disabled, >0 = custom
+         /** true = agent emits NOTHING until completion (buffered single-shot json, e.g. agy
+          *  `--output-format json`). Pre-start silence is normal → skip the auto pre-start
+          *  watchdog unless the user set an explicit preStartTimeoutMs. */
+         noIncrementalOutput?: boolean;
          stopOnPromise?: string;
          flushPartialLines?: boolean;
       },
@@ -3191,7 +3195,8 @@ Unable to read ${currentTasksFileLabel()}
       // Use explicit undefined check so that 0 (disabled) is preserved, not falsy-truncated
       const preStartTimeoutRaw = options.preStartTimeoutMs === undefined ? -1 : options.preStartTimeoutMs;
       const stallingTimeout = options.stallingTimeoutMs ?? (2 * 60 * 60 * 1000);
-      const effectivePreStartTimeout = preStartTimeoutRaw === -1 ? Math.floor(stallingTimeout / 10) : preStartTimeoutRaw;
+      const autoPreStart = options.noIncrementalOutput ? 0 : Math.floor(stallingTimeout / 10);
+      const effectivePreStartTimeout = preStartTimeoutRaw === -1 ? autoPreStart : preStartTimeoutRaw;
       if (effectivePreStartTimeout > 0) {
           preStartTimer = setTimeout(() => {
              // Only mark as pre-start stalled if the process is still running
@@ -3889,6 +3894,15 @@ Unable to read ${currentTasksFileLabel()}
                streamOutput,
             });
 
+            // Buffered single-shot agents (`--output-format json` with NO
+            // stream-json): silence until completion is NORMAL, so the
+            // pre-start "no output = hang" watchdog must not apply (agy json
+            // latency varies 25s..>3m; default pre-start = stalling/10 kills
+            // healthy runs). Explicit --pre-start-timeout still wins.
+            const noIncrementalOutput = isJsonModeAgent(agentConfig.type, extraAgentFlags)
+               && !cmdArgs.some((a, i) => a === "--output-format" && /stream/.test(cmdArgs[i + 1] ?? ""))
+               && !cmdArgs.some(a => a.startsWith("--output-format=stream"));
+
             const env = agentConfig.buildEnv({
                filterPlugins: disablePlugins,
                allowAllPermissions: allowAllPermissions,
@@ -3933,6 +3947,7 @@ Unable to read ${currentTasksFileLabel()}
                   abortSignal: abortController.signal,
                   stallingTimeoutMs: state.stallingTimeoutMs,
                   preStartTimeoutMs,
+                  noIncrementalOutput,
                   stopOnPromise: completionPromise,
                   onHeartbeatTimer: (timer) => {
                      currentHeartbeatTimer = timer;
@@ -4050,6 +4065,7 @@ Unable to read ${currentTasksFileLabel()}
                   extraFlags: extraAgentFlags,
                   stallingTimeoutMs: state.stallingTimeoutMs,
                   preStartTimeoutMs,
+                  noIncrementalOutput,
                   suppressOutput: true,
                   onHeartbeatTimer: (timer) => {
                      currentHeartbeatTimer = timer;

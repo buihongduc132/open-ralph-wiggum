@@ -158,7 +158,7 @@ Switch between built-in agents or wire in your own sub-agent wrapper without cha
 - **Copilot CLI** (`--agent copilot`) — GitHub's agentic coding tool
 - **Cursor Agent** (`--agent cursor-agent`) — Cursor's headless AI coding agent
 - **Grok** (`--agent grok`) — xAI Grok Build CLI (`grok -p`, `--yolo`, `streaming-json`)
-- **AGY** (`--agent agy`) — Google Antigravity CLI (`agy -p`, `--dangerously-skip-permissions`, `stream-json`)
+- **AGY** (`--agent agy`) — Google Antigravity CLI (`agy -p`, `--dangerously-skip-permissions`, `--output-format json` — pinned: stream-json and text print modes hang server-side in agy 1.1.24+; output arrives as a single buffered JSON envelope at completion)
 - **OpenCode** (`--agent opencode`) — Open-source default option
 - **Custom agents** (`--agent <type>` + `--config agents.json`) — `ocxo`, `omp`, `pi`, `omox`, Gemini wrappers, or any compatible internal sub-agent CLI
 
