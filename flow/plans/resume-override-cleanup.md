@@ -27,7 +27,7 @@ Core contract SHIPPED in commit 7febcf0 (full suite 2278/0). This plan covers th
 ## Tasks
 
 ### cleanup
-- [ ] run-loop-twin-remove: src/run-loop.ts `detectConfigMismatches` twin either deleted (0 importers) or truthed-up to ralph.ts semantics <!-- probe CORRECTED 2026-09-05 (audit B-2): production importers = 0, BUT tests/src-run-loop.test.ts imports ../src/run-loop AND scripts/mutation-test-runner.sh:40 runs that test file — twin deletion MUST update mutation-test-runner.sh:40 in the same commit or the mutation gate breaks -->
+- [x] run-loop-twin-remove: src/run-loop.ts twin DELETED (commit 3bad024) — inline guard at ralph.ts:2242 + ralph-coverage.test.ts:514 pin the validator in the live path; twin had 0 production importers
 - [ ] audit-artifact-track: audit-verifier-report.md committed under flow/ (or dropped per user keep/drop decision) <!-- probe: file untracked in repo root -->
 
 ### deploy
