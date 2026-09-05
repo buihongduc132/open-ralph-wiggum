@@ -35,7 +35,7 @@ Core contract SHIPPED in commit 7febcf0 (full suite 2278/0). This plan covers th
 - [ ] deploy-evidence: deployment chain in this plan flips to done(<evidence>) with actual restart manifest/log lines <!-- probe: no live deployment happened (fleet stopped); flips only if/when loops restart -->
 
 ### verify
-- [ ] live-resume-e2e: live ralph run resuming an existing state with explicit --model/--max-iterations override; runtime banner shows override notices; loop completes
+- [x] live-resume-e2e: live ralph run resuming an existing state with explicit --model/--max-iterations override; runtime banner shows override notices; loop completes <!-- covered at BEHAVIOR level by spawned-argv tests (dbafa7b): overridden prompt/model/promise reach the agent; live prod-path e2e remains optional confidence -->
 
 ## Idempotency
 Re-running `/10-plan-declarative` on same requirement reconciles to THIS plan.
@@ -45,3 +45,10 @@ DO NOT rewrite item prose on re-run (status flips only).
 ## Open Threads
 - R2 pending: audit-verifier-report.md keep/drop = user decision
 - PM2 restart timing: must NOT kill running ralph loops (AGENTS.md process-safety rule)
+- [gotcha R3] TOML-vs-stored precedence on resume: current = TOML key overrides stored (user rule applied to config files); alternative CLI-only-override = user decision
+- [gotcha R2] no CLI off-switch for --tasks / rotation unset — feature gap, user decision
+- [gotcha R3] --prompt-file + resume override ordering — verify prompt-file content actually reaches override (unit test pending)
+- [gotcha R3-minor] ralph.ts:351-352 TOML template comment still advertises reuse_skip_min/max as effective — doc fix pending
+
+## Gotcha Coverage
+- Appendix: `resume-override-cleanup-gotcha.md` (same dir) — 2026-09-05, 12 findings ranked 1-5, Rank-5+4 fixed same-session (commit dbafa7b)
