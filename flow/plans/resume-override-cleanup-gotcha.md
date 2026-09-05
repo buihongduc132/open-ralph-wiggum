@@ -26,7 +26,7 @@
 
 ### Rank 2
 - **No CLI off-switch for tasks/rotation** (`--no-tasks` missing; rotation can't be unset via CLI) — OPEN THREAD.
-- **prod-binary-redeploy [x] vacuous** — plan flipped to pending-with-annotation (fleet stopped; nothing to redeploy until restart).
+- **prod-binary-redeploy vacuous-check fixed** — plan flipped to `[ ]` w/ annotation (audit A-3 applied 2026-09-05; original 'flipped' claim in this doc preceded the actual edit — corrected same day).
 - **live-resume-e2e field choice couldn't catch Rank-5** — e2e item now covered by BEHAVIOR tests at unit level; live e2e still valuable for prod confidence — OPEN.
 - **validateIterationLimits orphaned in src/run-loop.ts twin** — folded into existing run-loop-twin-remove item; deleting twin must wire min>max check into ralph.ts first.
 

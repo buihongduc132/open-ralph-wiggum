@@ -27,15 +27,15 @@ Core contract SHIPPED in commit 7febcf0 (full suite 2278/0). This plan covers th
 ## Tasks
 
 ### cleanup
-- [ ] run-loop-twin-remove: src/run-loop.ts `detectConfigMismatches` twin either deleted (0 importers) or truthed-up to ralph.ts semantics (mutation-runner references updated or removed with it) <!-- probe: only importer = tests/src-run-loop.test.ts; scripts/mutation-test-runner.sh has NO run-loop ref (audit claim stale) -->
+- [ ] run-loop-twin-remove: src/run-loop.ts `detectConfigMismatches` twin either deleted (0 importers) or truthed-up to ralph.ts semantics <!-- probe CORRECTED 2026-09-05 (audit B-2): production importers = 0, BUT tests/src-run-loop.test.ts imports ../src/run-loop AND scripts/mutation-test-runner.sh:40 runs that test file — twin deletion MUST update mutation-test-runner.sh:40 in the same commit or the mutation gate breaks -->
 - [ ] audit-artifact-track: audit-verifier-report.md committed under flow/ (or dropped per user keep/drop decision) <!-- probe: file untracked in repo root -->
 
 ### deploy
-- [x] prod-binary-redeploy: bin/ralph.js with override contract deployed to PM2 fleet <!-- probe 2026-09-05: ALL ralph/watchdog PM2 instances = stopped; no live process runs old binary; next start picks up new bin/ralph.js (grep 'later args win' = 2 hits) -->
+- [ ] prod-binary-redeploy: bin/ralph.js with override contract deployed to PM2 fleet <!-- probe 2026-09-05: ALL ralph/watchdog PM2 instances = stopped; nothing deployed (vacuous if checked — audit A-3); next start picks up new bin/ralph.js (grep 'later args win' = 2 hits); tracked by ticket BHD-672 -->
 - [ ] deploy-evidence: deployment chain in this plan flips to done(<evidence>) with actual restart manifest/log lines <!-- probe: no live deployment happened (fleet stopped); flips only if/when loops restart -->
 
 ### verify
-- [x] live-resume-e2e: live ralph run resuming an existing state with explicit --model/--max-iterations override; runtime banner shows override notices; loop completes <!-- covered at BEHAVIOR level by spawned-argv tests (dbafa7b): overridden prompt/model/promise reach the agent; live prod-path e2e remains optional confidence -->
+- [ ] live-resume-e2e: live PROD-PATH ralph run (real binary, resumed state, explicit --model override): runtime notice + spawned agent receives it — unit BEHAVIOR tests already pin the contract (dbafa7b); this item = the live-run confidence layer only
 
 ## Idempotency
 Re-running `/10-plan-declarative` on same requirement reconciles to THIS plan.

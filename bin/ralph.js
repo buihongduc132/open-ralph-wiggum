@@ -4,8 +4,8 @@ var __require = import.meta.require;
 
 // ralph.ts
 var {$ } = globalThis.Bun;
-import { existsSync as existsSync8, readFileSync as readFileSync9, writeFileSync as writeFileSync7, mkdirSync as mkdirSync3, statSync as statSync3, lstatSync as lstatSync2, renameSync as renameSync3 } from "fs";
-import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute3, join as join5, resolve as resolve4, sep } from "path";
+import { existsSync as existsSync9, readFileSync as readFileSync9, writeFileSync as writeFileSync7, mkdirSync as mkdirSync3, statSync as statSync4, lstatSync as lstatSync2, renameSync as renameSync3 } from "fs";
+import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute3, join as join6, resolve as resolve4, sep } from "path";
 
 // src/strip-ansi.ts
 var ANSI_PATTERN = /\x1b\[[0-9;]*[A-Za-z]/g;
@@ -1069,9 +1069,110 @@ var ARGS_TEMPLATES = {
 };
 
 // src/ralph-agent-config.ts
-import { existsSync, readFileSync as readFileSync2, writeFileSync, mkdirSync } from "fs";
-import { dirname, isAbsolute, join, resolve } from "path";
-var DEFAULT_CONFIG_PATH = join(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
+import { existsSync as existsSync2, readFileSync as readFileSync2, writeFileSync, mkdirSync } from "fs";
+import { dirname, isAbsolute, join as join2, resolve } from "path";
+
+// src/agy-liveness.ts
+import { readdirSync, statSync, existsSync } from "fs";
+import { join } from "path";
+import { Database } from "bun:sqlite";
+var agyRoot = () => process.env.RALPH_AGY_HOME ?? join(process.env.HOME ?? "", ".gemini", "antigravity-cli");
+var stepsFingerprint = (db) => {
+  try {
+    const database = new Database(db, { readonly: true });
+    try {
+      const rows = database.prepare("SELECT COUNT(*) AS c, COALESCE(MAX(idx), -1) AS m, SUM(CASE WHEN status = 8 THEN 1 ELSE 0 END) AS r FROM steps").get();
+      if (!rows)
+        return null;
+      return `${rows.c}:${rows.m}:${rows.r ?? 0}`;
+    } finally {
+      database.close();
+    }
+  } catch {
+    return null;
+  }
+};
+var mtimeOf = (p) => {
+  try {
+    return statSync(p).mtimeMs;
+  } catch {
+    return 0;
+  }
+};
+var listPresenceLocks = () => {
+  try {
+    return readdirSync(join(agyRoot(), "presence"));
+  } catch {
+    return [];
+  }
+};
+function resolveAgyConversation(ctx, baseline) {
+  const convDir = join(agyRoot(), "conversations");
+  const fresh = listPresenceLocks().filter((f) => f.endsWith(".lock") && !baseline.has(f)).map((f) => ({ f, m: mtimeOf(join(agyRoot(), "presence", f)) })).sort((a, b) => Math.abs(a.m - ctx.startedAt) - Math.abs(b.m - ctx.startedAt));
+  for (const { f: lock } of fresh) {
+    const uuid = lock.replace(/\.lock$/, "");
+    if (existsSync(join(convDir, `${uuid}.db`)))
+      return uuid;
+  }
+  try {
+    const entries = readdirSync(convDir).filter((f) => f.endsWith(".db")).map((f) => ({ f, m: Math.max(mtimeOf(join(convDir, f)), mtimeOf(join(convDir, f + "-wal"))) })).sort((a, b) => b.m - a.m);
+    const top = entries[0];
+    if (top && top.m >= ctx.startedAt - 5000) {
+      const second = entries[1];
+      if (!second || top.m - second.m > 3000) {
+        return top.f.replace(/\.db$/, "");
+      }
+    }
+  } catch {}
+  return null;
+}
+function makeAgyLivenessProbe() {
+  let state = null;
+  const ensureState = (ctx) => {
+    if (!state) {
+      state = {
+        presenceBaseline: new Set(listPresenceLocks()),
+        uuid: null,
+        lastDbMtime: 0,
+        lastStepsFingerprint: null,
+        lastPollAt: Date.now()
+      };
+    }
+    return state;
+  };
+  const probe = (ctx) => {
+    const st = ensureState(ctx);
+    if (!st.uuid) {
+      st.uuid = resolveAgyConversation(ctx, st.presenceBaseline);
+      if (!st.uuid)
+        return { unknown: true, detail: "agy conversation db not located yet" };
+    }
+    const db = join(agyRoot(), "conversations", `${st.uuid}.db`);
+    if (!existsSync(db))
+      return { unknown: true, detail: "db vanished" };
+    const m = Math.max(mtimeOf(db), mtimeOf(db + "-wal"));
+    let activity = false;
+    const firstObservation = st.lastDbMtime === 0;
+    if (m > st.lastDbMtime) {
+      st.lastDbMtime = m;
+      if (!firstObservation || m >= ctx.startedAt - 5000)
+        activity = true;
+    }
+    const fp = stepsFingerprint(db);
+    if (fp !== null) {
+      if (fp !== st.lastStepsFingerprint) {
+        st.lastStepsFingerprint = fp;
+        activity = true;
+      }
+    }
+    st.lastPollAt = Date.now();
+    return activity ? { active: true, detail: `agy ${st.uuid.slice(0, 8)} steps=${st.lastStepsFingerprint ?? "?"}` } : { active: false, detail: `agy ${st.uuid.slice(0, 8)} quiet` };
+  };
+  return probe;
+}
+
+// src/ralph-agent-config.ts
+var DEFAULT_CONFIG_PATH = join2(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
 var IS_WINDOWS = process.platform === "win32";
 var PARSE_PATTERNS = {
   opencode: (line) => {
@@ -1157,7 +1258,7 @@ PARSE_PATTERNS["grok"] = parseJsonStreamToolName;
 PARSE_PATTERNS["agy"] = parseJsonStreamToolName;
 PARSE_PATTERNS["hermes"] = defaultParseToolOutput;
 function loadPluginsFromConfig(configPath) {
-  if (!existsSync(configPath)) {
+  if (!existsSync2(configPath)) {
     return [];
   }
   try {
@@ -1172,13 +1273,13 @@ function loadPluginsFromConfig(configPath) {
   }
 }
 function ensureRalphConfig(options, stateDir) {
-  if (!existsSync(stateDir)) {
+  if (!existsSync2(stateDir)) {
     mkdirSync(stateDir, { recursive: true });
   }
-  const configPath = join(stateDir, "ralph-opencode.config.json");
-  const userConfigPath = join(process.env.XDG_CONFIG_HOME ?? join(process.env.HOME ?? "", ".config"), "opencode", "opencode.json");
-  const projectConfigPath = join(process.cwd(), ".ralph", "opencode.json");
-  const legacyProjectConfigPath = join(process.cwd(), ".opencode", "opencode.json");
+  const configPath = join2(stateDir, "ralph-opencode.config.json");
+  const userConfigPath = join2(process.env.XDG_CONFIG_HOME ?? join2(process.env.HOME ?? "", ".config"), "opencode", "opencode.json");
+  const projectConfigPath = join2(process.cwd(), ".ralph", "opencode.json");
+  const legacyProjectConfigPath = join2(process.cwd(), ".opencode", "opencode.json");
   const config = {
     $schema: "https://opencode.ai/config.json"
   };
@@ -1218,7 +1319,7 @@ var ENV_TEMPLATES = {
       env.OPENCODE_CONFIG = ensureRalphConfig({
         filterPlugins: options.filterPlugins,
         allowAllPermissions: options.allowAllPermissions
-      }, stateDir || join(process.cwd(), ".ralph"));
+      }, stateDir || join2(process.cwd(), ".ralph"));
     }
     return env;
   },
@@ -1241,7 +1342,7 @@ function resolveCommand(cmd, envOverride, basePath) {
     const ralphDir = import.meta.dirname;
     const base = ralphDir ? resolve(ralphDir, cmd) : basePath || process.cwd();
     const resolved = isAbsolute(base) ? base : resolveConfigRelativePath(base, cmd);
-    if (existsSync(resolved))
+    if (existsSync2(resolved))
       return resolved;
     const whichPath = Bun.which(cmd);
     if (whichPath)
@@ -1305,7 +1406,8 @@ var BUILT_IN_AGENTS = {
     buildArgs: ARGS_TEMPLATES["agy"],
     buildEnv: ENV_TEMPLATES["default"],
     parseToolOutput: PARSE_PATTERNS["agy"],
-    configName: "AGY"
+    configName: "AGY",
+    livenessProbeFactory: makeAgyLivenessProbe
   },
   hermes: {
     type: "hermes",
@@ -1522,7 +1624,7 @@ function isYamlFrontmatter(body) {
 }
 
 // src/loop-helpers.ts
-import { existsSync as existsSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2, mkdirSync as mkdirSync2, lstatSync, renameSync } from "fs";
+import { existsSync as existsSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync2, mkdirSync as mkdirSync2, lstatSync, renameSync } from "fs";
 var MAX_HISTORY_ITERATIONS = 200;
 var MAX_REPEATED_ERROR_KEYS = 50;
 var MAX_STALLING_EVENTS = 100;
@@ -1555,7 +1657,7 @@ function stripInjectedPrompt(rawText, sentPrompt) {
   return stripped;
 }
 function saveHistory(history, historyPath, stateDir) {
-  if (!existsSync2(stateDir)) {
+  if (!existsSync3(stateDir)) {
     mkdirSync2(stateDir, { recursive: true });
   }
   writeFileSync2(historyPath, JSON.stringify(history, null, 2));
@@ -1633,12 +1735,12 @@ async function captureFileSnapshot() {
       if (!batchOk || files.size < pathList.length) {
         if (!batchOk)
           degraded = true;
-        const statSync = __require("fs").statSync;
+        const statSync2 = __require("fs").statSync;
         for (const file of pathList) {
           if (files.has(file))
             continue;
           try {
-            files.set(file, `m:${statSync(file).mtimeMs}`);
+            files.set(file, `m:${statSync2(file).mtimeMs}`);
           } catch {
             files.set(file, "deleted");
           }
@@ -1735,7 +1837,7 @@ function appendStallingEvent(history, event) {
 
 // src/review-gate.ts
 import { randomBytes, createHash } from "crypto";
-import { existsSync as existsSync3, readFileSync as readFileSync4, appendFileSync } from "fs";
+import { existsSync as existsSync4, readFileSync as readFileSync4, appendFileSync } from "fs";
 function generateRunHash(cwd, stateDir) {
   const raw = `${cwd}:${stateDir}:${process.pid}:${Date.now()}:${randomBytes(8).toString("hex")}`;
   return createHash("sha256").update(raw).digest("hex").slice(0, 16);
@@ -1778,7 +1880,7 @@ If APPROVE: no additional explanation needed.`;
 function buildReviewPrompt(params) {
   let template = DEFAULT_REVIEW_PROMPT;
   if (params.customPromptTemplate) {
-    if (existsSync3(params.customPromptTemplate)) {
+    if (existsSync4(params.customPromptTemplate)) {
       template = readFileSync4(params.customPromptTemplate, "utf-8");
     } else {
       console.warn(`\u26A0\uFE0F Custom review prompt file not found: ${params.customPromptTemplate}. Using built-in prompt.`);
@@ -2021,12 +2123,12 @@ function validateReviewConfig(config) {
 }
 
 // src/runtime-config.ts
-import { existsSync as existsSync5, readFileSync as readFileSync6 } from "fs";
+import { existsSync as existsSync6, readFileSync as readFileSync6 } from "fs";
 import { dirname as dirname2, isAbsolute as isAbsolute2, resolve as resolve2 } from "path";
 
 // src/lifecycle-hooks.ts
-import { existsSync as existsSync4, readdirSync, statSync, readFileSync as readFileSync5, writeFileSync as writeFileSync4, unlinkSync } from "fs";
-import { join as join2 } from "path";
+import { existsSync as existsSync5, readdirSync as readdirSync2, statSync as statSync2, readFileSync as readFileSync5, writeFileSync as writeFileSync4, unlinkSync } from "fs";
+import { join as join3 } from "path";
 import { spawnSync } from "child_process";
 var TIMEOUT_BIN_AVAILABLE = (() => {
   try {
@@ -2057,7 +2159,7 @@ var LIFECYCLE_EVENTS = [
   "loop-error",
   "loop-cancel"
 ];
-var DEFAULT_GLOBAL_CONFIG_DIR = join2(process.env.HOME || process.env.USERPROFILE || "~", ".config", "open-ralph-wiggum");
+var DEFAULT_GLOBAL_CONFIG_DIR = join3(process.env.HOME || process.env.USERPROFILE || "~", ".config", "open-ralph-wiggum");
 var LOCAL_HOOKS_DIR = ".ralph/hooks";
 var DEFAULT_HOOK_TIMEOUT_MS = 30000;
 var HOOK_FILENAME_RE = /^(\d+)-(.+)\.sh$/;
@@ -2065,8 +2167,8 @@ var PIPELINE_CONTEXT_START = "---RALPH_PIPELINE_CONTEXT---";
 var PIPELINE_CONTEXT_END = "---END_PIPELINE_CONTEXT---";
 var PIPELINE_CONTEXT_FILE = "pipeline-context.json";
 function loadPipelineContext(stateDir) {
-  const contextPath = join2(stateDir, PIPELINE_CONTEXT_FILE);
-  if (!existsSync4(contextPath)) {
+  const contextPath = join3(stateDir, PIPELINE_CONTEXT_FILE);
+  if (!existsSync5(contextPath)) {
     return {};
   }
   try {
@@ -2078,7 +2180,7 @@ function loadPipelineContext(stateDir) {
   }
 }
 function savePipelineContext(stateDir, context) {
-  const contextPath = join2(stateDir, PIPELINE_CONTEXT_FILE);
+  const contextPath = join3(stateDir, PIPELINE_CONTEXT_FILE);
   try {
     writeFileSync4(contextPath, JSON.stringify(context, null, 2));
   } catch (err) {
@@ -2140,8 +2242,8 @@ function filterPipelineContextFromOutput(output) {
 function discoverHooks(options) {
   const { event, cwd } = options;
   const globalConfigDir = options.globalConfigDir ?? DEFAULT_GLOBAL_CONFIG_DIR;
-  const globalDir = join2(globalConfigDir, "hooks", event);
-  const localDir = join2(cwd, LOCAL_HOOKS_DIR, event);
+  const globalDir = join3(globalConfigDir, "hooks", event);
+  const localDir = join3(cwd, LOCAL_HOOKS_DIR, event);
   const globalHooks = scanDirectory(globalDir, event, "global");
   const localHooks = scanDirectory(localDir, event, "local");
   checkPriorityCollision(globalHooks, "global", event);
@@ -2149,21 +2251,21 @@ function discoverHooks(options) {
   return sortHooks([...globalHooks, ...localHooks]);
 }
 function scanDirectory(dir, event, scope) {
-  if (!existsSync4(dir))
+  if (!existsSync5(dir))
     return [];
-  const stat = statSync(dir);
+  const stat = statSync2(dir);
   if (!stat.isDirectory())
     return [];
   const entries = [];
-  const files = readdirSync(dir);
+  const files = readdirSync2(dir);
   for (const file of files) {
     const match = file.match(HOOK_FILENAME_RE);
     if (!match)
       continue;
     const priority = parseInt(match[1], 10);
     const name = match[2];
-    const filePath = join2(dir, file);
-    if (!statSync(filePath).isFile())
+    const filePath = join3(dir, file);
+    if (!statSync2(filePath).isFile())
       continue;
     entries.push({ event, priority, name, scope, filePath });
   }
@@ -2356,8 +2458,8 @@ function showPipelineContext(stateDir) {
   return JSON.stringify(context, null, 2);
 }
 function clearPipelineContext(stateDir) {
-  const contextPath = join2(stateDir, PIPELINE_CONTEXT_FILE);
-  if (existsSync4(contextPath)) {
+  const contextPath = join3(stateDir, PIPELINE_CONTEXT_FILE);
+  if (existsSync5(contextPath)) {
     try {
       unlinkSync(contextPath);
     } catch (err) {
@@ -2509,7 +2611,7 @@ function normalizePreStartTimeout(value) {
   process.exit(1);
 }
 function loadRuntimeTomlConfig(configPath, explicit) {
-  if (!existsSync5(configPath)) {
+  if (!existsSync6(configPath)) {
     if (explicit) {
       console.error(`Error: Ralph TOML config not found: ${configPath}`);
       process.exit(1);
@@ -3142,20 +3244,20 @@ function applyPassthroughOverrides(result, setStatePaths) {
 }
 
 // src/state-paths.ts
-import { join as join3, resolve as resolve3, relative } from "path";
-var stateDir = join3(process.cwd(), ".ralph");
-var statePath = join3(stateDir, "ralph-loop.state.json");
-var contextPath = join3(stateDir, "ralph-context.md");
-var historyPath = join3(stateDir, "ralph-history.json");
-var tasksPath = join3(stateDir, "ralph-tasks.md");
-var questionsPath = join3(stateDir, "ralph-questions.json");
+import { join as join4, resolve as resolve3, relative } from "path";
+var stateDir = join4(process.cwd(), ".ralph");
+var statePath = join4(stateDir, "ralph-loop.state.json");
+var contextPath = join4(stateDir, "ralph-context.md");
+var historyPath = join4(stateDir, "ralph-history.json");
+var tasksPath = join4(stateDir, "ralph-tasks.md");
+var questionsPath = join4(stateDir, "ralph-questions.json");
 function setStatePaths(nextStateDir) {
   stateDir = resolve3(nextStateDir);
-  statePath = join3(stateDir, "ralph-loop.state.json");
-  contextPath = join3(stateDir, "ralph-context.md");
-  historyPath = join3(stateDir, "ralph-history.json");
-  tasksPath = join3(stateDir, "ralph-tasks.md");
-  questionsPath = join3(stateDir, "ralph-questions.json");
+  statePath = join4(stateDir, "ralph-loop.state.json");
+  contextPath = join4(stateDir, "ralph-context.md");
+  historyPath = join4(stateDir, "ralph-history.json");
+  tasksPath = join4(stateDir, "ralph-tasks.md");
+  questionsPath = join4(stateDir, "ralph-questions.json");
 }
 function formatStatePath(path) {
   const rel = relative(process.cwd(), path);
@@ -3295,7 +3397,7 @@ function escapeRegex2(str) {
 }
 
 // src/goal-state.ts
-import { readFileSync as readFileSync8, writeFileSync as writeFileSync6, existsSync as existsSync6 } from "fs";
+import { readFileSync as readFileSync8, writeFileSync as writeFileSync6, existsSync as existsSync7 } from "fs";
 var VALID_PHASES = ["planning", "executing", "verifying", "done"];
 var VALID_PHASE_SET = new Set(VALID_PHASES);
 var PHASE_ORDER = {
@@ -3341,7 +3443,7 @@ function validateNestedFields(parsed) {
   return true;
 }
 function loadGoalState(filePath) {
-  if (!existsSync6(filePath))
+  if (!existsSync7(filePath))
     return null;
   try {
     const raw = readFileSync8(filePath, "utf-8");
@@ -3455,8 +3557,8 @@ function syncGoalStateAfterIteration(goalFilePath, goalStateFilePath, iteration,
 }
 
 // src/goal-inventory.ts
-import { existsSync as existsSync7, readdirSync as readdirSync2, statSync as statSync2 } from "fs";
-import { join as join4 } from "path";
+import { existsSync as existsSync8, readdirSync as readdirSync3, statSync as statSync3 } from "fs";
+import { join as join5 } from "path";
 var PHASE_PRIORITY = {
   executing: 0,
   verifying: 1,
@@ -3464,31 +3566,31 @@ var PHASE_PRIORITY = {
   done: 3
 };
 function buildInventory(goalsDir) {
-  if (!existsSync7(goalsDir))
+  if (!existsSync8(goalsDir))
     return { goals: [] };
   let entries;
   try {
-    entries = readdirSync2(goalsDir);
+    entries = readdirSync3(goalsDir);
   } catch {
     return { goals: [] };
   }
   const goals = [];
   for (const entry of entries) {
-    const entryPath = join4(goalsDir, entry);
+    const entryPath = join5(goalsDir, entry);
     let stat;
     try {
-      stat = statSync2(entryPath);
+      stat = statSync3(entryPath);
     } catch {
       continue;
     }
     if (!stat.isDirectory())
       continue;
-    const goalMdPath = join4(entryPath, "goal.md");
-    if (!existsSync7(goalMdPath))
+    const goalMdPath = join5(entryPath, "goal.md");
+    if (!existsSync8(goalMdPath))
       continue;
     try {
       const goal = parseGoalMd(goalMdPath, entry);
-      const statePath2 = join4(entryPath, "goal.state.json");
+      const statePath2 = join5(entryPath, "goal.state.json");
       let phase = "planning";
       let lastIterationAt = "";
       let factsVerified = goal.facts.filter((f) => f.verified).length;
@@ -3651,9 +3753,9 @@ var VERSION = "1.3.0";
 var IS_WINDOWS2 = process.platform === "win32";
 function ensureStateDir() {
   const stateDir2 = getStateDir();
-  if (existsSync8(getStateDir())) {
+  if (existsSync9(getStateDir())) {
     try {
-      const stats = statSync3(getStateDir());
+      const stats = statSync4(getStateDir());
       if (!stats.isDirectory()) {
         const linkStats = lstatSync2(getStateDir());
         console.error(`
@@ -3676,8 +3778,8 @@ Fix: rm ${getStateDir()}  # remove the file/symlink`);
 var customConfigPath = "";
 var initConfigPath = undefined;
 var AGENT_TYPES = ["opencode", "claude-code", "codex", "copilot", "cursor-agent", "grok", "agy", "hermes"];
-var DEFAULT_CONFIG_PATH2 = join5(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
-var stateDirInput = join5(process.cwd(), ".ralph");
+var DEFAULT_CONFIG_PATH2 = join6(process.env.HOME || "", ".config", "open-ralph-wiggum", "agents.json");
+var stateDirInput = join6(process.cwd(), ".ralph");
 function ensureRalphConfig2(options) {
   return ensureRalphConfig(options, getStateDir());
 }
@@ -3696,7 +3798,7 @@ var ENV_TEMPLATES2 = {
 };
 function loadAgentConfig(configPath) {
   const path = configPath || DEFAULT_CONFIG_PATH2;
-  if (!existsSync8(path))
+  if (!existsSync9(path))
     return null;
   try {
     const content = readFileSync9(path, "utf-8");
@@ -4024,11 +4126,11 @@ function loadRulesToml(currentStateDir) {
   const stateDirName = extractStateDirBasename(currentStateDir);
   const tomlName = `.ralph-${stateDirName}.toml`;
   const candidates = [
-    join5(currentStateDir, tomlName),
-    join5(process.cwd(), tomlName)
+    join6(currentStateDir, tomlName),
+    join6(process.cwd(), tomlName)
   ];
   for (const path of candidates) {
-    if (existsSync8(path)) {
+    if (existsSync9(path)) {
       try {
         const raw = readFileSync9(path, "utf-8");
         if (raw.trim().length === 0)
@@ -4052,18 +4154,18 @@ function loadRulesToml(currentStateDir) {
 function resolveRulesTomlPath(currentStateDir) {
   const stateDirName = extractStateDirBasename(currentStateDir);
   const tomlName = `.ralph-${stateDirName}.toml`;
-  if (existsSync8(join5(currentStateDir, tomlName)))
-    return join5(currentStateDir, tomlName);
-  return join5(process.cwd(), tomlName);
+  if (existsSync9(join6(currentStateDir, tomlName)))
+    return join6(currentStateDir, tomlName);
+  return join6(process.cwd(), tomlName);
 }
 function scaffoldRulesToml(rulesName, currentStateDir) {
   const stateDirName = extractStateDirBasename(currentStateDir);
-  const tomlPath = join5(currentStateDir, `.ralph-${stateDirName}.toml`);
+  const tomlPath = join6(currentStateDir, `.ralph-${stateDirName}.toml`);
   const tomlDir = dirname3(tomlPath);
-  if (!existsSync8(tomlDir))
+  if (!existsSync9(tomlDir))
     mkdirSync3(tomlDir, { recursive: true });
   let existingContent = "";
-  if (existsSync8(tomlPath)) {
+  if (existsSync9(tomlPath)) {
     existingContent = readFileSync9(tomlPath, "utf-8");
   }
   if (existingContent) {
@@ -4225,7 +4327,7 @@ function resolveInjectPlaceholders(template, state, currentStateDir, toml) {
       console.warn(`\u26A0\uFE0F Ralph: state_injection.source resolved outside state-dir: ${sourcePath}`);
       return "";
     }
-    if (!existsSync8(sourcePath))
+    if (!existsSync9(sourcePath))
       return "";
     try {
       const raw = readFileSync9(sourcePath, "utf-8");
@@ -4299,7 +4401,7 @@ function resolveCommand2(cmd, envOverride, basePath) {
     const ralphDir = import.meta.dirname;
     const base = ralphDir ? resolve4(ralphDir, cmd) : basePath || process.cwd();
     const resolved = isAbsolute3(base) ? base : resolveConfigRelativePath2(base, cmd);
-    if (existsSync8(resolved))
+    if (existsSync9(resolved))
       return resolved;
     const whichPath = Bun.which(cmd);
     if (whichPath)
@@ -4352,19 +4454,19 @@ async function ralphMain() {
   setStatePaths(stateDirInput);
   ensureStateDir();
   if (!tomlConfigPath) {
-    tomlConfigPath = join5(getStateDir(), "config.toml");
+    tomlConfigPath = join6(getStateDir(), "config.toml");
   }
   if (initConfigPath !== undefined) {
     const agentConfigPath = initConfigPath || DEFAULT_CONFIG_PATH2;
-    const tomlConfigPathOutput = join5(getStateDir(), "config.toml");
-    const agentConfigDir = join5(agentConfigPath, "..");
-    if (!existsSync8(agentConfigDir)) {
+    const tomlConfigPathOutput = join6(getStateDir(), "config.toml");
+    const agentConfigDir = join6(agentConfigPath, "..");
+    if (!existsSync9(agentConfigDir)) {
       mkdirSync3(agentConfigDir, { recursive: true });
     }
     writeFileSync7(agentConfigPath, JSON.stringify(getDefaultConfig(), null, 2));
     console.log(`Created agent config at: ${agentConfigPath}`);
-    const tomlDir = join5(tomlConfigPathOutput, "..");
-    if (!existsSync8(tomlDir)) {
+    const tomlDir = join6(tomlConfigPathOutput, "..");
+    if (!existsSync9(tomlDir)) {
       mkdirSync3(tomlDir, { recursive: true });
     }
     writeFileSync7(tomlConfigPathOutput, getDefaultTomlConfig());
@@ -4377,13 +4479,13 @@ Configuration initialized! You can edit these files to customize Ralph.`);
   if (args.includes("--init-rules")) {
     const stateDirName = extractStateDirBasename(getStateDir());
     const tomlName = `.ralph-${stateDirName}.toml`;
-    const tomlPath = join5(getStateDir(), tomlName);
-    if (existsSync8(tomlPath)) {
+    const tomlPath = join6(getStateDir(), tomlName);
+    if (existsSync9(tomlPath)) {
       console.log(`Rules TOML already exists: ${tomlPath}`);
       console.log("Remove it first if you want to re-scaffold.");
       process.exit(0);
     }
-    if (!existsSync8(getStateDir()))
+    if (!existsSync9(getStateDir()))
       mkdirSync3(getStateDir(), { recursive: true });
     writeFileSync7(tomlPath, getDefaultRulesToml());
     console.log(`Created rules TOML at: ${tomlPath}`);
@@ -4525,7 +4627,7 @@ Learn more: https://ghuntley.com/ralph/
     if (reasonIdx !== -1 && reviewArgs[reasonIdx + 1]) {
       reason = reviewArgs[reasonIdx + 1];
     }
-    if (!existsSync8(getStatePath())) {
+    if (!existsSync9(getStatePath())) {
       console.error("Error: No active Ralph state file found. Is Ralph running in this directory?");
       process.exit(1);
     }
@@ -4610,7 +4712,7 @@ Learn more: https://ghuntley.com/ralph/
       }
     }
     if (!dir) {
-      dir = join5(process.cwd(), "goals");
+      dir = join6(process.cwd(), "goals");
     }
     const inv = buildInventory(dir);
     console.log(formatGoalInventory(inv.goals));
@@ -4627,16 +4729,16 @@ Learn more: https://ghuntley.com/ralph/
       console.error("Error: --init-goal title produces empty slug");
       process.exit(1);
     }
-    const goalDir2 = join5(process.cwd(), "goals", slug);
+    const goalDir2 = join6(process.cwd(), "goals", slug);
     mkdirSync3(goalDir2, { recursive: true });
-    const goalMdPath = join5(goalDir2, "goal.md");
-    if (existsSync8(goalMdPath)) {
+    const goalMdPath = join6(goalDir2, "goal.md");
+    if (existsSync9(goalMdPath)) {
       console.error(`Error: goal already exists at ${goalMdPath}`);
       process.exit(1);
     }
     writeFileSync7(goalMdPath, scaffoldGoalMd(title), "utf-8");
-    const goalStatePath = join5(goalDir2, "goal.state.json");
-    if (!existsSync8(goalStatePath)) {
+    const goalStatePath = join6(goalDir2, "goal.state.json");
+    if (!existsSync9(goalStatePath)) {
       const initState = createInitialState(slug);
       writeFileSync7(goalStatePath, JSON.stringify(initState, null, 2), "utf-8");
     }
@@ -4658,7 +4760,7 @@ Learn more: https://ghuntley.com/ralph/
           console.error("No active goals found in " + dir);
           process.exit(1);
         }
-        statusGoalPath = join5(dir, next.slug, "goal.md");
+        statusGoalPath = join6(dir, next.slug, "goal.md");
       }
     }
     if (!statusGoalPath) {
@@ -4669,18 +4771,18 @@ Learn more: https://ghuntley.com/ralph/
         const inv = buildInventory(tomlCfg.goal_dir);
         const next = findNextActionableGoal(inv);
         if (next) {
-          statusGoalPath = join5(tomlCfg.goal_dir, next.slug, "goal.md");
+          statusGoalPath = join6(tomlCfg.goal_dir, next.slug, "goal.md");
         }
       }
     }
-    if (!statusGoalPath || !existsSync8(statusGoalPath)) {
+    if (!statusGoalPath || !existsSync9(statusGoalPath)) {
       console.error("Error: --goal-status requires --goal <path> or --goal-dir <dir> (or TOML config) with an active goal");
       process.exit(1);
     }
     try {
       const slug = basename2(dirname3(statusGoalPath));
       const goal = parseGoalMd(statusGoalPath, slug);
-      const goalStatePath = join5(dirname3(statusGoalPath), "goal.state.json");
+      const goalStatePath = join6(dirname3(statusGoalPath), "goal.state.json");
       const goalState = loadGoalState(goalStatePath) ?? createInitialState(slug);
       console.log(formatGoalStatus(goal, goalState));
       process.exit(0);
@@ -4691,7 +4793,7 @@ Learn more: https://ghuntley.com/ralph/
   }
   const runtimeTomlConfig = loadRuntimeTomlConfig(tomlConfigPath, explicitTomlConfigPath);
   let reviewConfig = null;
-  if (existsSync8(tomlConfigPath)) {
+  if (existsSync9(tomlConfigPath)) {
     try {
       const raw = readFileSync9(tomlConfigPath, "utf-8");
       const parsed2 = Bun.TOML.parse(raw);
@@ -4721,7 +4823,7 @@ Learn more: https://ghuntley.com/ralph/
     stallingEvents: []
   };
   function loadHistory() {
-    if (!existsSync8(getHistoryPath())) {
+    if (!existsSync9(getHistoryPath())) {
       return EMPTY_HISTORY;
     }
     try {
@@ -4731,13 +4833,13 @@ Learn more: https://ghuntley.com/ralph/
     }
   }
   function saveHistory2(history) {
-    if (!existsSync8(getStateDir())) {
+    if (!existsSync9(getStateDir())) {
       mkdirSync3(getStateDir(), { recursive: true });
     }
     writeFileSync7(getHistoryPath(), JSON.stringify(history, null, 2));
   }
   function clearHistory() {
-    if (existsSync8(getHistoryPath())) {
+    if (existsSync9(getHistoryPath())) {
       try {
         __require("fs").unlinkSync(getHistoryPath());
       } catch {}
@@ -4754,7 +4856,7 @@ Learn more: https://ghuntley.com/ralph/
     let fixesApplied = 0;
     console.log(`
 \uD83D\uDCC1 Checking state directory...`);
-    if (!existsSync8(getStateDir())) {
+    if (!existsSync9(getStateDir())) {
       console.log("  \u26A0\uFE0F  State directory does not exist. Creating...");
       mkdirSync3(getStateDir(), { recursive: true });
       console.log(`  \u2705 Created: ${getStateDir()}/`);
@@ -4778,7 +4880,7 @@ Learn more: https://ghuntley.com/ralph/
     console.log(`
 \u2699\uFE0F  Checking configuration files...`);
     const agentConfigPath = DEFAULT_CONFIG_PATH2;
-    if (existsSync8(agentConfigPath)) {
+    if (existsSync9(agentConfigPath)) {
       try {
         const content = readFileSync9(agentConfigPath, "utf-8");
         JSON.parse(content);
@@ -4790,8 +4892,8 @@ Learn more: https://ghuntley.com/ralph/
     } else {
       console.log(`  \u2139\uFE0F  No agent config found (will use defaults)`);
     }
-    const runtimeConfigPath = join5(getStateDir(), "config.toml");
-    if (existsSync8(runtimeConfigPath)) {
+    const runtimeConfigPath = join6(getStateDir(), "config.toml");
+    if (existsSync9(runtimeConfigPath)) {
       try {
         const content = readFileSync9(runtimeConfigPath, "utf-8");
         Bun.TOML.parse(content);
@@ -4816,7 +4918,7 @@ Learn more: https://ghuntley.com/ralph/
     }
     console.log(`
 \uD83D\uDD0D Checking for common issues...`);
-    if (existsSync8(getStatePath())) {
+    if (existsSync9(getStatePath())) {
       try {
         const state = JSON.parse(readFileSync9(getStatePath(), "utf-8"));
         if (state.active) {
@@ -4831,7 +4933,7 @@ Learn more: https://ghuntley.com/ralph/
     } else {
       console.log("  \u2705 No active loop");
     }
-    if (existsSync8(getHistoryPath())) {
+    if (existsSync9(getHistoryPath())) {
       try {
         const history = JSON.parse(readFileSync9(getHistoryPath(), "utf-8"));
         console.log(`  \u2705 History file valid (${history.iterations?.length || 0} iterations)`);
@@ -4859,7 +4961,7 @@ Tip: Run 'ralph --init-config' to create default configuration files.`);
   if (args.includes("--status")) {
     const state = loadState();
     const history = loadHistory();
-    const context = existsSync8(getContextPath()) ? readFileSync9(getContextPath(), "utf-8").trim() : null;
+    const context = existsSync9(getContextPath()) ? readFileSync9(getContextPath(), "utf-8").trim() : null;
     const showTasks = args.includes("--tasks") || args.includes("-t") || state?.tasksMode;
     console.log(`
 \u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557
@@ -4906,7 +5008,7 @@ Tip: Run 'ralph --init-config' to create default configuration files.`);
    `)}`);
     }
     if (showTasks) {
-      if (existsSync8(getTasksPath())) {
+      if (existsSync9(getTasksPath())) {
         try {
           const tasksContent = readFileSync9(getTasksPath(), "utf-8");
           const tasks = parseTasks(tasksContent);
@@ -5039,7 +5141,7 @@ Tip: Run 'ralph --init-config' to create default configuration files.`);
       console.error('Usage: ralph --add-context "Your context or hint here"');
       process.exit(1);
     }
-    if (!existsSync8(getStateDir())) {
+    if (!existsSync9(getStateDir())) {
       mkdirSync3(getStateDir(), { recursive: true });
     }
     const timestamp = new Date().toISOString();
@@ -5047,7 +5149,7 @@ Tip: Run 'ralph --init-config' to create default configuration files.`);
 ## Context added at ${timestamp}
 ${contextText}
 `;
-    if (existsSync8(getContextPath())) {
+    if (existsSync9(getContextPath())) {
       const existing = readFileSync9(getContextPath(), "utf-8");
       writeFileSync7(getContextPath(), existing + newEntry);
     } else {
@@ -5065,7 +5167,7 @@ ${newEntry}`);
     process.exit(0);
   }
   if (args.includes("--clear-context")) {
-    if (existsSync8(getContextPath())) {
+    if (existsSync9(getContextPath())) {
       __require("fs").unlinkSync(getContextPath());
       console.log(`\u2705 Context cleared`);
     } else {
@@ -5074,7 +5176,7 @@ ${newEntry}`);
     process.exit(0);
   }
   if (args.includes("--list-tasks")) {
-    if (!existsSync8(getTasksPath())) {
+    if (!existsSync9(getTasksPath())) {
       console.log("No tasks file found. Use --add-task to create your first task.");
       process.exit(0);
     }
@@ -5096,12 +5198,12 @@ ${newEntry}`);
       console.error('Usage: ralph --add-task "Task description"');
       process.exit(1);
     }
-    if (!existsSync8(getStateDir())) {
+    if (!existsSync9(getStateDir())) {
       mkdirSync3(getStateDir(), { recursive: true });
     }
     try {
       let tasksContent = "";
-      if (existsSync8(getTasksPath())) {
+      if (existsSync9(getTasksPath())) {
         tasksContent = readFileSync9(getTasksPath(), "utf-8");
       } else {
         tasksContent = `# Ralph Tasks
@@ -5128,7 +5230,7 @@ ${newEntry}`);
       process.exit(1);
     }
     const taskIndex = parseInt(taskIndexStr);
-    if (!existsSync8(getTasksPath())) {
+    if (!existsSync9(getTasksPath())) {
       console.error("Error: No tasks file found");
       process.exit(1);
     }
@@ -5368,12 +5470,12 @@ ${newEntry}`);
     AGENTS[agentType] = { ...AGENTS[agentType], command: resolved };
   }
   function readPromptFile(path) {
-    if (!existsSync8(path)) {
+    if (!existsSync9(path)) {
       console.error(`Error: Prompt file not found: ${path}`);
       process.exit(1);
     }
     try {
-      const stat = statSync3(path);
+      const stat = statSync4(path);
       if (!stat.isFile()) {
         console.error(`Error: Prompt path is not a file: ${path}`);
         process.exit(1);
@@ -5397,7 +5499,7 @@ ${newEntry}`);
   if (promptFile) {
     promptSource = promptFile;
     prompt = readPromptFile(promptFile);
-  } else if (promptParts.length === 1 && existsSync8(promptParts[0])) {
+  } else if (promptParts.length === 1 && existsSync9(promptParts[0])) {
     promptSource = promptParts[0];
     prompt = readPromptFile(promptParts[0]);
   } else if (promptParts.length > 0) {
@@ -5456,7 +5558,7 @@ ${newEntry}`);
     await new Promise((resolve5) => setTimeout(resolve5, delayMs));
   }
   function saveState(state) {
-    if (existsSync8(getStateDir())) {
+    if (existsSync9(getStateDir())) {
       try {
         const stats = lstatSync2(getStateDir());
         if (!stats.isDirectory()) {
@@ -5483,7 +5585,7 @@ Fix: rm ${getStateDir()}  # remove the file/symlink`);
     renameSync3(tmpPath, getStatePath());
   }
   function loadState() {
-    if (!existsSync8(getStatePath())) {
+    if (!existsSync9(getStatePath())) {
       return null;
     }
     try {
@@ -5493,7 +5595,7 @@ Fix: rm ${getStateDir()}  # remove the file/symlink`);
     }
   }
   function clearState() {
-    if (existsSync8(getStatePath())) {
+    if (existsSync9(getStatePath())) {
       try {
         __require("fs").unlinkSync(getStatePath());
       } catch {}
@@ -5507,7 +5609,7 @@ Fix: rm ${getStateDir()}  # remove the file/symlink`);
     }
   }
   function loadContext() {
-    if (!existsSync8(getContextPath())) {
+    if (!existsSync9(getContextPath())) {
       return null;
     }
     try {
@@ -5518,14 +5620,14 @@ Fix: rm ${getStateDir()}  # remove the file/symlink`);
     }
   }
   function clearContext() {
-    if (existsSync8(getContextPath())) {
+    if (existsSync9(getContextPath())) {
       try {
         __require("fs").unlinkSync(getContextPath());
       } catch {}
     }
   }
   function savePendingQuestion(question) {
-    if (!existsSync8(getStateDir())) {
+    if (!existsSync9(getStateDir())) {
       mkdirSync3(getStateDir(), { recursive: true });
     }
     const questions = loadPendingQuestions();
@@ -5533,7 +5635,7 @@ Fix: rm ${getStateDir()}  # remove the file/symlink`);
     writeFileSync7(getQuestionsPath(), JSON.stringify(questions, null, 2));
   }
   function loadPendingQuestions() {
-    if (!existsSync8(getQuestionsPath())) {
+    if (!existsSync9(getQuestionsPath())) {
       return [];
     }
     try {
@@ -5543,7 +5645,7 @@ Fix: rm ${getStateDir()}  # remove the file/symlink`);
     }
   }
   function clearPendingQuestions() {
-    if (existsSync8(getQuestionsPath())) {
+    if (existsSync9(getQuestionsPath())) {
       try {
         __require("fs").unlinkSync(getQuestionsPath());
       } catch {}
@@ -5593,7 +5695,7 @@ Your answer: `, (answer) => {
     });
   }
   function loadCustomPromptTemplate(templatePath, state) {
-    if (!existsSync8(templatePath)) {
+    if (!existsSync9(templatePath)) {
       console.error(`Error: Prompt template not found: ${templatePath}`);
       process.exit(1);
     }
@@ -5617,7 +5719,7 @@ Your answer: `, (answer) => {
       }
       const context = loadContext() || "";
       let tasksContent = "";
-      if (state.tasksMode && existsSync8(getTasksPath())) {
+      if (state.tasksMode && existsSync9(getTasksPath())) {
         tasksContent = readFileSync9(getTasksPath(), "utf-8");
       }
       template = template.replace(/\{\{iteration\}\}/g, String(state.iteration)).replace(/\{\{max_iterations\}\}/g, state.maxIterations > 0 ? String(state.maxIterations) : "unlimited").replace(/\{\{min_iterations\}\}/g, String(state.minIterations)).replace(/\{\{prompt\}\}/g, state.prompt).replace(/\{\{completion_promise\}\}/g, state.completionPromise).replace(/\{\{abort_promise\}\}/g, state.abortPromise || "").replace(/\{\{task_promise\}\}/g, state.taskPromise).replace(/\{\{context\}\}/g, context).replace(/\{\{tasks\}\}/g, tasksContent);
@@ -5644,7 +5746,7 @@ ${context}
     if (state.goalSlug && goalPath) {
       try {
         const goal = parseGoalMd(goalPath, state.goalSlug);
-        const goalStatePath = join5(dirname3(goalPath), "goal.state.json");
+        const goalStatePath = join6(dirname3(goalPath), "goal.state.json");
         const goalState = loadGoalState(goalStatePath) ?? createInitialState(state.goalSlug, state.completionPromise);
         const goalSection = buildGoalPromptSection(goal, goalState, state.iteration);
         return `
@@ -5735,7 +5837,7 @@ Now, work on the task. Good luck!
 `.trim();
   }
   function getTasksModeSection(state) {
-    if (!existsSync8(getTasksPath())) {
+    if (!existsSync9(getTasksPath())) {
       return `
 ## TASKS MODE: Enabled (no tasks file found)
 
@@ -6125,6 +6227,14 @@ Iteration Summary`);
       }
     };
     const heartbeatTimer = setInterval(() => {
+      if (options.livenessProbe) {
+        try {
+          const verdict = options.livenessProbe({ pid: procPid, startedAt: options.iterationStart });
+          if ("active" in verdict && verdict.active) {
+            activityTracker.markLine();
+          }
+        } catch {}
+      }
       if (options.suppressOutput) {
         const inactivityMs = Date.now() - activityTracker.lastActivityAt;
         if (options.stallingTimeoutMs && inactivityMs >= options.stallingTimeoutMs && !stalled) {
@@ -6178,7 +6288,16 @@ Iteration Summary`);
     const effectivePreStartTimeout = preStartTimeoutRaw === -1 ? autoPreStart : preStartTimeoutRaw;
     if (effectivePreStartTimeout > 0) {
       preStartTimer = setTimeout(() => {
-        if (!firstOutputReceived && proc.exitCode === null) {
+        let externallyAlive = false;
+        if (options.livenessProbe) {
+          try {
+            const verdict = options.livenessProbe({ pid: procPid, startedAt: options.iterationStart });
+            externallyAlive = "active" in verdict && verdict.active;
+          } catch {
+            externallyAlive = false;
+          }
+        }
+        if (!firstOutputReceived && proc.exitCode === null && !externallyAlive) {
           stalled = true;
           stalledForMs = Date.now() - options.iterationStart;
           const elapsed = formatDuration(stalledForMs);
@@ -6312,9 +6431,10 @@ To start fresh, clear the state file:`);
     }
     if (resuming) {
       const state2 = existingState;
-      const override = (label, provided, currentVal, storedVal, apply) => {
+      const override = (label, provided, currentVal, storedVal, apply, persist) => {
         if (provided) {
           apply(currentVal);
+          persist?.(currentVal);
           if (String(currentVal) !== String(storedVal)) {
             console.log(`\uD83D\uDD04 ${label} override: ${String(storedVal) === "" ? "(unset)" : storedVal} \u2192 ${currentVal} (later args win)`);
           }
@@ -6324,36 +6444,63 @@ To start fresh, clear the state file:`);
       };
       override("min-iterations", minIterationsProvided, minIterations, state2.minIterations, (v) => {
         minIterations = v;
+      }, (v) => {
+        state2.minIterations = v;
       });
       override("max-iterations", maxIterationsProvided, maxIterations, state2.maxIterations, (v) => {
         maxIterations = v;
+      }, (v) => {
+        state2.maxIterations = v;
       });
       override("completion-promise", completionPromiseProvided, completionPromise, state2.completionPromise ?? "", (v) => {
         completionPromise = v;
+      }, (v) => {
+        state2.completionPromise = v;
       });
       override("abort-promise", abortPromiseProvided, abortPromise, state2.abortPromise ?? "", (v) => {
         abortPromise = v;
+      }, (v) => {
+        state2.abortPromise = v;
       });
       override("tasks", tasksModeProvided, tasksMode, state2.tasksMode, (v) => {
         tasksMode = v;
+      }, (v) => {
+        state2.tasksMode = v;
       });
       override("task-promise", taskPromiseProvided, taskPromise, state2.taskPromise ?? "READY_FOR_NEXT_TASK", (v) => {
         taskPromise = v;
+      }, (v) => {
+        state2.taskPromise = v;
       });
       override("prompt", promptProvided, prompt, state2.prompt, (v) => {
         prompt = v;
+      }, (v) => {
+        state2.prompt = v;
       });
       override("prompt-template", promptTemplateProvided, promptTemplatePath, state2.promptTemplate ?? "", (v) => {
         promptTemplatePath = v;
+      }, (v) => {
+        state2.promptTemplate = v;
       });
       override("model", modelProvided, model, state2.model ?? "", (v) => {
         model = v;
+      }, (v) => {
+        state2.model = v;
       });
       override("agent", agentProvided, agentType, state2.agent, (v) => {
         agentType = v;
+      }, (v) => {
+        state2.agent = v;
       });
       if (!rotationInput) {
         rotation = state2.rotation ?? null;
+      } else {
+        const provided = rotation;
+        if (JSON.stringify([...state2.rotation ?? []].sort()) !== JSON.stringify([...provided].sort())) {
+          console.log(`\uD83D\uDD04 rotation override: stored \u2192 ${rotationInput} (later args win)`);
+        }
+        state2.rotation = provided;
+        state2.rotationIndex = 0;
       }
       if (!stallRetriesProvided) {
         stallRetries = state2.stallRetries ?? false;
@@ -6403,8 +6550,8 @@ To start fresh, clear the state file:`);
 `);
     if (!goalPath && goalDir) {
       if (resuming && existingState?.goalSlug) {
-        const resumedGoalPath = join5(goalDir, existingState.goalSlug, "goal.md");
-        if (existsSync8(resumedGoalPath)) {
+        const resumedGoalPath = join6(goalDir, existingState.goalSlug, "goal.md");
+        if (existsSync9(resumedGoalPath)) {
           goalPath = resumedGoalPath;
           console.log(`\uD83D\uDCCB Resuming goal: ${existingState.goalSlug} (from previous session)`);
         }
@@ -6413,7 +6560,7 @@ To start fresh, clear the state file:`);
         const inv = buildInventory(goalDir);
         const next = findNextActionableGoal(inv);
         if (next) {
-          goalPath = join5(goalDir, next.slug, "goal.md");
+          goalPath = join6(goalDir, next.slug, "goal.md");
           console.log(`\uD83D\uDCCB Auto-selected goal: ${next.slug} (${next.phase})`);
         } else {
           console.warn("Warning: No actionable goals found in " + goalDir);
@@ -6453,7 +6600,7 @@ To start fresh, clear the state file:`);
     if (goalPath) {
       state.goalSlug = goalSlug;
       state.goalPhase = "planning";
-      const goalStateFilePath = join5(dirname3(goalPath), "goal.state.json");
+      const goalStateFilePath = join6(dirname3(goalPath), "goal.state.json");
       const existingGoalState = loadGoalState(goalStateFilePath);
       if (existingGoalState) {
         state.goalPhase = existingGoalState.phase;
@@ -6518,8 +6665,8 @@ To start fresh, clear the state file:`);
     try {
       saveState(state);
     } catch {}
-    if (tasksMode && !existsSync8(getTasksPath())) {
-      if (!existsSync8(getStateDir())) {
+    if (tasksMode && !existsSync9(getTasksPath())) {
+      if (!existsSync9(getStateDir())) {
         mkdirSync3(getStateDir(), { recursive: true });
       }
       writeFileSync7(getTasksPath(), `# Ralph Tasks
@@ -6751,6 +6898,8 @@ Received SIGTERM, stopping Ralph loop...`);
           streamOutput
         });
         const noIncrementalOutput = isJsonModeAgent(agentConfig2.type, extraAgentFlags) && !cmdArgs.some((a, i) => a === "--output-format" && /stream/.test(cmdArgs[i + 1] ?? "")) && !cmdArgs.some((a) => a.startsWith("--output-format=stream"));
+        const livenessProbe = agentConfig2.livenessProbeFactory?.();
+        livenessProbe?.({ pid: 0, startedAt: iterationStart });
         const env = agentConfig2.buildEnv({
           filterPlugins: disablePlugins,
           allowAllPermissions
@@ -6787,6 +6936,7 @@ Received SIGTERM, stopping Ralph loop...`);
             preStartTimeoutMs,
             noIncrementalOutput,
             stopOnPromise: completionPromise,
+            livenessProbe,
             onHeartbeatTimer: (timer) => {
               currentHeartbeatTimer = timer;
             },
@@ -6883,6 +7033,7 @@ Received SIGTERM, stopping Ralph loop...`);
             preStartTimeoutMs,
             noIncrementalOutput,
             suppressOutput: true,
+            livenessProbe,
             onHeartbeatTimer: (timer) => {
               currentHeartbeatTimer = timer;
             }
@@ -6978,7 +7129,7 @@ ${stderr}`;
         if (tasksMode && completionSignalDetected) {
           let tasksGatePassed = false;
           try {
-            if (existsSync8(getTasksPath())) {
+            if (existsSync9(getTasksPath())) {
               const tasksContent = readFileSync9(getTasksPath(), "utf-8");
               tasksGatePassed = tasksMarkdownAllComplete(tasksContent);
             }
@@ -7032,7 +7183,7 @@ ${stderr}`;
         let goalCompleted = false;
         if (state.goalSlug && goalPath) {
           try {
-            const goalStatePath = join5(dirname3(goalPath), "goal.state.json");
+            const goalStatePath = join6(dirname3(goalPath), "goal.state.json");
             const updatedGoalState = syncGoalStateAfterIteration(goalPath, goalStatePath, state.iteration, completionPromise);
             if (updatedGoalState) {
               state.goalPhase = updatedGoalState.phase;
@@ -7123,7 +7274,7 @@ ${stderr}`;
             const answer = await promptUser(detectedQuestion);
             if (answer.trim()) {
               savePendingQuestion(answer);
-              if (!existsSync8(getStateDir())) {
+              if (!existsSync9(getStateDir())) {
                 mkdirSync3(getStateDir(), { recursive: true });
               }
               const existingContext = loadContext() || "";
@@ -7144,7 +7295,7 @@ ${answerContext}`);
           } else {
             const pendingAnswer = getAndClearPendingQuestion();
             if (pendingAnswer) {
-              if (!existsSync8(getStateDir())) {
+              if (!existsSync9(getStateDir())) {
                 mkdirSync3(getStateDir(), { recursive: true });
               }
               const existingContext = loadContext() || "";
@@ -7209,7 +7360,7 @@ ${answerContext}`);
                 console.log(`\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D`);
                 executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "completion" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
                 clearPipelineContext(getStateDir());
-                const defaultStateDir = join5(process.cwd(), ".ralph");
+                const defaultStateDir = join6(process.cwd(), ".ralph");
                 if (stateDirInput === defaultStateDir) {
                   clearState();
                   clearHistory();
@@ -7237,7 +7388,7 @@ ${answerContext}`);
               console.log(`\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D`);
               executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "completion" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
               clearPipelineContext(getStateDir());
-              const defaultStateDir = join5(process.cwd(), ".ralph");
+              const defaultStateDir = join6(process.cwd(), ".ralph");
               if (stateDirInput === defaultStateDir) {
                 clearState();
                 clearHistory();
@@ -7256,7 +7407,7 @@ ${answerContext}`);
           } else {
             executeHooks({ event: "loop-end", env: buildHookEnv("loop-end", { RALPH_TOTAL_DURATION_MS: String(history.totalDurationMs), RALPH_END_REASON: "completion" }), cwd: process.cwd(), disabled: disableHooks, verbose: verboseHooks, hookTimeoutMs, pipelineContext });
             clearPipelineContext(getStateDir());
-            const defaultStateDir = join5(process.cwd(), ".ralph");
+            const defaultStateDir = join6(process.cwd(), ".ralph");
             if (stateDirInput === defaultStateDir) {
               clearState();
               clearHistory();
