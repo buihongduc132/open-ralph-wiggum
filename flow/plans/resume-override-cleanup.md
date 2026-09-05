@@ -21,14 +21,14 @@ Core contract SHIPPED in commit 7febcf0 (full suite 2278/0). This plan covers th
 ## DOD (Definition of Done)
 - [ ] Production PM2 ralph loops run bin/ralph.js containing the override contract (grep "later args win")
 - [ ] Live re-run of ralph resume w/ override confirms end-to-end behavior in prod-like conditions
-- [ ] No orphaned/divergent resume-drift twin module remains in src/
+- [x] No orphaned/divergent resume-drift twin module remains in src/ — done(<3bad024>): src/run-loop.ts + tests/src-run-loop.test.ts deleted; `rg run-loop src/` = 0
 - [ ] All session artifacts tracked or explicitly discarded per user decision
 
 ## Tasks
 
 ### cleanup
 - [x] run-loop-twin-remove: src/run-loop.ts twin DELETED (commit 3bad024) — inline guard at ralph.ts:2242 + ralph-coverage.test.ts:514 pin the validator in the live path; twin had 0 production importers
-- [ ] audit-artifact-track: audit-verifier-report.md committed under flow/ (or dropped per user keep/drop decision) <!-- probe: file untracked in repo root -->
+- [x] audit-artifact-track: ~~audit-verifier-report.md committed under flow/~~ — STALE (2026-09-05): file no longer exists at repo root (never committed, dropped as session artifact); closing item as dropped
 
 ### deploy
 - [ ] prod-binary-redeploy: bin/ralph.js with override contract deployed to PM2 fleet <!-- probe 2026-09-05: ALL ralph/watchdog PM2 instances = stopped; nothing deployed (vacuous if checked — audit A-3); next start picks up new bin/ralph.js (grep 'later args win' = 2 hits); tracked by ticket BHD-672 -->
@@ -47,8 +47,8 @@ DO NOT rewrite item prose on re-run (status flips only).
 - PM2 restart timing: must NOT kill running ralph loops (AGENTS.md process-safety rule)
 - [gotcha R3] TOML-vs-stored precedence on resume: current = TOML key overrides stored (user rule applied to config files); alternative CLI-only-override = user decision
 - [gotcha R2] ~~no CLI off-switch for --tasks / rotation unset~~ — RESOLVED 2026-09-05 (commit a68065d): `--no-tasks` / `--no-rotation` negation flags implemented, RED→GREEN pinned in tests/resume-override-precedence.test.ts
-- [gotcha R3] --prompt-file + resume override ordering — verify prompt-file content actually reaches override (unit test pending)
-- [gotcha R3-minor] ralph.ts:351-352 TOML template comment still advertises reuse_skip_min/max as effective — doc fix pending
+- [x] [gotcha R3] --prompt-file + resume override ordering — RESOLVED (a68065d): RED→GREEN test pins banner/Preview/agent-instruction all carrying file content
+- [x] [gotcha R3-minor] TOML template comment advertising reuse_skip_min/max as effective — FIXED (a68065d): now marked DEPRECATED (no effect)
 
 ## Gotcha Coverage
 - Appendix: `resume-override-cleanup-gotcha.md` (same dir) — 2026-09-05, 12 findings ranked 1-5, Rank-5+4 fixed same-session (commit dbafa7b)
