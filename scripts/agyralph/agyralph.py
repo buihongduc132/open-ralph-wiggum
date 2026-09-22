@@ -214,6 +214,32 @@ def resolve_state_dir(explicit: str | None) -> Path:
     return DEFAULT_STATE_DIR
 
 
+def pid_is_descendant(ancestor: int) -> bool:
+    """True if THIS process is a descendant of `ancestor` (walks /proc ppids)."""
+    pid = os.getpid()
+    for _ in range(64):
+        if pid == ancestor:
+            return True
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            pid = int(stat.rsplit(")", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            return False
+        if pid <= 1:
+            return False
+    return False
+
+
+def pid_is_ours(pid: int) -> bool:
+    """R4-7: verify /proc/<pid>/cmdline mentions agyralph before signaling."""
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().decode(
+            "utf-8", "replace")
+    except OSError:
+        return False
+    return "agyralph" in cmdline
+
+
 def pid_alive(pid) -> bool:
     try:
         p = int(pid)
@@ -512,6 +538,10 @@ class StopFlag:
 # ---------------------------------------------------------------------------
 
 def git_context(cwd: str, cap: int = GIT_CONTEXT_CAP) -> str:
+    import shutil
+    if not shutil.which("git"):
+        return "[git context unavailable: git not on PATH]"
+
     def sh(*args: str) -> str:
         try:
             p = subprocess.run(["git", *args], cwd=cwd, capture_output=True,
@@ -771,7 +801,9 @@ class CheckRegistry:
 
     def load(self) -> list[dict]:
         data = locked_json_read(self.path, [])
-        return data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            return []
+        return [c for c in data if c.get("enabled", True)]
 
     def add(self, script: str) -> dict:
         entry = {"id": uuid.uuid4().hex[:8], "script": script,
@@ -779,6 +811,17 @@ class CheckRegistry:
         def mutate(checks: list) -> dict:
             checks.append(entry)
             return entry
+        return locked_json_update(self.path, [], mutate)
+
+    def disable(self, check_id: str) -> bool:
+        def mutate(checks: list) -> bool:
+            hit = False
+            for c in checks:
+                if c.get("id") == check_id and c.get("enabled", True):
+                    c["enabled"] = False
+                    c["disabled_at"] = now_iso()
+                    hit = True
+            return hit
         return locked_json_update(self.path, [], mutate)
 
     def remove(self, ident: str) -> bool:
@@ -795,8 +838,17 @@ def indent_block(text: str, prefix: str) -> str:
     return "\n".join(prefix + ln for ln in (text or "").splitlines() or [""])
 
 
+CHECK_MAX_CONSECUTIVE_FAILURES = 5
+
+
+def ansi_strip(text: str) -> str:
+    return re.compile(r"\x1b\[[0-9;?]*[A-Za-z]").sub("", text or "")
+
+
 def run_checks(cwd: str, checks: list[dict], logger: RunLogger,
-               timeout_s: int = CHECK_TIMEOUT_S) -> tuple[bool, str]:
+               timeout_s: int = CHECK_TIMEOUT_S,
+               failure_counts: dict | None = None,
+               registry: "CheckRegistry | None" = None) -> tuple[bool, str]:
     """Run every check via bash -lc. check-isolation: timeout/crash fails that
     check only. check-feedback: combined stdout+stderr of failures is returned
     for injection into the MAIN conversation."""
@@ -819,10 +871,25 @@ def run_checks(cwd: str, checks: list[dict], logger: RunLogger,
         ok = rc == 0
         logger.log(f"  [check:{cid}] {name} -> rc={rc} ({fmt_dur(dur)})")
         if not ok:
-            combined = ((out or "") + (err or "")).strip() or "(no output)"
-            logger.log(indent_block(combined, "    | "))
+            combined = ansi_strip(((out or "") + (err or "")).strip()) or "(no output)"
+            logger.log(indent_block(combined[:2000], "    | "))
+            # R4-13 circuit breaker: auto-disable a never-passing check
+            if failure_counts is not None:
+                failure_counts[cid] = failure_counts.get(cid, 0) + 1
+                n = failure_counts[cid]
+                if n >= CHECK_MAX_CONSECUTIVE_FAILURES and registry is not None:
+                    logger.log(f"  [check:{cid}] CIRCUIT BREAKER: {n} consecutive "
+                               f"failures -- auto-disabling (re-enable manually)")
+                    registry.disable(cid)
+                    failures.append(
+                        f"### check `{name}` auto-disabled after {n} consecutive "
+                        f"failures (circuit breaker)")
+                    continue
+                combined = f"(attempt {n}) " + combined
             failures.append(f"### check `{name}` exited {rc}\n"
                             + combined[:FEEDBACK_CAP])
+        elif failure_counts is not None:
+            failure_counts.pop(cid, None)
     if failures:
         return False, ('<agyralph-feedback type="check-failure" '
                        '-- loop-generated, not user input>\n'
@@ -1041,10 +1108,17 @@ class Loop:
 
         # 4. checks (requirement 1) -- every round; failure output feeds back
         checks = self.checks.load()
-        ok, feedback = run_checks(o.cwd, checks, log)
+        if not hasattr(self, "_check_failures"):
+            self._check_failures = {}
+        ok, feedback = run_checks(o.cwd, checks, log,
+                                  failure_counts=self._check_failures,
+                                  registry=self.checks)
+        # R5-1: scan only the tail of this turn's delta (protocol echoes in
+        # prose must not fire COMPLETE); delta-only via after_idx already
+        tail = "\n".join(output.strip().splitlines()[-15:])
         promise = re.search(
             r"<promise>\s*" + re.escape(o.completion_promise) + r"\s*</promise>",
-            output, re.IGNORECASE)
+            tail, re.IGNORECASE)
 
         if promise and iteration < o.min_iterations:
             log.log(f"  [loop] promise seen but min_iterations="
@@ -1112,15 +1186,37 @@ def cmd_run(args) -> int:
     else:
         args.sub_prompt = None
 
+    # R4-6: single live run per state dir (held for the whole run)
+    run_lock_path = state_dir / "run.lock"
+    run_lock_fh = run_lock_path.open("w")
+    try:
+        fcntl.flock(run_lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print(f"agyralph: another run holds {run_lock_path} (concurrent run "
+              f"in this state dir)", file=sys.stderr)
+        return 2
+
     logger.log(f"agyralph {VERSION} starting (state-dir {state_dir}, "
                f"cwd {args.cwd})")
+    if args.min_iterations > args.max_iterations:
+        print("agyralph: --min-iterations cannot exceed --max-iterations",
+              file=sys.stderr)
+        return 1
+    if args.sub < 0 or args.sub > 8:
+        print("agyralph: --sub must be within 0..8", file=sys.stderr)
+        return 1
+
     ls, ls_env = prepare_ls(args, logger)
     client = ApiClient(args.agy_bin, ls_env)
 
     if resuming:
         logger.log(f"resuming main conversation {state['main_conv_id']} "
                    f"at iteration {int(state['iteration'] or 0) + 1}")
-    state.update(pid=os.getpid(), status="running", cwd=args.cwd,
+    try:
+        os.chmod(state_dir, 0o700)
+    except OSError:
+        pass
+    state.update(pid=os.getpid(), status="running", version=1, cwd=args.cwd,
                  prompt=prompt, model=args.model,
                  max_iterations=args.max_iterations,
                  min_iterations=args.min_iterations,
@@ -1139,6 +1235,11 @@ def cmd_run(args) -> int:
             ls.stop()
         logger.log(f"agyralph run finished: status={final_status} "
                    f"reason={loop.finish_reason or final_status}")
+        try:
+            fcntl.flock(run_lock_fh.fileno(), fcntl.LOCK_UN)
+            run_lock_fh.close()
+        except OSError:
+            pass
     return code
 
 
@@ -1192,6 +1293,10 @@ def cmd_stop(args) -> int:
         d["stop_requested"] = True
         d["updated_at"] = now_iso()
     locked_json_update(state.path, {}, request_stop)
+    if not pid_is_ours(int(pid)):
+        print(f"refusing to signal pid {pid}: cmdline does not look like an "
+              f"agyralph process (pid reuse?)", file=sys.stderr)
+        return 1
     os.kill(int(pid), signal.SIGTERM)
     print(f"SIGTERM sent to pid {pid}; waiting")
     for _ in range(50):
@@ -1236,6 +1341,16 @@ def cmd_check(args) -> int:
     state_dir = resolve_state_dir(args.state_dir)
     if args.check_cmd == "add":
         state_dir.mkdir(parents=True, exist_ok=True)
+        # R5-2 trust boundary: the gated agent must not register its own
+        # always-pass check. Refuse when invoked by a descendant of the loop.
+        st = State(state_dir)
+        st.load()
+        loop_pid = st["pid"]
+        if loop_pid and pid_alive(loop_pid) and pid_is_descendant(int(loop_pid)):
+            print("agyralph: refusing `check add` from a process descended "
+                  "from the running loop (gate self-bypass). Register checks "
+                  "from your own terminal.", file=sys.stderr)
+            return 3
         entry = CheckRegistry(state_dir).add(args.script)
         print(f"check {entry['id']} registered: {entry['script']}")
         print("takes effect on the next round (no restart needed)")

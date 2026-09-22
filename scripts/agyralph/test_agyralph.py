@@ -323,3 +323,109 @@ class TestSubs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestHardening(unittest.TestCase):
+    """Regression tests for the gotcha-review fixes."""
+
+    def test_promise_echo_suppressed(self):
+        # R5-1: protocol text echoed >15 lines before the tail must not fire
+        loop, client, tmp = self.__class__._make(["x" * 10] * 1) \
+            if False else (None, None, None)
+        tail = "\n".join(["filler"] * 20) + "\nsome protocol: <promise>COMPLETE</promise>"
+        m.COMPLETION_RE_FALLBACK = None
+        out15 = "\n".join(tail.splitlines()[-15:])
+        self.assertIn("<promise>COMPLETE</promise>", out15)  # tail keeps real one
+        far = "<promise>COMPLETE</promise>\n" + "\n".join(["filler"] * 20)
+        out15b = "\n".join(far.splitlines()[-15:])
+        self.assertNotIn("<promise>COMPLETE</promise>", out15b)  # echo dropped
+
+    @staticmethod
+    def _make(_):
+        return None, None, None
+
+    def test_circuit_breaker(self):
+        tmp = Path(tempfile.mkdtemp())
+        logger = fake_logger(tmp)
+        reg = m.CheckRegistry(tmp)
+        entry = reg.add("exit 7")
+        counts = {}
+        for i in range(m.CHECK_MAX_CONSECUTIVE_FAILURES):
+            ok, fb = m.run_checks(str(tmp), reg.load(), logger,
+                                  failure_counts=counts, registry=reg)
+            self.assertFalse(ok)
+        # after N consecutive failures the check is auto-disabled
+        self.assertEqual(reg.load(), [])
+        # and a fresh pass run has nothing to run
+        ok, fb = m.run_checks(str(tmp), reg.load(), logger)
+        self.assertTrue(ok)
+
+    def test_circuit_breaker_resets_on_pass(self):
+        tmp = Path(tempfile.mkdtemp())
+        logger = fake_logger(tmp)
+        reg = m.CheckRegistry(tmp)
+        marker = tmp / "c"
+        script = (f"if [ -f {marker} ]; then exit 0; else touch {marker}; "
+                  f"exit 1; fi")
+        reg.add(script)
+        counts = {}
+        ok1, _ = m.run_checks(str(tmp), reg.load(), logger,
+                              failure_counts=counts, registry=reg)
+        self.assertFalse(ok1)
+        ok2, _ = m.run_checks(str(tmp), reg.load(), logger,
+                              failure_counts=counts, registry=reg)
+        self.assertTrue(ok2)
+        self.assertEqual(counts, {})
+
+    def test_ansi_stripped_from_feedback(self):
+        tmp = Path(tempfile.mkdtemp())
+        logger = fake_logger(tmp)
+        ok, fb = m.run_checks(str(tmp),
+                              [{"id": "a", "script":
+                                r'printf "\033[31mRED-OUTPUT\033[0m"; exit 1'}],
+                              logger)
+        self.assertFalse(ok)
+        self.assertNotIn("\x1b", fb)
+        self.assertIn("RED-OUTPUT", fb)
+
+    def test_pid_is_ours(self):
+        self.assertTrue(m.pid_is_ours(os.getpid()))  # test runner cmdline
+        self.assertFalse(m.pid_is_ours(1))
+
+    def test_pid_is_descendant(self):
+        self.assertTrue(m.pid_is_descendant(os.getppid()))
+        self.assertFalse(m.pid_is_descendant(1))
+
+    def test_git_context_no_git(self):
+        tmp = Path(tempfile.mkdtemp())
+        orig_path = os.environ.get("PATH")
+        try:
+            os.environ["PATH"] = str(tmp)  # no git inside
+            blob = m.git_context(str(tmp))
+            self.assertIn("unavailable", blob)
+        finally:
+            if orig_path:
+                os.environ["PATH"] = orig_path
+
+    def test_run_lock_blocks_concurrent(self):
+        import fcntl
+        tmp = Path(tempfile.mkdtemp())
+        lock = tmp / "run.lock"
+        fh = lock.open("w")
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            rc = m.main(["run", "p", "--state-dir", str(tmp),
+                         "--ls-address", "127.0.0.1:1"])
+            self.assertIn(rc, (2,))
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            fh.close()
+
+    def test_flag_validation(self):
+        tmp = Path(tempfile.mkdtemp())
+        rc = m.main(["run", "p", "--state-dir", str(tmp), "--min-iterations", "5",
+                     "--max-iterations", "2", "--ls-address", "127.0.0.1:1"])
+        self.assertEqual(rc, 1)
+        rc = m.main(["run", "p", "--state-dir", str(tmp), "--sub", "99",
+                     "--ls-address", "127.0.0.1:1"])
+        self.assertEqual(rc, 1)
