@@ -392,7 +392,7 @@ def _is_clean_text(b: bytes) -> bool:
     return printable / len(s) >= 0.95
 
 
-def parse_model_text(payload: bytes) -> str:
+def _parse_legacy_model_text(payload: bytes) -> str:
     """W5: scrape the assistant answer from a step_type=15 payload.
 
     Ground truth (spike conv 6327d9fa idx1/idx3): the answer is a 0x0A-prefixed
@@ -418,6 +418,45 @@ def parse_model_text(payload: bytes) -> str:
     if candidates:
         return max(candidates, key=len).strip()
     return ""
+
+
+def _wire_fields(buf: bytes):
+    """Minimal protobuf wire reader; never scan inside arbitrary string bytes."""
+    i=0
+    while i<len(buf):
+        key,i=_read_varint(buf,i)
+        if key is None or key>>3==0:raise ValueError("invalid field")
+        number,wire=key>>3,key&7
+        if wire==0:value,i=_read_varint(buf,i)
+        elif wire==2:
+            size,i=_read_varint(buf,i)
+            if size is None or i+size>len(buf):raise ValueError("truncated field")
+            value=buf[i:i+size];i+=size
+        elif wire in (1,5):
+            size=8 if wire==1 else 4
+            if i+size>len(buf):raise ValueError("truncated scalar")
+            value=buf[i:i+size];i+=size
+        else:raise ValueError("unsupported wire type")
+        yield number,wire,value
+
+def parse_model_text(payload: bytes) -> str:
+    """Read Step.modelResponse(20).response(1), never tool calls or metadata.
+
+    A model step containing only toolCalls(7) is not a final assistant answer.
+    Legacy unwrapped response fixtures retain their original decoder.
+    """
+    try:
+        outer=list(_wire_fields(payload))
+        bodies=[v for n,w,v in outer if n==20 and w==2]
+        if bodies:
+            body=list(_wire_fields(bodies[-1]))
+            if any(n==7 and w==2 for n,w,v in body):return ""
+            answers=[v.decode("utf-8") for n,w,v in body if n==1 and w==2]
+            return "\n".join(answers).strip()
+        if any(n==1 and w==0 for n,w,v in outer):return ""
+    except (ValueError,UnicodeDecodeError):return ""
+    text=_parse_legacy_model_text(payload)
+    return "" if re.fullmatch(r"call_[A-Za-z0-9_-]+",text) else text
 
 
 def _read_last_model_step(db_path: Path, after_idx: int = -1):
@@ -475,57 +514,36 @@ def max_step_idx(db_path: Path) -> int:
 
 def wait_turn(db_path: Path, *, grace_s: float, timeout_s: float, interval_s: float,
               logger: "RunLogger", label: str, stop_flag: "StopFlag") -> tuple[bool, dict]:
-    """Two-phase poll. Phase 1 waits for the turn to START (a status-8 step
-    appears) which kills the send-message vs step-insert race; an ultra-fast
-    turn that goes straight to done is accepted after stable re-reads.
-    Phase 2 waits for zero status-8 steps."""
-    t0 = time.monotonic()
-    counts: dict = {}
-    stable_needed = 3
-    stable_seen = 0
-    while time.monotonic() - t0 < grace_s:
-        if stop_flag.set:
-            return False, counts
+    """Wait for a stable terminal response, not an individual finished tool step.
+
+    Observe index+payload changes across polls. A quiet tool-only yield gets a
+    continuation round after 30s, not a fabricated final answer. No new prompt
+    is sent while any step remains IN_PROGRESS.
+    """
+    t0=time.monotonic();last_change=t0;last_fingerprint=None;last_beat=t0;counts={}
+    while time.monotonic()-t0<timeout_s:
+        if stop_flag.set:return False,counts
         try:
-            counts = step_status_counts(db_path)
-        except sqlite3.Error as e:
-            logger.log(f"  [{label}] db read retry: {e}", console=False)
-            time.sleep(interval_s)
-            continue
-        if counts.get(STATUS_IN_PROGRESS, 0) > 0:
-            logger.log(f"  [{label}] turn started (in-progress steps: "
-                       f"{counts[STATUS_IN_PROGRESS]})", console=False)
-            break
-        if counts:
-            stable_seen += 1
-            if stable_seen >= stable_needed:
-                logger.log(f"  [{label}] no in-progress step appeared; treating "
-                           f"turn as finished (histogram {counts})", console=False)
-                return True, counts
+            counts=step_status_counts(db_path)
+            idx,payload=_read_last_model_step(db_path)
+            fingerprint=(max_step_idx(db_path),tuple(sorted(counts.items())),payload)
+        except sqlite3.Error:
+            time.sleep(interval_s);continue
+        now=time.monotonic()
+        if fingerprint!=last_fingerprint:
+            last_change=now;last_fingerprint=fingerprint
+        inactive=bool(counts) and counts.get(STATUS_IN_PROGRESS,0)==0
+        quiet=now-last_change
+        answer=parse_model_text(payload) if payload else ""
+        if inactive and answer and quiet>=max(6,interval_s*2):return True,counts
+        if inactive and quiet>=30:
+            logger.log(f"  [{label}] stable tool-only yield; continuation required, not final completion")
+            return True,counts
+        if now-last_beat>=60:
+            logger.log(f"  [{label}] awaiting stable turn ({fmt_dur(now-t0)}; steps={sum(counts.values())})")
+            last_beat=now
         time.sleep(interval_s)
-    last_logged: dict = {}
-    deadline = time.monotonic() + timeout_s
-    last_beat = time.monotonic()
-    while time.monotonic() < deadline:
-        if stop_flag.set:
-            return False, counts
-        try:
-            counts = step_status_counts(db_path)
-        except sqlite3.Error as e:
-            logger.log(f"  [{label}] db read retry: {e}", console=False)
-            time.sleep(interval_s)
-            continue
-        if counts != last_logged:
-            logger.log(f"  [{label}] step status histogram: {counts}", console=False)
-            last_logged = dict(counts)
-        if counts and counts.get(STATUS_IN_PROGRESS, 0) == 0:
-            return True, counts
-        if time.monotonic() - last_beat > 60:
-            logger.log(f"  [{label}] still working "
-                       f"({fmt_dur(time.monotonic() - t0)} elapsed)")
-            last_beat = time.monotonic()
-        time.sleep(interval_s)
-    return False, counts
+    return False,counts
 
 
 class StopFlag:
@@ -877,14 +895,8 @@ def run_checks(cwd: str, checks: list[dict], logger: RunLogger,
             if failure_counts is not None:
                 failure_counts[cid] = failure_counts.get(cid, 0) + 1
                 n = failure_counts[cid]
-                if n >= CHECK_MAX_CONSECUTIVE_FAILURES and registry is not None:
-                    logger.log(f"  [check:{cid}] CIRCUIT BREAKER: {n} consecutive "
-                               f"failures -- auto-disabling (re-enable manually)")
-                    registry.disable(cid)
-                    failures.append(
-                        f"### check `{name}` auto-disabled after {n} consecutive "
-                        f"failures (circuit breaker)")
-                    continue
+                if n >= CHECK_MAX_CONSECUTIVE_FAILURES:
+                    logger.log(f"  [check:{cid}] {n} consecutive failures; gate remains mandatory")
                 combined = f"(attempt {n}) " + combined
             failures.append(f"### check `{name}` exited {rc}\n"
                             + combined[:FEEDBACK_CAP])

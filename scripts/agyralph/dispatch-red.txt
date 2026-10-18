@@ -1,0 +1,46 @@
+======================================================================
+FAIL: test_required_check_never_auto_disables (test_dispatch_recovery.RecoveryTests.test_required_check_never_auto_disables)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bhd/Documents/Projects/bhd/open-ralph-wiggum-wt/btu-agyralph-driver/scripts/agyralph/test_dispatch_recovery.py", line 28, in test_required_check_never_auto_disables
+    self.assertFalse(ok);self.assertEqual(len(reg.load()),1)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_structured_answer_not_metadata_or_nested_prompt (test_dispatch_recovery.RecoveryTests.test_structured_answer_not_metadata_or_nested_prompt)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bhd/Documents/Projects/bhd/open-ralph-wiggum-wt/btu-agyralph-driver/scripts/agyralph/test_dispatch_recovery.py", line 16, in test_structured_answer_not_metadata_or_nested_prompt
+    self.assertEqual(m.parse_model_text(payload),"VERIFIED")
+AssertionError: 'stray metadata that is much longer than answer' != 'VERIFIED'
+- stray metadata that is much longer than answer
++ VERIFIED
+
+
+======================================================================
+FAIL: test_tool_argument_promise_never_becomes_final (test_dispatch_recovery.RecoveryTests.test_tool_argument_promise_never_becomes_final)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bhd/Documents/Projects/bhd/open-ralph-wiggum-wt/btu-agyralph-driver/scripts/agyralph/test_dispatch_recovery.py", line 19, in test_tool_argument_promise_never_becomes_final
+    self.assertEqual(m.parse_model_text(payload),"")
+AssertionError: 'call_1' != ''
+- call_1
+
+
+======================================================================
+FAIL: test_tool_call_id_is_not_final_answer (test_dispatch_recovery.RecoveryTests.test_tool_call_id_is_not_final_answer)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bhd/Documents/Projects/bhd/open-ralph-wiggum-wt/btu-agyralph-driver/scripts/agyralph/test_dispatch_recovery.py", line 13, in test_tool_call_id_is_not_final_answer
+    self.assertEqual(m.parse_model_text(payload),"")
+AssertionError: 'call_1234567' != ''
+- call_1234567
+
+
+----------------------------------------------------------------------
+Ran 5 tests in 1.852s
+
+FAILED (failures=4)
+
+EXIT=1

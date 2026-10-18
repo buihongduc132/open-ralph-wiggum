@@ -344,7 +344,7 @@ class TestHardening(unittest.TestCase):
     def _make(_):
         return None, None, None
 
-    def test_circuit_breaker(self):
+    def test_repeated_failures_preserve_required_check(self):
         tmp = Path(tempfile.mkdtemp())
         logger = fake_logger(tmp)
         reg = m.CheckRegistry(tmp)
@@ -354,11 +354,11 @@ class TestHardening(unittest.TestCase):
             ok, fb = m.run_checks(str(tmp), reg.load(), logger,
                                   failure_counts=counts, registry=reg)
             self.assertFalse(ok)
-        # after N consecutive failures the check is auto-disabled
-        self.assertEqual(reg.load(), [])
-        # and a fresh pass run has nothing to run
+        # after N consecutive failures the required check is still active
+        self.assertEqual(len(reg.load()), 1)  # RED checks remain mandatory
+        # and the next check still fails rather than falsely passing
         ok, fb = m.run_checks(str(tmp), reg.load(), logger)
-        self.assertTrue(ok)
+        self.assertFalse(ok)
 
     def test_circuit_breaker_resets_on_pass(self):
         tmp = Path(tempfile.mkdtemp())

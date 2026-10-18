@@ -1,0 +1,4 @@
+# Browser-TUI agyralph drive recovery — 18 October 2026
+Five launched lanes exhausted12 iterations on tool-call IDs; no accepted result. The old parser scanned arbitrary nested protobuf fields, the waiter accepted transient tool-step idle gaps, and required RED checks auto-disabled after5 failures.
+Fix: read Step.modelResponse.response only; reject tool-call metadata; wait for stable step-index/status/payload; allow a tool-only continuation after30s without claiming completion; keep required checks enabled indefinitely. Recovery reuses existing state/conversation/worktree with concise continuation instructions. Root-owned external delivery gate is unchanged and remains mandatory. No global binary install, no browser mutation.
+Evidence: dispatch-red.txt has4 failing regressions before fix. dispatch-green.txt records42cases;41pass,1legacy spike-database fixture absent. All8 new driver tests pass; this is not live-browser acceptance.

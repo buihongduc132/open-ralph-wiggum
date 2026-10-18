@@ -1,0 +1,21 @@
+[16:23:56] agyralph 0.1.0 starting (state-dir /tmp/tmpobqvrijc, cwd /home/bhd/Documents/Projects/bhd/open-ralph-wiggum-wt/btu-agyralph-driver/scripts/agyralph)
+agyralph: --min-iterations cannot exceed --max-iterations
+/home/bhd/Documents/Projects/bhd/open-ralph-wiggum-wt/btu-agyralph-driver/scripts/agyralph/agyralph.py:1464: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmpobqvrijc/run.lock' mode='w' encoding='UTF-8'>
+  return args.func(args)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+[16:23:56] agyralph 0.1.0 starting (state-dir /tmp/tmpobqvrijc, cwd /home/bhd/Documents/Projects/bhd/open-ralph-wiggum-wt/btu-agyralph-driver/scripts/agyralph)
+agyralph: --sub must be within 0..8
+agyralph: another run holds /tmp/tmpr2lwodx6/run.lock (concurrent run in this state dir)
+/home/bhd/Documents/Projects/bhd/open-ralph-wiggum-wt/btu-agyralph-driver/scripts/agyralph/agyralph.py:1464: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmpr2lwodx6/run.lock' mode='w' encoding='UTF-8'>
+  return args.func(args)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+----------------------------------------------------------------------
+Ran 42 tests in 8.508s
+
+OK (skipped=1)
+check ba0c6127 registered: exit 1
+takes effect on the next round (no restart needed)
+  ba0c6127  added 2026-10-18T09:23:59.690687+00:00  exit 1
+check ba0c6127 removed
+no agyralph run found in /tmp/tmp3h3dk07e
+tip queued in /tmp/tmp1_dn6zrt (consumed by exactly one iteration)
